@@ -167,9 +167,8 @@ class Loop:
                     f"was emptied. Restore {ctx_path} and retry.")
             est = _estimate(system, messages)
             status = self.budget.status(est)
-            self._emit("budget", {"status": status, "tokens": est,
-                                  "file": ctx_path})
             if status == "over":
+                self._emit("budget", {"status": "over", "tokens": est})
                 if not self.prune_turn(session):
                     raise BudgetExceeded(
                         f"Still over hard budget ({self.budget.hard:,}) "
@@ -179,6 +178,7 @@ class Loop:
                 continue
             if status == "warn" and not warned:
                 warned = True
+                self._emit("budget", {"status": "warn", "tokens": est})
 
             resp = self.provider.chat(system=system, messages=messages,
                                       tools=self._tools)

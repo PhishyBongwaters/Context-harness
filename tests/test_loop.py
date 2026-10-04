@@ -95,6 +95,49 @@ class TestLoop(unittest.TestCase):
         with self.assertRaises(BudgetExceeded):
             loop.run_turn(s, "hi")
 
+    def test_multi_turn_continuity_through_file(self):
+        # Turn 1: model runs a tool and answers. Turn 2 (fresh Loop, same
+        # session): the history must come from the file alone.
+        s = make_session()
+        script1 = [
+            {"content": None, "tool_calls": [
+                {"id": "c1", "name": "exec",
+                 "arguments": {"command": "echo 42"}}]},
+            {"content": "the answer is 42"},
+        ]
+        loop1 = Loop(MockProvider(script1), Budget(100000, 80000))
+        self.assertEqual(loop1.run_turn(s, "what is the answer?"),
+                         "the answer is 42")
+
+        script2 = [{"content": "still 42"}]
+        loop2 = Loop(MockProvider(script2), Budget(100000, 80000))
+        self.assertEqual(loop2.run_turn(s, "and now?"), "still 42")
+        seen = loop2.provider.calls[0]["messages"]
+        roles = [m["role"] for m in seen]
+        self.assertEqual(roles,
+                         ["user", "assistant", "tool", "assistant", "user"])
+        tool_msgs = [m for m in seen if m["role"] == "tool"]
+        self.assertIn("42", tool_msgs[0]["content"])
+
+    def test_model_prunes_file_mid_turn(self):
+        # The model uses edit on context.md mid-turn; the next iteration
+        # reads the pruned file.
+        s = make_session()
+        script = [
+            {"content": "pruning", "tool_calls": [
+                {"id": "e1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": "## user\nkept\n"}}]},
+            {"content": "done"},
+        ]
+        loop = Loop(MockProvider(script), Budget(100000, 80000))
+        self.assertEqual(loop.run_turn(s, "original question"), "done")
+        # The model's rewrite won; the harness then appended the reply.
+        text = s.context.load()
+        self.assertIn("kept", text)
+        self.assertNotIn("original question", text)
+        self.assertIn("done", text)
+
     def test_prune_turn_restricts_tools(self):
         s = self._bloated_session()
         # exec is not allowed on a prune turn: 5 attempts x 2 responses,
