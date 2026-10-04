@@ -1,6 +1,6 @@
 """Configuration: JSON file + environment, no secrets on disk.
 
-Config file: ~/.config/context-harness/config.json
+Config file: platform default (see default_config_dir())
 API keys come from environment variables only, never from the config file.
 
 Example config.json:
@@ -11,8 +11,11 @@ Example config.json:
   "api_key_env": "ANTHROPIC_API_KEY",
   "budget_hard": 100000,
   "budget_soft": 80000,
-  "sessions_dir": "~/.local/share/context-harness/sessions"
+  "sessions_dir": null
 }
+
+sessions_dir null -> platform default (LOCALAPPDATA on Windows,
+~/.local/share on POSIX).
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ DEFAULTS = {
     "api_key_env": None,  # derived from provider when unset
     "budget_hard": 100_000,
     "budget_soft": 80_000,
-    "sessions_dir": "~/.local/share/context-harness/sessions",
+    "sessions_dir": None,  # platform default when unset
 }
 
 PROVIDER_DEFAULTS = {
@@ -43,6 +46,29 @@ PROVIDER_DEFAULTS = {
 }
 
 
+def _windows_base_dirs() -> tuple[str, str]:
+    """(APPDATA, LOCALAPPDATA) with home-dir fallback. Split out so the
+    env-var logic is testable without mocking os.name (which would
+    confuse pathlib's Path dispatch)."""
+    home = os.path.expanduser("~")
+    return (os.environ.get("APPDATA") or home,
+            os.environ.get("LOCALAPPDATA") or home)
+
+
+def default_config_dir() -> Path:
+    if os.name == "nt":
+        appdata, _ = _windows_base_dirs()
+        return Path(appdata) / "context-harness"
+    return Path(os.path.expanduser("~/.config/context-harness"))
+
+
+def default_sessions_dir() -> str:
+    if os.name == "nt":
+        _, local = _windows_base_dirs()
+        return str(Path(local) / "context-harness" / "sessions")
+    return "~/.local/share/context-harness/sessions"
+
+
 @dataclass
 class Config:
     provider: str = "openai"
@@ -51,8 +77,12 @@ class Config:
     api_key_env: str = "OPENAI_API_KEY"
     budget_hard: int = 100_000
     budget_soft: int = 80_000
-    sessions_dir: str = "~/.local/share/context-harness/sessions"
+    sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if not self.sessions_dir:
+            self.sessions_dir = default_sessions_dir()
 
     @property
     def sessions_path(self) -> Path:
@@ -60,7 +90,7 @@ class Config:
 
 
 def config_path() -> Path:
-    return Path(os.path.expanduser("~/.config/context-harness/config.json"))
+    return default_config_dir() / "config.json"
 
 
 def load_config(path: str | Path | None = None) -> Config:
@@ -71,6 +101,8 @@ def load_config(path: str | Path | None = None) -> Config:
 
     merged = dict(DEFAULTS)
     merged.update(raw)
+    if not merged.get("sessions_dir"):
+        merged["sessions_dir"] = default_sessions_dir()
     provider = merged.get("provider", "openai")
     pdefs = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
     if not merged.get("base_url"):
@@ -104,11 +136,12 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "api_key_env": "OPENAI_API_KEY",
         "budget_hard": 100000,
         "budget_soft": 80000,
-        "sessions_dir": "~/.local/share/context-harness/sessions",
+        "sessions_dir": None,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "
-            "OpenAI-compatible /v1 endpoint (e.g. a local server)."
+            "OpenAI-compatible /v1 endpoint (e.g. a local server). "
+            "sessions_dir null selects the platform default."
         ),
     }
     target.write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")

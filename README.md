@@ -32,10 +32,13 @@ Stdlib only. `tiktoken` used for the meter if installed, else chars/4
 
 ## Config
 
-`~/.config/context-harness/config.json`: `provider` (`openai` /
-`anthropic`), `model`, `base_url` (any OpenAI-compatible `/v1`, including
-local servers), `budget_hard` / `budget_soft`. API key comes from the
-environment (`api_key_env`) — never from the file.
+Platform-default location (`%APPDATA%/context-harness/config.json` on
+Windows, `~/.config/context-harness/config.json` elsewhere):
+`provider` (`openai` / `anthropic`), `model`, `base_url` (any
+OpenAI-compatible `/v1`, including local servers), `budget_hard` /
+`budget_soft`. API key comes from the environment (`api_key_env`) —
+never from the file. `sessions_dir` unset selects the platform default
+(`%LOCALAPPDATA%` on Windows).
 
 ## Layout
 
