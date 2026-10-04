@@ -1,4 +1,19 @@
-"""The context file: the model's entire persistent memory.
+"""The context file: the model's live transcript, as a file.
+
+CLM-style: the file IS the conversation. The harness reads it before every
+model call and sends the parsed messages; it appends new turns (assistant
+replies, tool results, user messages) to the end. The model restructures it
+freely with its ordinary write/edit tools.
+
+Section format (one header line per section):
+
+    ## user
+    ## assistant
+    ## tool <tool_call_id>
+
+An assistant section may end with a ```tool-calls fenced JSON block listing
+that reply's tool calls. Anything before the first ## header is a preamble:
+kept in the file, never sent to the model.
 
 Token counting prefers tiktoken (cl100k_base) when installed, else falls
 back to a chars/4 heuristic. The counter reports which estimator is active
@@ -6,6 +21,8 @@ so the model knows how much to trust the meter.
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,15 +60,109 @@ class Budget:
                 f"({pct:.0f}%) | estimator: {ESTIMATOR}]")
 
 
-EMPTY_CONTEXT = """# Context
+TRANSCRIPT_TEMPLATE = """# Context
 
-This file is your entire persistent memory. There is no hidden transcript:
-when a turn ends, only what is written here survives.
+This file is your live context -- the transcript itself. The harness reads
+this file before every model call and sends it as the conversation. New
+turns (your replies, tool results, user messages) are appended to the end
+automatically; restructure anything above with your write/edit tools.
 
-Keep it curated and compact: goals, key facts, decisions, where things stand.
-Summarize stale tool output, drop dead ends, keep live threads organized.
-Write it for yourself -- the you who reads it next turn.
+Sections start with a `## ` header: `## user`, `## assistant`,
+`## tool <id>`. Keep those headers parseable and the transcript stays yours.
 """
+
+_HEADER_RE = re.compile(r"^##[ \t]+(user|assistant|tool)(?:[ \t]+(\S+))?.*$")
+_FENCE_OPEN = "```tool-calls"
+_FENCE_CLOSE = "```"
+
+
+def render_user(content: str) -> str:
+    return f"## user\n{content.rstrip()}\n"
+
+
+def render_assistant(content: str | None,
+                     tool_calls: list[dict] | None) -> str:
+    sec = f"## assistant\n{(content or '').rstrip()}"
+    if tool_calls:
+        fence = json.dumps([{"id": tc["id"], "name": tc["name"],
+                             "arguments": tc.get("arguments") or {}}
+                            for tc in tool_calls])
+        sec += f"\n{_FENCE_OPEN}\n{fence}\n{_FENCE_CLOSE}"
+    return sec + "\n"
+
+
+def render_tool(tool_call_id: str, content: str) -> str:
+    return f"## tool {tool_call_id}\n{content.rstrip()}\n"
+
+
+def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
+    """Pull a trailing ```tool-calls JSON block out of an assistant section."""
+    lines = body.splitlines()
+    try:
+        open_idx = lines.index(_FENCE_OPEN)
+    except ValueError:
+        return body, []
+    try:
+        close_idx = lines.index(_FENCE_CLOSE, open_idx + 1)
+    except ValueError:
+        return body, []
+    raw = "\n".join(lines[open_idx + 1:close_idx])
+    try:
+        calls = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return body, []
+    if not isinstance(calls, list):
+        return body, []
+    text = "\n".join(lines[:open_idx]).rstrip()
+    return text, calls
+
+
+def parse_transcript(text: str) -> list[dict]:
+    """Parse the context file back into internal (OpenAI-style) messages.
+
+    Rules: preamble before the first ## header is ignored; a ## tool
+    section whose id matches no earlier assistant tool call is dropped
+    (orphan results are never sent to the provider).
+    """
+    sections: list[tuple[str, str | None, str]] = []
+    cur: list[str] | None = None
+    cur_role: str | None = None
+    cur_label: str | None = None
+
+    def flush():
+        if cur_role is not None:
+            sections.append((cur_role, cur_label, "\n".join(cur or [])))
+
+    for line in text.splitlines():
+        m = _HEADER_RE.match(line)
+        if m:
+            flush()
+            cur_role, cur_label, cur = m.group(1), m.group(2), []
+        elif cur_role is not None:
+            cur.append(line)
+        # else: preamble line, ignored
+    flush()
+
+    messages: list[dict] = []
+    seen_ids: set[str] = set()
+    for role, label, body in sections:
+        body = body.strip()
+        if role == "user":
+            messages.append({"role": "user", "content": body})
+        elif role == "assistant":
+            content, tool_calls = _split_tool_calls(body)
+            messages.append({"role": "assistant",
+                             "content": content or None,
+                             "tool_calls": tool_calls or None})
+            for tc in tool_calls:
+                if isinstance(tc, dict) and tc.get("id"):
+                    seen_ids.add(tc["id"])
+        elif role == "tool":
+            if label and label in seen_ids:
+                messages.append({"role": "tool", "tool_call_id": label,
+                                 "content": body})
+            # orphan tool result: dropped, never sent
+    return messages
 
 
 class ContextFile:
@@ -61,13 +172,19 @@ class ContextFile:
     def load(self) -> str:
         if not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(EMPTY_CONTEXT, encoding="utf-8")
-            return EMPTY_CONTEXT
+            self.path.write_text(TRANSCRIPT_TEMPLATE, encoding="utf-8")
+            return TRANSCRIPT_TEMPLATE
         return self.path.read_text(encoding="utf-8", errors="replace")
 
     def save(self, text: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(text, encoding="utf-8")
+
+    def append(self, text: str) -> None:
+        current = self.load()
+        if current and not current.endswith("\n"):
+            current += "\n"
+        self.save(current + ("\n" if current else "") + text)
 
     def tokens(self) -> int:
         return count_tokens(self.load())

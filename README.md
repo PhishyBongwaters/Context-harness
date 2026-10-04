@@ -5,20 +5,26 @@ A daily-driver agent loop where the model treats its context as a file.
 ## The idea
 
 Normal agents keep a hidden transcript and the framework silently truncates
-it when it gets long. Here there is no hidden transcript: the session's
-entire persistent memory is one file, `context.md`. The model reads it every
-turn, works through tools, and curates the file itself — summarizing stale
-output, dropping dead ends, keeping live threads.
+it when it gets long. Here the transcript **is** a file: `context.md`
+holds the whole conversation as `## user` / `## assistant` /
+`## tool <id>` sections (assistant tool calls ride in a fenced
+`tool-calls` JSON block). Before every model call the harness reads the
+file and sends it as the conversation; after each turn it appends the new
+reply and tool results to the end. The model restructures anything above
+with its ordinary write/edit tools — delete stale sections, summarize old
+output in place, reorder. No special compact tool; the file is the memory.
 
 The harness shows a token budget meter every turn and enforces it:
 
 - **soft breach** → warning, turn continues
 - **hard breach** → the normal turn is *not* sent. The model gets a
-  prune-only turn (write/edit on `context.md` only) until usage is back
-  under the limit. If pruning fails after several attempts, the harness
-  raises loudly instead of silently truncating.
+  prune-only turn (write/edit on `context.md` only, ephemeral transcript)
+  until usage is back under the limit. If pruning fails after several
+  attempts, the harness raises loudly instead of silently truncating.
 
-The model is its own garbage collector.
+The model is its own garbage collector. (The design follows the
+"Context Language Models" paper, arXiv:2609.37725 — implemented here from
+scratch for interactive use, not forked.)
 
 ## Quickstart
 

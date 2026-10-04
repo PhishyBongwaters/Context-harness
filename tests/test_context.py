@@ -32,8 +32,17 @@ class TestContextFile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cf = ContextFile(Path(d) / "sub" / "context.md")
             text = cf.load()
-            self.assertIn("persistent memory", text)
+            self.assertIn("live context", text)
             self.assertTrue((Path(d) / "sub" / "context.md").exists())
+
+    def test_append(self):
+        with tempfile.TemporaryDirectory() as d:
+            cf = ContextFile(Path(d) / "context.md")
+            cf.save("## user\nhello\n")
+            cf.append("## user\nworld\n")
+            text = cf.load()
+            self.assertIn("hello", text)
+            self.assertIn("world", text)
 
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:

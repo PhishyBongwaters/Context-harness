@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.context import Budget
+from harness.context import Budget, render_user
 from harness.loop import BudgetExceeded, Loop, Session
 from harness.providers import MockProvider
 
@@ -58,17 +58,23 @@ class TestLoop(unittest.TestCase):
         results = self.loop_tool_results(loop)
         self.assertTrue(any("unknown tool" in r for r in results))
 
+    def _bloated_session(self):
+        # Valid transcript sections (bare text would be preamble -> 0 msgs).
+        s = make_session()
+        s.context.save("".join(render_user("x" * 200) for _ in range(100)))
+        return s
+
     def test_hard_budget_triggers_prune_then_resumes(self):
         # hard budget above the system prompt's own size but below the
-        # bloated file: prune turn runs, mock shrinks the file, turn resumes.
-        s = make_session()
-        s.context.save("# big\n" + "x" * 20000)
+        # bloated transcript: prune turn runs, mock shrinks the file,
+        # turn resumes.
+        s = self._bloated_session()
         script = [
             # prune turn: shrink the file
             {"content": None, "tool_calls": [
                 {"id": "p1", "name": "write",
                  "arguments": {"path": str(s.context.path),
-                               "content": "# tiny"}}]},
+                               "content": render_user("fresh start")}}]},
             {"content": "PRUNED"},
             # resumed normal turn
             {"content": "all good"},
@@ -79,11 +85,10 @@ class TestLoop(unittest.TestCase):
         out = loop.run_turn(s, "hi")
         self.assertEqual(out, "all good")
         self.assertIn("prune", events)
-        self.assertEqual(s.context.load(), "# tiny")
+        self.assertIn("fresh start", s.context.load())
 
     def test_prune_failure_raises_loudly(self):
-        s = make_session()
-        s.context.save("x" * 20000)
+        s = self._bloated_session()
         # mock never shrinks the file -> prune attempts exhaust
         script = [{"content": "PRUNED"}] * 40
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
@@ -91,8 +96,7 @@ class TestLoop(unittest.TestCase):
             loop.run_turn(s, "hi")
 
     def test_prune_turn_restricts_tools(self):
-        s = make_session()
-        s.context.save("x" * 20000)
+        s = self._bloated_session()
         # exec is not allowed on a prune turn: 5 attempts x 2 responses,
         # file never shrinks -> BudgetExceeded, command never runs.
         script = [
