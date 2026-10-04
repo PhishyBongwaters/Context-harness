@@ -16,7 +16,8 @@ import os
 import sys
 from pathlib import Path
 
-from .config import config_path, load_config, write_example_config
+from .config import (PROVIDER_DEFAULTS, config_path, load_config,
+                     write_example_config)
 from .context import Budget
 from .loop import BudgetExceeded, Loop, Session
 from .providers import ProviderError, make_provider
@@ -81,7 +82,10 @@ def _build_loop(cfg, args) -> Loop:
         cfg.provider = args.provider
     if args.model:
         cfg.model = args.model
-    if not cfg.api_key:
+    # Cloud endpoints need a key; a custom base_url (e.g. LM Studio,
+    # llama.cpp) is assumed local and goes without one.
+    default_base = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
+    if not cfg.api_key and cfg.base_url == default_base:
         sys.exit(f"No API key: set {cfg.api_key_env} in your environment.")
     provider = make_provider(cfg)
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),

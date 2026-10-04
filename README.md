@@ -40,6 +40,20 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
+Local server (LM Studio / llama.cpp — OpenAI-compatible `/v1`):
+
+```json
+{
+  "provider": "openai",
+  "model": "whatever-you-loaded",
+  "base_url": "http://localhost:1234/v1"
+}
+```
+
+No API key needed when `base_url` is overridden — the Authorization
+header is simply omitted. (Tool calling with local models depends on the
+model's chat template; results vary.)
+
 ## Layout
 
 `harness/loop.py` — agent loop, budget enforcement, prune turns ·
