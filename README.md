@@ -43,11 +43,15 @@ never from the file. `sessions_dir` unset selects the platform default
 Local server (LM Studio / llama.cpp — OpenAI-compatible `/v1`):
 
 ```json
-{
-  "provider": "openai",
-  "model": "whatever-you-loaded",
-  "base_url": "http://localhost:1234/v1"
-}
+{ "provider": "openai", "model": "whatever-you-loaded",
+  "base_url": "http://localhost:1234/v1" }
+```
+LM Studio default port is 1234; llama.cpp server is `http://localhost:8080/v1`.
+
+Cloud (key from env, e.g. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
+
+```json
+{ "provider": "openai", "model": "gpt-5" }
 ```
 
 No API key needed when `base_url` is overridden — the Authorization
