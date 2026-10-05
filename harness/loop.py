@@ -248,6 +248,8 @@ class Loop:
 
             self._emit("request", {"phase": "main", "step": step,
                                        "tokens_est": est, "status": status,
+                                       "hard": self.budget.hard,
+                                       "soft": self.budget.soft,
                                        "messages": messages,
                                        "tools": [t["name"]
                                                  for t in self._tools]})

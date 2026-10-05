@@ -85,6 +85,11 @@ def _print_event(kind: str, data) -> None:
             print(f"  + {a['header']} ({a['tokens']:,} tokens)", flush=True)
         if len(data["added"]) > 5:
             print(f"  + ... +{len(data['added']) - 5} more", flush=True)
+    elif kind == "request" and "tokens_est" in (data or {}):
+        toks, hard = data["tokens_est"], data.get("hard") or 0
+        pct = 100.0 * toks / hard if hard else 0
+        print(f"\n[context {toks:,} / {hard:,} tokens ({pct:.0f}%)]",
+              flush=True)
     elif kind == "usage":
         pass  # quiet; available for metering
     elif kind == "approval-result":
@@ -133,8 +138,13 @@ def _match_session(cfg, ident: str) -> str | None:
 
 
 def _show_session(cfg, session: Session) -> None:
+    try:
+        toks = session.context.tokens()
+    except Exception:
+        toks = None
+    using = f" using {toks:,} tokens" if toks is not None else ""
     print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
-          f"budget={cfg.budget_hard:,} ctx={session.context.path}")
+          f"budget={cfg.budget_hard:,}{using} ctx={session.context.path}")
 
 
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
