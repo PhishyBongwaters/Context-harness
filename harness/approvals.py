@@ -139,6 +139,14 @@ class Policy:
             if self.in_roots(target):
                 return ALLOW, "read inside allowed roots", key
             return ASK, f"read outside allowed roots: {target}", key
+        if name == "tokens":
+            if not args.get("path"):
+                return ALLOW, "counting literal text", "tokens:<literal>"
+            target = self.resolve(args.get("path") or "")
+            key = f"tokens:{target}"
+            if self.in_roots(target):
+                return ALLOW, "counting inside allowed roots", key
+            return ASK, f"counting outside allowed roots: {target}", key
         if name in ("write", "edit"):
             target = self.resolve(args.get("path") or "")
             key = f"{name}:{target}"

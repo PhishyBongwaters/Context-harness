@@ -247,6 +247,18 @@ class TestTools(unittest.TestCase):
                                  "new_text": "q"}, workdir=d)
             self.assertIn("not found", r)
 
+    def test_tokens_counts_file_and_text(self):
+        from harness.tools import run_tool
+        with tempfile.TemporaryDirectory() as d:
+            run_tool("write", {"path": "a.txt", "content": "hello world"},
+                     workdir=d)
+            r = run_tool("tokens", {"path": "a.txt"}, workdir=d)
+            self.assertIn("tokens [tiktoken/cl100k_base]", r)
+            r = run_tool("tokens", {"text": "hello world"}, workdir=d)
+            self.assertIn("2 tokens", r)
+            r = run_tool("tokens", {}, workdir=d)
+            self.assertIn("ERROR", r)
+
 
 if __name__ == "__main__":
     unittest.main()

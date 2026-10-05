@@ -40,6 +40,7 @@ The REPL stays in its session: plain text appends to the same
 - `/new` — fresh session and switch to it
 - `/new summarize this repo` — fresh session + run that task immediately
 - `/open 20261005-0826` — switch back (full id or unambiguous prefix)
+- `/usage [N]` — ledger totals + last N calls (default 5)
 - `/quit` — leave (empty line also quits)
 
 Flow: `/new` once, then just type. Only `/new` mints a new
@@ -104,13 +105,13 @@ model's chat template; results vary.)
 `harness/loop.py` — agent loop, budget enforcement, prune turns ·
 `harness/context.py` — transcript render/parse, token counting ·
 `harness/providers.py` — OpenAI, Anthropic, Mock ·
-`harness/tools.py` — exec / read / write / edit ·
+`harness/tools.py` — exec / read / write / edit / tokens ·
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
 `harness/usage.py` — server usage ledger (`usage.json`)
 
-`tests/` — 81 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 84 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Usage accounting
 
@@ -126,6 +127,8 @@ accumulate in `<session-dir>/usage.json` (per-turn breakdowns plus
 lifetime totals, shown as `sess in/out` and in the session header), so
 the CLI — and later a TUI/GUI — read the same ledger. `request` /
 `response` events already carry `breakdown` + `usage_total` for that.
+`/usage [N]` prints the ledger; the `tokens` tool lets the model count
+any file or text with the same estimator instead of guessing.
 
 ## Approvals
 

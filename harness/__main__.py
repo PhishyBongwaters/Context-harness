@@ -162,8 +162,28 @@ def _show_session(cfg, session: Session, totals=None) -> None:
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/open <id>  switch session (id prefix ok)\n"
              "/list        list sessions (* = current)\n"
+             "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/help        this list\n"
              "/quit        leave (empty line also quits)")
+
+
+def _show_usage(tracker, rest: str) -> None:
+    if tracker is None or not tracker.turns:
+        print("No usage recorded yet.")
+        return
+    t = tracker.totals
+    print(f"[usage] session in {t['input']:,} out {t['output']:,} "
+          f"est {t['estimated']:,} over {len(tracker.turns)} calls")
+    try:
+        n = int((rest.split() or ["5"])[0])
+    except ValueError:
+        n = 5
+    for turn in tracker.turns[-max(1, n):]:
+        bd, sv = turn["breakdown"], turn["server"]
+        print(f"  turn {turn['turn']} {turn['phase']}/{turn['step']}: "
+              f"est {bd['total']:,} (sys {bd['system']:,} "
+              f"chat {bd['transcript']:,} tools {bd['tools']:,}) "
+              f"server in {sv['input']:,} out {sv['output']:,}")
 
 
 def _approver(cfg, args, session, on_event):
@@ -341,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
             print(REPL_HELP)
         elif cmd == "list":
             _list_sessions(cfg)
+        elif cmd == "usage":
+            _show_usage(box.get("tracker"), rest)
         elif cmd == "new":
             box["session"] = _new_session(cfg, args.workdir)
             attach()

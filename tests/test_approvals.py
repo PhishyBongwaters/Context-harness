@@ -32,6 +32,16 @@ class TestPolicy(unittest.TestCase):
             "read", {"path": str(Path(tempfile.mkdtemp()) / "x")})
         self.assertEqual(d, "ask")
 
+    def test_tokens_literal_allowed(self):
+        s = make_session()
+        d, _, _ = policy_for(s).check("tokens", {"text": "hi"})
+        self.assertEqual(d, "allow")
+
+    def test_tokens_in_roots_allowed(self):
+        s = make_session()
+        d, _, _ = policy_for(s).check("tokens", {"path": "notes.txt"})
+        self.assertEqual(d, "allow")
+
     def test_context_curation_allowed(self):
         s = make_session()
         d, _, _ = policy_for(s).check(

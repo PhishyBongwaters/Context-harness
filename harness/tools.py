@@ -80,6 +80,23 @@ def tool_definitions() -> list[dict]:
                 "required": ["path", "old_text", "new_text"],
             },
         },
+        {
+            "name": "tokens",
+            "description": (
+                "Count cl100k_base tokens (the harness budget estimator) "
+                "for a file or literal text. Use it to verify the context "
+                "meter's accounting instead of guessing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "File to count."},
+                    "text": {"type": "string",
+                             "description": "Literal text to count."},
+                },
+            },
+        },
     ]
 
 
@@ -145,11 +162,29 @@ def edit_tool(args: dict, workdir: str) -> str:
     return f"Edited {p} (1 occurrence replaced)"
 
 
+def tokens_tool(args: dict, workdir: str) -> str:
+    from .context import ESTIMATOR, count_tokens
+    if args.get("path"):
+        p = _resolve(args["path"], workdir)
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return f"ERROR reading {p}: {e}"
+        label = str(p)
+    elif "text" in args:
+        text, label = args["text"] or "", "<literal>"
+    else:
+        return "ERROR: pass path or text"
+    return (f"{label}: {len(text):,} chars, "
+            f"{count_tokens(text):,} tokens [{ESTIMATOR}]")
+
+
 EXECUTORS = {
     "exec": exec_tool,
     "read": read_tool,
     "write": write_tool,
     "edit": edit_tool,
+    "tokens": tokens_tool,
 }
 
 
