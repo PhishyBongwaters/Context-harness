@@ -45,6 +45,31 @@ class TestOpenAI(unittest.TestCase):
         self.assertEqual(out["content"], "done")
         self.assertEqual(out["tool_calls"], [])
 
+    def test_translate_assistant_tool_calls_wire_format(self):
+        msgs = self.p.translate_messages([{
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "c1", "name": "exec",
+                             "arguments": {"command": "ls -la"}}]}])
+        self.assertEqual(msgs[0]["role"], "assistant")
+        tc = msgs[0]["tool_calls"][0]
+        self.assertEqual(tc["id"], "c1")
+        self.assertEqual(tc["type"], "function")  # llama.cpp requires this
+        self.assertEqual(tc["function"]["name"], "exec")
+        self.assertEqual(json.loads(tc["function"]["arguments"]),
+                         {"command": "ls -la"})
+
+    def test_translate_omits_empty_tool_calls(self):
+        msgs = self.p.translate_messages(
+            [{"role": "assistant", "content": "hi"}])
+        self.assertNotIn("tool_calls", msgs[0])
+
+    def test_translate_tool_message(self):
+        msgs = self.p.translate_messages(
+            [{"role": "tool", "tool_call_id": "c1", "content": "out"}])
+        self.assertEqual(msgs[0],
+                         {"role": "tool", "tool_call_id": "c1",
+                          "content": "out"})
+
 
 class TestAnthropic(unittest.TestCase):
     def setUp(self):

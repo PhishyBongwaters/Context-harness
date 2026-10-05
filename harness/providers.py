@@ -72,11 +72,43 @@ class OpenAIProvider(Provider):
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
 
+    def translate_messages(self, messages: list[dict]) -> list[dict]:
+        """Internal format -> OpenAI wire format.
+
+        Assistant tool calls become {"id", "type": "function",
+        "function": {"name", "arguments": "<json>"}}; strict servers
+        (e.g. llama.cpp) reject anything else.
+        """
+        out: list[dict] = []
+        for m in messages:
+            role = m["role"]
+            if role == "tool":
+                out.append({"role": "tool",
+                            "tool_call_id": m["tool_call_id"],
+                            "content": m.get("content") or ""})
+            elif role == "assistant":
+                msg: dict = {"role": "assistant",
+                             "content": m.get("content")}
+                calls = [{
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc.get("arguments") or {},
+                                               ensure_ascii=False),
+                    },
+                } for tc in m.get("tool_calls") or []]
+                if calls:
+                    msg["tool_calls"] = calls
+                out.append(msg)
+            else:  # user (system is prepended separately)
+                out.append({"role": m["role"], "content": m.get("content") or ""})
+        return out
+
     def build_payload(self, *, system: str, messages: list[dict],
                       tools: list[dict]) -> dict:
-        full = [{"role": "system", "content": system}] + [
-            {k: v for k, v in m.items() if v is not None} for m in messages
-        ]
+        full = [{"role": "system", "content": system}] + \
+            self.translate_messages(messages)
         return {
             "model": self.model,
             "messages": full,

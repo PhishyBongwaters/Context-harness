@@ -144,6 +144,11 @@ def _build_loop(cfg, args, on_event=None, approver=None) -> Loop:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:  # model output may contain emoji; cp1252 consoles would crash
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
     ap = argparse.ArgumentParser(prog="ctx",
                                  description="Agent loop: context as a file.")
     ap.add_argument("task", nargs="*", help="One-shot task text.")

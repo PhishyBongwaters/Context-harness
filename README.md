@@ -97,7 +97,7 @@ model's chat template; results vary.)
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny)
 
-`tests/` — 63 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 66 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Approvals
 
