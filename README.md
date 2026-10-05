@@ -180,6 +180,8 @@ Tunable (config file, CLI flag wins):
 | `exec_timeout_max` | 300s | `--exec-timeout-max` |
 | `request_timeout` | 120s | `--request-timeout` (raise for ~100k prompts on slow local servers — prefill can take many minutes) |
 
+Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`.
+
 ## Debugging
 
 ```bash

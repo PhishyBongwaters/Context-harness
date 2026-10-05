@@ -220,6 +220,10 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         cfg.model = args.model
     if getattr(args, "request_timeout", None):
         cfg.request_timeout = args.request_timeout
+    if getattr(args, "budget_hard", None):
+        cfg.budget_hard = args.budget_hard
+    if getattr(args, "budget_soft", None):
+        cfg.budget_soft = args.budget_soft
     _require_key(cfg.provider, cfg.base_url, cfg.api_key, cfg.api_key_env,
                  "main")
     provider = make_provider(cfg)
@@ -284,6 +288,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--request-timeout", type=int, default=None,
                     help="HTTP seconds per model call (default 120; raise "
                          "for huge prompts on slow local servers).")
+    ap.add_argument("--budget-hard", type=int, default=None,
+                    help="Hard token budget override (default from config).")
+    ap.add_argument("--budget-soft", type=int, default=None,
+                    help="Soft token budget override (default from config).")
     ap.add_argument("--project", default=None,
                     help="Project name: resume it or start it.")
     ap.add_argument("--workdir", default=None,
