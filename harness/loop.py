@@ -60,6 +60,12 @@ back corrupts the transcript.
 The harness appends new turns to the end of the file automatically (your
 replies, tool results, user messages). Your edits apply on top.
 
+CURATION (your transcript, your standing permission -- edits here never
+need approval): keep ## user messages; summarize long ## assistant
+replies instead of deleting them; prune stale ## tool results; keep
+roughly the newest 15-20 turns in full. You are its curator, so prune
+early and often -- do not wait for the budget to force it.
+
 BUDGET: hard limit {hard:,} tokens, soft warning at {soft:,} tokens.
 The harness shows your usage every turn. If the next request would exceed
 the hard limit, you do NOT get a normal turn -- you get a prune-only turn
@@ -76,8 +82,11 @@ PRUNE_SYSTEM = """You are over your context budget. This is a prune-only turn.
 
 You may ONLY use the write/edit tools, and ONLY on {ctx_path}.
 Rewrite, summarize, and cut until the transcript is comfortably under
-{hard:,} tokens. Keep the `## user` / `## assistant` / `## tool <id>`
-section format parseable, and do not delete the most recent ## user section.
+{hard:,} tokens. Strategy: keep all ## user messages; summarize (don't
+just delete) long assistant replies; drop tool results no longer needed
+for the task; keep the newest ~15-20 turns in full. Keep the `## user` /
+`## assistant` / `## tool <id>` section format parseable, and do not
+delete the most recent ## user section.
 Do not attempt the user's task now -- just prune.
 When the file is under budget, reply with one line: PRUNED.
 """
