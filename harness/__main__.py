@@ -29,6 +29,22 @@ def _sessions(cfg) -> Path:
     return p
 
 
+_spin: list = []
+
+
+def _spin_start(label: str) -> None:
+    from .spinner import Spinner
+    _spin_stop()
+    sp = Spinner(label)
+    sp.start()
+    _spin.append(sp)
+
+
+def _spin_stop() -> None:
+    while _spin:
+        _spin.pop().stop()
+
+
 def _current_id(sessions: Path) -> str | None:
     marker = sessions / ".current"
     if marker.exists():
@@ -61,6 +77,7 @@ def _open_session(cfg, sid: str | None, workdir: str) -> Session:
 
 
 def _print_event(kind: str, data) -> None:
+    _spin_stop()
     if kind == "assistant":
         print(data, flush=True)
     elif kind == "tool":
@@ -97,6 +114,8 @@ def _print_event(kind: str, data) -> None:
                 f"out {ut.get('output', 0):,}") if ut else ""
         print(f"\n[context {toks:,} ({parts}) / {hard:,} ({pct:.0f}%){sess}]",
               flush=True)
+        _spin_start("pruning" if (data or {}).get("phase") == "prune"
+                    else "thinking")
     elif kind == "usage":
         pass  # quiet; available for metering
     elif kind == "approval-result":

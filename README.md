@@ -111,9 +111,10 @@ model's chat template; results vary.)
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
 `harness/usage.py` — server usage ledger (`usage.json`) ·
-`harness/project.py` — project registry + session markers
+`harness/project.py` — project registry + session markers ·
+`harness/spinner.py` — console activity indicator
 
-`tests/` — 96 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 98 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Projects
 
