@@ -11,7 +11,9 @@ special compact tool.
 
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
-Pruning fails repeatedly → loud error, never silent truncation.
+Pruning fails repeatedly → loud error, never silent truncation. The prune
+turn can run on a separate janitor model — cheaper/smaller, even local
+while the main model is cloud (see `prune_*` config).
 
 Design follows the Context Language Models paper (arXiv:2609.37725),
 implemented from scratch for interactive use.
@@ -76,7 +78,7 @@ model's chat template; results vary.)
 `harness/tools.py` — exec / read / write / edit ·
 `harness/config.py`, `harness/__main__.py` — config, CLI
 
-`tests/` — 31 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 39 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Notes
 
