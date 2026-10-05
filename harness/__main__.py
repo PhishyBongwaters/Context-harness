@@ -287,13 +287,21 @@ def main(argv: list[str] | None = None) -> int:
         return do_turn(" ".join(args.task))
 
     # REPL — stays in the current session until /new or /open.
+    # Reads via the shared stdin pump so a timed-out approval prompt
+    # can never steal the next line (see StdinPump).
+    from .approvals import stdin_line
     print("Type your task (/help for commands, empty line quits).")
     while True:
+        print("\n> ", end="", flush=True)
         try:
-            text = input("\n> ").strip()
-        except (EOFError, KeyboardInterrupt):
+            line = stdin_line()
+        except KeyboardInterrupt:
             print()
             break
+        if line is None:  # EOF
+            print()
+            break
+        text = line.strip()
         if not text:
             break
         parsed = parse_repl_command(text)

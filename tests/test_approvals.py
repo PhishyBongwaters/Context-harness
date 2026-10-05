@@ -3,8 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.approvals import (Approver, Policy, clamp_exec_timeout,
-                               deny_exec_reason, is_readonly_exec)
+from harness.approvals import (Approver, Policy, StdinPump,
+                               clamp_exec_timeout, deny_exec_reason,
+                               is_readonly_exec)
 from harness.context import Budget
 from harness.loop import Loop, Session
 from harness.providers import MockProvider
@@ -160,6 +161,43 @@ class TestExecTimeout(unittest.TestCase):
             clamp_exec_timeout({"timeout": 9999}, 60, 300)["timeout"], 300)
         self.assertEqual(
             clamp_exec_timeout({"timeout": 5}, 60, 300)["timeout"], 5)
+
+
+class TestStdinPump(unittest.TestCase):
+    def test_timeout_then_line_not_stolen(self):
+        # Regression: a timed-out approval used to strand a thread in
+        # input() that ate the REPL's next line, faking a dead session.
+        pump = StdinPump(start_thread=False)
+        self.assertIs(pump.readline(timeout=0.05), StdinPump.TIMEOUT)
+        pump._q.put("hello")
+        self.assertEqual(pump.readline(timeout=1), "hello")
+
+    def test_eof_sticks(self):
+        pump = StdinPump(start_thread=False)
+        pump._q.put(None)
+        self.assertIsNone(pump.readline(timeout=1))
+        self.assertIsNone(pump.readline(timeout=1))
+
+    def test_approver_uses_pump(self):
+        with tempfile.TemporaryDirectory() as d:
+            pump = StdinPump(start_thread=False)
+            pump._q.put("s")
+            a = Approver(d, pump=pump)
+            s = Session(id="x", dir=Path(d), workdir=d)
+            ok, _ = a.resolve(policy_for(s), "exec",
+                              {"command": "git push origin main"})
+            self.assertTrue(ok)
+            self.assertIn("exec:git push origin main", a.session_keys)
+
+    def test_approver_pump_timeout_denies(self):
+        with tempfile.TemporaryDirectory() as d:
+            pump = StdinPump(start_thread=False)
+            a = Approver(d, pump=pump, approval_timeout=1)
+            s = Session(id="x", dir=Path(d), workdir=d)
+            ok, msg = a.resolve(policy_for(s), "exec",
+                                {"command": "git push origin main"})
+            self.assertFalse(ok)
+            self.assertIn("DENIED", msg)
 
 
 if __name__ == "__main__":
