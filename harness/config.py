@@ -42,6 +42,7 @@ DEFAULTS = {
     "approval_timeout": 120,  # seconds to wait for a human approval
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
+    "usage_note": True,  # ephemeral per-request usage line (never stored)
 }
 
 PROVIDER_DEFAULTS = {
@@ -92,6 +93,7 @@ class Config:
     approval_timeout: int = 120
     exec_timeout: int = 60
     exec_timeout_max: int = 300
+    usage_note: bool = True
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -197,6 +199,7 @@ def load_config(path: str | Path | None = None,
         approval_timeout=int(merged.get("approval_timeout", 120)),
         exec_timeout=int(merged.get("exec_timeout", 60)),
         exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
+        usage_note=bool(merged.get("usage_note", True)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
@@ -223,6 +226,7 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "approval_timeout": 120,
         "exec_timeout": 60,
         "exec_timeout_max": 300,
+        "usage_note": True,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "

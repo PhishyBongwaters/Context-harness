@@ -223,7 +223,9 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 exec_timeout=getattr(args, "exec_timeout", None)
                 or cfg.exec_timeout,
                 exec_timeout_max=getattr(args, "exec_timeout_max", None)
-                or cfg.exec_timeout_max)
+                or cfg.exec_timeout_max,
+                usage_note=cfg.usage_note
+                and not getattr(args, "no_usage_note", False))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Default exec runtime in seconds (default 60).")
     ap.add_argument("--exec-timeout-max", type=int, default=None,
                     help="Ceiling on exec runtime in seconds (default 300).")
+    ap.add_argument("--no-usage-note", action="store_true",
+                    help="Omit the ephemeral per-request usage line.")
     ap.add_argument("--workdir", default=os.getcwd(),
                     help="Working directory for tools.")
     args = ap.parse_args(argv)

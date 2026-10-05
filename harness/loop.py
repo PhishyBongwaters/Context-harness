@@ -117,7 +117,8 @@ class Loop:
                  approver: Approver | None = None,
                  exec_timeout: int = EXEC_TIMEOUT_DEFAULT,
                  exec_timeout_max: int = EXEC_TIMEOUT_MAX,
-                 usage_tracker: UsageTracker | None = None):
+                 usage_tracker: UsageTracker | None = None,
+                 usage_note: bool = True):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -127,6 +128,7 @@ class Loop:
         self.exec_timeout = exec_timeout
         self.exec_timeout_max = exec_timeout_max
         self.tracker = usage_tracker
+        self.usage_note = usage_note
         self._turn_seq = 0
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
@@ -161,6 +163,25 @@ class Loop:
         return self.tracker.record(turn=self._turn_seq, phase=phase,
                                    step=step, breakdown=breakdown,
                                    server=server)
+
+    def _note(self, breakdown: dict) -> list[dict]:
+        """Ephemeral usage line: sent to the model, never stored.
+
+        The meter is console-only, so without this the model reasons
+        from stale numbers pasted into its transcript. ~30 tokens.
+        """
+        if not self.usage_note:
+            return []
+        t = self.tracker.totals if self.tracker else {"input": 0,
+                                                      "output": 0}
+        return [{"role": "user",
+                 "content": (
+                     f"[harness note: this request ≈ {breakdown['total']:,} "
+                     f"tokens (sys {breakdown['system']:,} + "
+                     f"chat {breakdown['transcript']:,} + "
+                     f"tools {breakdown['tools']:,}) of "
+                     f"{self.budget.hard:,} budget; session lifetime in "
+                     f"{t['input']:,} out {t['output']:,}]")}]
 
     def _touches_context(self, session: Session, name: str,
                          args: dict) -> bool:
@@ -245,14 +266,16 @@ class Loop:
                                        "messages": turn,
                                        "tools": [t["name"]
                                                  for t in self._prune_tools]})
-                resp = self.prune_provider.chat(system=system, messages=turn,
-                                                tools=self._prune_tools)
+                resp = self.prune_provider.chat(
+                    system=system, messages=turn + self._note(bd),
+                    tools=self._prune_tools)
                 totals = self._track("prune", attempt, bd,
                                      resp.get("usage"))
                 self._emit("response", {"phase": "prune",
                                         "content": resp.get("content"),
                                         "tool_calls": resp.get("tool_calls"),
-                                        "usage": resp.get("usage")})
+                                        "usage": resp.get("usage"),
+                                        "usage_total": totals})
                 turn.append({"role": "assistant",
                              "content": resp.get("content"),
                              "tool_calls": resp.get("tool_calls")})
@@ -314,7 +337,8 @@ class Loop:
                                    "messages": messages,
                                    "tools": [t["name"]
                                              for t in self._tools]})
-            resp = self.provider.chat(system=system, messages=messages,
+            resp = self.provider.chat(system=system,
+                                      messages=messages + self._note(bd),
                                       tools=self._tools)
             totals = self._track("main", step, bd, resp.get("usage"))
             self._emit("response", {"phase": "main",

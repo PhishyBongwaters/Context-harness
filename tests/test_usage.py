@@ -66,6 +66,25 @@ class TestTracker(unittest.TestCase):
         resps = [v for k, v in events if k == "response"]
         self.assertIn("usage_total", resps[0])
 
+    def test_usage_note_sent_but_never_stored(self):
+        s = make_session()
+        loop = Loop(MockProvider([{"content": "done"}]),
+                    Budget(100000, 80000))
+        loop.run_turn(s, "hi")
+        sent = loop.provider.calls[0]["messages"]
+        self.assertEqual(sent[-1]["role"], "user")
+        self.assertIn("[harness note:", sent[-1]["content"])
+        self.assertNotIn("[harness note:", s.context.load())
+
+    def test_usage_note_opt_out(self):
+        s = make_session()
+        loop = Loop(MockProvider([{"content": "done"}]),
+                    Budget(100000, 80000), usage_note=False)
+        loop.run_turn(s, "hi")
+        sent = loop.provider.calls[0]["messages"]
+        self.assertFalse(any("[harness note:" in (m.get("content") or "")
+                             for m in sent))
+
 
 if __name__ == "__main__":
     unittest.main()

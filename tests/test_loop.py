@@ -149,7 +149,8 @@ class TestLoop(unittest.TestCase):
         script2 = [{"content": "still 42"}]
         loop2 = Loop(MockProvider(script2), Budget(100000, 80000))
         self.assertEqual(loop2.run_turn(s, "and now?"), "still 42")
-        seen = loop2.provider.calls[0]["messages"]
+        seen = [m for m in loop2.provider.calls[0]["messages"]
+                if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
         self.assertEqual(roles,
                          ["user", "assistant", "tool", "assistant", "user"])

@@ -111,7 +111,7 @@ model's chat template; results vary.)
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
 `harness/usage.py` — server usage ledger (`usage.json`)
 
-`tests/` — 84 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 86 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Usage accounting
 
@@ -128,7 +128,10 @@ lifetime totals, shown as `sess in/out` and in the session header), so
 the CLI — and later a TUI/GUI — read the same ledger. `request` /
 `response` events already carry `breakdown` + `usage_total` for that.
 `/usage [N]` prints the ledger; the `tokens` tool lets the model count
-any file or text with the same estimator instead of guessing.
+any file or text with the same estimator instead of guessing. Every
+request also ends with an ephemeral `[harness note: ...]` usage line
+(sent, never stored; off via `usage_note: false` or `--no-usage-note`)
+so the model reasons from live numbers, not stale pasted ones.
 
 ## Approvals
 
