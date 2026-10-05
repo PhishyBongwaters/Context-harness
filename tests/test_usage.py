@@ -85,6 +85,18 @@ class TestTracker(unittest.TestCase):
         self.assertFalse(any("[harness note:" in (m.get("content") or "")
                              for m in sent))
 
+    def test_turn_numbers_continue_across_restarts(self):
+        s = make_session()
+        with tempfile.TemporaryDirectory() as d:
+            tracker = UsageTracker(d)
+            Loop(MockProvider([{"content": "a"}]), Budget(100000, 80000),
+                 usage_tracker=tracker).run_turn(s, "hi")
+            # fresh Loop, same tracker file: turn must advance, not reset
+            tracker2 = UsageTracker(d)
+            Loop(MockProvider([{"content": "b"}]), Budget(100000, 80000),
+                 usage_tracker=tracker2).run_turn(s, "hi again")
+            self.assertEqual([t["turn"] for t in tracker2.turns], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()
