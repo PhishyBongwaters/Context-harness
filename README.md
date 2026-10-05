@@ -94,6 +94,12 @@ Cloud (key from env or `.env`, e.g. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
 { "provider": "openai", "model": "gpt-5" }
 ```
 
+NVIDIA example (API key via `NVIDIA_API_KEY` env / `.env`):
+
+```json
+{ "provider": "nvidia", "model": "nemotron-4-340b-instruct" }
+```
+
 Janitor model for prune-only turns (optional — cheaper/smaller model,
 can be local while main is cloud):
 
