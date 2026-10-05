@@ -34,8 +34,16 @@ python -m harness --list          # list sessions
 ```
 
 The REPL stays in its session: plain text appends to the same
-`context.md`; `/new [task]`, `/open <id>`, `/list`, `/help`, `/quit`
-manage sessions without leaving the prompt.
+`context.md`. Slash commands (also in `/help`):
+
+- `/list` — show sessions (`*` = current)
+- `/new` — fresh session and switch to it
+- `/new summarize this repo` — fresh session + run that task immediately
+- `/open 20261005-0826` — switch back (full id or unambiguous prefix)
+- `/quit` — leave (empty line also quits)
+
+Flow: `/new` once, then just type. Only `/new` mints a new
+`sessions/<id>/context.md`; everything else appends to the current one.
 
 ## Requirements
 
