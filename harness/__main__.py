@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from .config import (PROVIDER_DEFAULTS, config_path, load_config,
+from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
                      write_example_config)
 from .context import Budget
 from .loop import BudgetExceeded, Loop, Session
