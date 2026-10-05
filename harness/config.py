@@ -46,6 +46,9 @@ DEFAULTS = {
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
     # many minutes on big models)
+    "prune_target": None,  # deterministic stages aim here (null -> soft)
+    "prune_keep_tools": 5,  # newest tool sections exempt from eviction
+    "prune_section_cap": 8000,  # per-section token cap (head+tail kept)
 }
 
 PROVIDER_DEFAULTS = {
@@ -98,6 +101,9 @@ class Config:
     exec_timeout_max: int = 300
     usage_note: bool = True
     request_timeout: int = 120
+    prune_target: int | None = None
+    prune_keep_tools: int = 5
+    prune_section_cap: int = 8000
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -205,6 +211,10 @@ def load_config(path: str | Path | None = None,
         exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
         usage_note=bool(merged.get("usage_note", True)),
         request_timeout=int(merged.get("request_timeout", 120)),
+        prune_target=(int(merged["prune_target"])
+                      if merged.get("prune_target") else None),
+        prune_keep_tools=int(merged.get("prune_keep_tools", 5)),
+        prune_section_cap=int(merged.get("prune_section_cap", 8000)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
@@ -233,6 +243,9 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "exec_timeout_max": 300,
         "usage_note": True,
         "request_timeout": 120,
+        "prune_target": None,
+        "prune_keep_tools": 5,
+        "prune_section_cap": 8000,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "

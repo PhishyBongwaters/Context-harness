@@ -269,7 +269,10 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 or cfg.exec_timeout_max,
                 usage_note=cfg.usage_note
                 and not getattr(args, "no_usage_note", False),
-                project=project)
+                project=project,
+                prune_target=cfg.prune_target,
+                prune_keep_tools=cfg.prune_keep_tools,
+                prune_section_cap=cfg.prune_section_cap)
 
 
 def main(argv: list[str] | None = None) -> int:

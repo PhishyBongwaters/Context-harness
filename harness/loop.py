@@ -23,6 +23,8 @@ from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
                       render_user, sanitize_assistant_content)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
+from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
+                            prune_deterministic)
 from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
@@ -130,7 +132,10 @@ class Loop:
                  exec_timeout_max: int = EXEC_TIMEOUT_MAX,
                  usage_tracker: UsageTracker | None = None,
                  usage_note: bool = True,
-                 project: str | None = None):
+                 project: str | None = None,
+                 prune_target: int | None = None,
+                 prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
+                 prune_section_cap: int = DEFAULT_SECTION_CAP):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -142,6 +147,9 @@ class Loop:
         self.tracker = usage_tracker
         self.usage_note = usage_note
         self.project = project
+        self.prune_target = prune_target  # None -> soft budget
+        self.prune_keep_tools = prune_keep_tools
+        self.prune_section_cap = prune_section_cap
         self._turn_seq = 0
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
@@ -263,6 +271,19 @@ class Loop:
             self._emit("backup", {"path": str(backup)})
         except OSError:
             pass  # best effort: never block the prune on a backup
+        # Deterministic stages first: free, instant, no model calls. The
+        # agent turn fires only if these didn't reach target.
+        det_before = session.context.load()
+        det_text, det_report = prune_deterministic(
+            det_before,
+            target=(self.prune_target if self.prune_target is not None
+                    else self.budget.soft),
+            keep_recent_tools=self.prune_keep_tools,
+            section_cap=self.prune_section_cap)
+        if det_text != det_before:
+            session.context.save(det_text)
+            self._emit("context-diff", diff_transcripts(det_before, det_text))
+            self._emit("prune-deterministic", det_report)
         # Gate on the EXACT next request: main system + full tools. Any
         # cheaper ruler (prune system, prune tools) reads under while the
         # main check stays over: prune declares victory without touching

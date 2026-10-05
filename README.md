@@ -114,9 +114,20 @@ model's chat template; results vary.)
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
 `harness/usage.py` — server usage ledger (`usage.json`) ·
 `harness/project.py` — project registry + session markers ·
-`harness/spinner.py` — console activity indicator
+`harness/spinner.py` — console activity indicator ·
+`harness/deterministic.py` — model-free prune stages
 
-`tests/` — 99 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 109 unittest tests, stdlib only. `python -m unittest discover -s tests`
+
+## Deterministic prune
+
+Before the janitor turn fires, model-free stages run (milliseconds, no
+prefill): exact-dupe collapse (newest wins, user sections exempt),
+oldest-tool eviction (newest K kept), per-section caps (head+tail).
+Evicted tool ids are scrubbed from `tool-calls` fences so strict
+servers never see dangling calls. The agent turn is the last resort,
+over a much smaller file. Knobs: `prune_target` (default soft),
+`prune_keep_tools` (5), `prune_section_cap` (8000).
 
 ## Projects
 
