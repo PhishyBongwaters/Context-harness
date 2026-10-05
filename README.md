@@ -107,9 +107,25 @@ model's chat template; results vary.)
 `harness/tools.py` — exec / read / write / edit ·
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
 `harness/debug.py` — JSONL debug log ·
-`harness/approvals.py` — approval policy (allow/ask/deny)
+`harness/approvals.py` — approval policy (allow/ask/deny) ·
+`harness/usage.py` — server usage ledger (`usage.json`)
 
-`tests/` — 78 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 81 unittest tests, stdlib only. `python -m unittest discover -s tests`
+
+## Usage accounting
+
+Every model call prints its window share with the parts that make it up:
+
+```
+[context 929 (sys 492 + chat 19 + tools 418) / 100,000 (1%) | sess in 0 out 0]
+```
+
+`sys` = harness instructions, `chat` = wire-format transcript,
+`tools` = schemas riding along. Server-reported `input`/`output`
+accumulate in `<session-dir>/usage.json` (per-turn breakdowns plus
+lifetime totals, shown as `sess in/out` and in the session header), so
+the CLI — and later a TUI/GUI — read the same ledger. `request` /
+`response` events already carry `breakdown` + `usage_total` for that.
 
 ## Approvals
 

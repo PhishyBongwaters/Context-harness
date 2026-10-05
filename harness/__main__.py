@@ -88,7 +88,14 @@ def _print_event(kind: str, data) -> None:
     elif kind == "request" and "tokens_est" in (data or {}):
         toks, hard = data["tokens_est"], data.get("hard") or 0
         pct = 100.0 * toks / hard if hard else 0
-        print(f"\n[context {toks:,} / {hard:,} tokens ({pct:.0f}%)]",
+        bd = data.get("breakdown") or {}
+        parts = (f"sys {bd.get('system', 0):,} + "
+                 f"chat {bd.get('transcript', 0):,} + "
+                 f"tools {bd.get('tools', 0):,}")
+        ut = data.get("usage_total") or {}
+        sess = (f" | sess in {ut.get('input', 0):,} "
+                f"out {ut.get('output', 0):,}") if ut else ""
+        print(f"\n[context {toks:,} ({parts}) / {hard:,} ({pct:.0f}%){sess}]",
               flush=True)
     elif kind == "usage":
         pass  # quiet; available for metering
@@ -137,14 +144,19 @@ def _match_session(cfg, ident: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _show_session(cfg, session: Session) -> None:
+def _show_session(cfg, session: Session, totals=None) -> None:
     try:
         toks = session.context.tokens()
     except Exception:
         toks = None
     using = f" using {toks:,} tokens" if toks is not None else ""
+    life = ""
+    if totals and (totals.get("input") or totals.get("output")):
+        life = (f" | lifetime in {totals['input']:,} "
+                f"out {totals['output']:,}")
     print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
-          f"budget={cfg.budget_hard:,}{using} ctx={session.context.path}")
+          f"budget={cfg.budget_hard:,}{using}{life} "
+          f"ctx={session.context.path}")
 
 
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
@@ -162,7 +174,8 @@ def _approver(cfg, args, session, on_event):
                     auto_approve=getattr(args, "yes", False))
 
 
-def _build_loop(cfg, args, on_event=None, approver=None) -> Loop:
+def _build_loop(cfg, args, on_event=None, approver=None,
+                usage_tracker=None) -> Loop:
     if args.provider:
         cfg.provider = args.provider
     if args.model:
@@ -186,7 +199,7 @@ def _build_loop(cfg, args, on_event=None, approver=None) -> Loop:
 
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
                 on_event=on_event or _print_event, prune_provider=prune,
-                approver=approver,
+                approver=approver, usage_tracker=usage_tracker,
                 exec_timeout=getattr(args, "exec_timeout", None)
                 or cfg.exec_timeout,
                 exec_timeout_max=getattr(args, "exec_timeout_max", None)
@@ -240,11 +253,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from .debug import DebugLog
+    from .usage import UsageTracker
 
     box: dict = {}
 
     def attach() -> None:
         sess = box["session"]
+        tracker = UsageTracker(sess.dir)
+        box["tracker"] = tracker
+        _show_session(cfg, sess, tracker.totals)
         dbg = None
         if args.debug_file:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
@@ -259,14 +276,14 @@ def main(argv: list[str] | None = None) -> int:
         box["on_event"] = handler
         box["loop"] = _build_loop(
             cfg, args, on_event=handler,
-            approver=_approver(cfg, args, sess, handler))
+            approver=_approver(cfg, args, sess, handler),
+            usage_tracker=tracker)
 
     if args.new or args.session:
         box["session"] = (_new_session(cfg, args.workdir) if args.new
                           else _open_session(cfg, args.session, args.workdir))
     else:
         box["session"] = _open_session(cfg, None, args.workdir)
-    _show_session(cfg, box["session"])
     attach()
 
     def do_turn(text: str) -> int:
@@ -290,7 +307,6 @@ def main(argv: list[str] | None = None) -> int:
 
     def switch_session(sid: str) -> None:
         box["session"] = _open_session(cfg, sid, args.workdir)
-        _show_session(cfg, box["session"])
         attach()
 
     if args.task:
@@ -327,7 +343,6 @@ def main(argv: list[str] | None = None) -> int:
             _list_sessions(cfg)
         elif cmd == "new":
             box["session"] = _new_session(cfg, args.workdir)
-            _show_session(cfg, box["session"])
             attach()
             if rest:
                 do_turn(rest)

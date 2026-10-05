@@ -24,6 +24,7 @@ from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .providers import Provider, ProviderError
+from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
 
 MAX_STEPS = 50
@@ -115,7 +116,8 @@ class Loop:
                  on_event=None, prune_provider: Provider | None = None,
                  approver: Approver | None = None,
                  exec_timeout: int = EXEC_TIMEOUT_DEFAULT,
-                 exec_timeout_max: int = EXEC_TIMEOUT_MAX):
+                 exec_timeout_max: int = EXEC_TIMEOUT_MAX,
+                 usage_tracker: UsageTracker | None = None):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -124,12 +126,41 @@ class Loop:
         self.approver = approver
         self.exec_timeout = exec_timeout
         self.exec_timeout_max = exec_timeout_max
+        self.tracker = usage_tracker
+        self._turn_seq = 0
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
                              if t["name"] in ("write", "edit")]
 
     def _emit(self, kind: str, data):
         self.on_event(kind, data)
+
+    def _measure(self, provider: Provider, system: str,
+                   messages: list[dict], tools: list[dict]) -> dict:
+        """Break the next request into measurable parts.
+
+        system: harness instructions. transcript: the wire-format messages
+        (translated when the provider offers it, so JSON envelope keys
+        count). tools: the schemas riding along. total drives the meter
+        and the budget; the wire template on the server side remains a
+        small unmeasured margin.
+        """
+        translate = getattr(provider, "translate_messages", None)
+        wire = translate(messages) if callable(translate) else messages
+        parts = {"system": count_tokens(system),
+                 "transcript": count_tokens(json.dumps(wire)),
+                 "tools": sum(count_tokens(json.dumps(t)) for t in tools)}
+        parts["total"] = parts["system"] + parts["transcript"] + parts["tools"]
+        return parts
+
+    def _track(self, phase: str, step: int, breakdown: dict,
+               server: dict | None) -> dict:
+        """Record one model call; returns running session totals."""
+        if self.tracker is None:
+            return {"input": 0, "output": 0, "estimated": 0}
+        return self.tracker.record(turn=self._turn_seq, phase=phase,
+                                   step=step, breakdown=breakdown,
+                                   server=server)
 
     def _touches_context(self, session: Session, name: str,
                          args: dict) -> bool:
@@ -186,23 +217,38 @@ class Loop:
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
         for attempt in range(MAX_PRUNE_ATTEMPTS):
             raw, messages = self._transcript_messages(session)
-            if _estimate(system, messages, self._prune_tools) < self.budget.hard:
+            if self._measure(self.prune_provider, system, messages,
+                             self._prune_tools)["total"] < self.budget.hard:
                 return True
             self._emit("prune", {"attempt": attempt + 1,
-                                 "tokens": _estimate(system, messages,
-                                                     self._prune_tools)})
+                                 "tokens": self._measure(
+                                     self.prune_provider, system, messages,
+                                     self._prune_tools)["total"]})
             turn = [{"role": "user", "content": (
                 f"Current context file "
-                f"({_estimate(system, messages, self._prune_tools):,} tokens, hard limit "
+                f"({self._measure(self.prune_provider, system, messages, self._prune_tools)['total']:,} tokens, hard limit "
                 f"{self.budget.hard:,}):\n<context-file>\n{raw}\n"
                 f"</context-file>")}]
-            for _ in range(MAX_PRUNE_STEPS):
+            for _step in range(MAX_PRUNE_STEPS):
+                bd = self._measure(self.prune_provider, system, turn,
+                                   self._prune_tools)
                 self._emit("request", {"phase": "prune", "attempt": attempt + 1,
+                                       "tokens_est": bd["total"],
+                                       "breakdown": bd,
+                                       "status": self.budget.status(
+                                           bd["total"]),
+                                       "hard": self.budget.hard,
+                                       "soft": self.budget.soft,
+                                       "usage_total": (
+                                           self.tracker.totals
+                                           if self.tracker else None),
                                        "messages": turn,
                                        "tools": [t["name"]
                                                  for t in self._prune_tools]})
                 resp = self.prune_provider.chat(system=system, messages=turn,
                                                 tools=self._prune_tools)
+                totals = self._track("prune", attempt, bd,
+                                     resp.get("usage"))
                 self._emit("response", {"phase": "prune",
                                         "content": resp.get("content"),
                                         "tool_calls": resp.get("tool_calls"),
@@ -217,7 +263,8 @@ class Loop:
                     turn.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
         raw, messages = self._transcript_messages(session)
-        return _estimate(system, messages, self._prune_tools) < self.budget.hard
+        return self._measure(self.prune_provider, system, messages,
+                             self._prune_tools)["total"] < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
         ctx_path = str(session.context.path)
@@ -226,6 +273,7 @@ class Loop:
                                      soft=self.budget.soft)
         if self.approver is not None:
             self.approver.new_turn()
+        self._turn_seq += 1
         # The user's message joins the file-transcript first.
         session.context.append(render_user(user_text))
         warned = False
@@ -236,10 +284,12 @@ class Loop:
                 raise ProviderError(
                     "Context file parses to zero messages -- the transcript "
                     f"was emptied. Restore {ctx_path} and retry.")
-            est = _estimate(system, messages, self._tools)
+            bd = self._measure(self.provider, system, messages, self._tools)
+            est = bd["total"]
             status = self.budget.status(est)
             if status == "over":
-                self._emit("budget", {"status": "over", "tokens": est})
+                self._emit("budget", {"status": "over", "tokens": est,
+                                      "breakdown": bd})
                 if not self.prune_turn(session):
                     raise BudgetExceeded(
                         f"Still over hard budget ({self.budget.hard:,}) "
@@ -249,21 +299,29 @@ class Loop:
                 continue
             if status == "warn" and not warned:
                 warned = True
-                self._emit("budget", {"status": "warn", "tokens": est})
+                self._emit("budget", {"status": "warn", "tokens": est,
+                                      "breakdown": bd})
 
             self._emit("request", {"phase": "main", "step": step,
-                                       "tokens_est": est, "status": status,
-                                       "hard": self.budget.hard,
-                                       "soft": self.budget.soft,
-                                       "messages": messages,
-                                       "tools": [t["name"]
-                                                 for t in self._tools]})
+                                   "turn": self._turn_seq,
+                                   "tokens_est": est, "status": status,
+                                   "breakdown": bd,
+                                   "hard": self.budget.hard,
+                                   "soft": self.budget.soft,
+                                   "usage_total": (
+                                       self.tracker.totals
+                                       if self.tracker else None),
+                                   "messages": messages,
+                                   "tools": [t["name"]
+                                             for t in self._tools]})
             resp = self.provider.chat(system=system, messages=messages,
                                       tools=self._tools)
+            totals = self._track("main", step, bd, resp.get("usage"))
             self._emit("response", {"phase": "main",
                                     "content": resp.get("content"),
                                     "tool_calls": resp.get("tool_calls"),
-                                    "usage": resp.get("usage")})
+                                    "usage": resp.get("usage"),
+                                    "usage_total": totals})
             self._emit("usage", resp.get("usage") or {})
             tool_calls = resp.get("tool_calls") or []
             # Strip echoed transcript structure (## headers, tool-calls
