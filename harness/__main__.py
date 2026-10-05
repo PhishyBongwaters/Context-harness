@@ -87,6 +87,11 @@ def _print_event(kind: str, data) -> None:
             print(f"  + ... +{len(data['added']) - 5} more", flush=True)
     elif kind == "usage":
         pass  # quiet; available for metering
+    elif kind == "approval-result":
+        print(f"\n[approval {data.get('decision')} ({data.get('scope')})]",
+              flush=True)
+    elif kind == "approval-wait":
+        pass  # the prompt itself prints; event feeds debug log + notifier
 
 
 def _require_key(provider_name: str, base_url: str | None,
@@ -99,7 +104,15 @@ def _require_key(provider_name: str, base_url: str | None,
                  f"set {key_env} in your environment or .env file.")
 
 
-def _build_loop(cfg, args, on_event=None) -> Loop:
+def _approver(cfg, args, session, on_event):
+    from .approvals import Approver
+    timeout = getattr(args, "approval_timeout", None) or cfg.approval_timeout
+    return Approver(session.dir, on_event=on_event,
+                    approval_timeout=timeout,
+                    auto_approve=getattr(args, "yes", False))
+
+
+def _build_loop(cfg, args, on_event=None, approver=None) -> Loop:
     if args.provider:
         cfg.provider = args.provider
     if args.model:
@@ -122,7 +135,12 @@ def _build_loop(cfg, args, on_event=None) -> Loop:
                            base_url=prune_base_url, api_key=prune_key)
 
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
-                on_event=on_event or _print_event, prune_provider=prune)
+                on_event=on_event or _print_event, prune_provider=prune,
+                approver=approver,
+                exec_timeout=getattr(args, "exec_timeout", None)
+                or cfg.exec_timeout,
+                exec_timeout_max=getattr(args, "exec_timeout_max", None)
+                or cfg.exec_timeout_max)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -142,6 +160,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="Write a JSONL debug log next to the transcript.")
     ap.add_argument("--debug-file", default=None,
                     help="Explicit debug log path (implies --debug).")
+    ap.add_argument("--yes", action="store_true",
+                    help="Auto-approve tool prompts (denylist still denied).")
+    ap.add_argument("--approval-timeout", type=int, default=None,
+                    help="Seconds to wait for an approval (default 120).")
+    ap.add_argument("--exec-timeout", type=int, default=None,
+                    help="Default exec runtime in seconds (default 60).")
+    ap.add_argument("--exec-timeout-max", type=int, default=None,
+                    help="Ceiling on exec runtime in seconds (default 300).")
     ap.add_argument("--workdir", default=os.getcwd(),
                     help="Working directory for tools.")
     args = ap.parse_args(argv)
@@ -183,7 +209,8 @@ def main(argv: list[str] | None = None) -> int:
                                 "ctx": str(session.context.path)})
         print(f"[debug log {debug.path}]")
 
-    loop = _build_loop(cfg, args, on_event=on_event)
+    loop = _build_loop(cfg, args, on_event=on_event,
+                       approver=_approver(cfg, args, session, on_event))
 
     def do_turn(text: str) -> int:
         try:

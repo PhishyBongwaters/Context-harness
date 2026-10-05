@@ -39,6 +39,9 @@ DEFAULTS = {
     "budget_hard": 100_000,
     "budget_soft": 80_000,
     "sessions_dir": None,  # platform default when unset
+    "approval_timeout": 120,  # seconds to wait for a human approval
+    "exec_timeout": 60,  # default exec runtime when the model omits it
+    "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
 }
 
 PROVIDER_DEFAULTS = {
@@ -86,6 +89,9 @@ class Config:
     budget_soft: int = 80_000
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
+    approval_timeout: int = 120
+    exec_timeout: int = 60
+    exec_timeout_max: int = 300
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -188,6 +194,9 @@ def load_config(path: str | Path | None = None,
         budget_soft=int(merged.get("budget_soft", 80_000)),
         sessions_dir=merged.get("sessions_dir"),
         api_key=api_key,
+        approval_timeout=int(merged.get("approval_timeout", 120)),
+        exec_timeout=int(merged.get("exec_timeout", 60)),
+        exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
@@ -211,6 +220,9 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "prune_model": None,
         "prune_base_url": None,
         "prune_api_key_env": None,
+        "approval_timeout": 120,
+        "exec_timeout": 60,
+        "exec_timeout_max": 300,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "
@@ -218,7 +230,8 @@ def write_example_config(path: str | Path | None = None) -> Path:
             "sessions_dir null selects the platform default. "
             "prune_* selects the janitor model for prune-only turns "
             "(e.g. a small local model); each falls back to the main "
-            "setting when null."
+            "setting when null. approval_timeout is how long an approval "
+            "prompt waits (seconds); exec_timeout/max bound tool runtime."
         ),
     }
     target.write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")

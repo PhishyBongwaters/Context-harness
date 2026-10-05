@@ -21,6 +21,8 @@ from pathlib import Path
 from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
                       parse_transcript, render_assistant, render_tool,
                       render_user)
+from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
+                       Policy, clamp_exec_timeout)
 from .providers import Provider, ProviderError
 from .tools import _resolve, run_tool, tool_definitions
 
@@ -58,6 +60,11 @@ The harness shows your usage every turn. If the next request would exceed
 the hard limit, you do NOT get a normal turn -- you get a prune-only turn
 where you may only edit {ctx_path} until usage is back under the limit.
 The harness never silently truncates your transcript; you are its curator.
+
+APPROVALS: mutating tools (exec, write, edit outside your transcript)
+need human approval: the human may approve once, approve for the session,
+or deny. A denied call returns a DENIED message -- respect it, do not
+retry the same call, work another way or ask the user.
 """
 
 PRUNE_SYSTEM = """You are over your context budget. This is a prune-only turn.
@@ -97,12 +104,18 @@ def _estimate(system: str, messages: list[dict]) -> int:
 
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
-                 on_event=None, prune_provider: Provider | None = None):
+                 on_event=None, prune_provider: Provider | None = None,
+                 approver: Approver | None = None,
+                 exec_timeout: int = EXEC_TIMEOUT_DEFAULT,
+                 exec_timeout_max: int = EXEC_TIMEOUT_MAX):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
         self.budget = budget
         self.on_event = on_event or (lambda kind, data: None)
+        self.approver = approver
+        self.exec_timeout = exec_timeout
+        self.exec_timeout_max = exec_timeout_max
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
                              if t["name"] in ("write", "edit")]
@@ -120,10 +133,25 @@ class Loop:
         except Exception:
             return False
 
+    def _policy(self, session: Session) -> Policy:
+        return Policy(session.workdir, session.dir, session.context.path)
+
     def _execute_tool(self, session: Session, tc: dict) -> str:
-        """Run one tool call. If it edits the context file, emit a
-        mechanical diff of what changed (sections + tokens recovered)."""
+        """Approval-gated tool run. If it edits the context file, emit a
+        mechanical diff of what changed (sections + tokens recovered).
+        Denied calls return a DENIED message the model must respect."""
         name, args = tc["name"], tc.get("arguments") or {}
+        if self.approver is not None:
+            ok, denial = self.approver.resolve(
+                self._policy(session), name, args)
+            if not ok:
+                self._emit("tool", {"name": name, "args": args,
+                                    "result": denial,
+                                    "denied": True})
+                return denial
+        if name == "exec":
+            args = clamp_exec_timeout(args, self.exec_timeout,
+                                      self.exec_timeout_max)
         before = (session.context.load()
                   if self._touches_context(session, name, args) else None)
         result = run_tool(name, args, session.workdir)
@@ -187,6 +215,8 @@ class Loop:
         system = SYSTEM_PROMPT.format(ctx_path=ctx_path,
                                      hard=self.budget.hard,
                                      soft=self.budget.soft)
+        if self.approver is not None:
+            self.approver.new_turn()
         # The user's message joins the file-transcript first.
         session.context.append(render_user(user_text))
         warned = False

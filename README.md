@@ -94,9 +94,40 @@ model's chat template; results vary.)
 `harness/providers.py` — OpenAI, Anthropic, Mock ·
 `harness/tools.py` — exec / read / write / edit ·
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
-`harness/debug.py` — JSONL debug log
+`harness/debug.py` — JSONL debug log ·
+`harness/approvals.py` — approval policy (allow/ask/deny)
 
-`tests/` — 49 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 63 unittest tests, stdlib only. `python -m unittest discover -s tests`
+
+## Approvals
+
+Reads inside the project dir and the session dir run free, as do
+read-only probes (`ls`, `git status`, ...). Mutating calls ask first:
+
+```bash
+python -m harness "task"          # prompts on mutating tools
+python -m harness --yes "task"    # auto-approve (denylist still denied)
+```
+
+Each prompt offers `(a)pprove turn / (s)ession / (d)eny` with a 120s
+default-deny timeout — the slot the future notification system will
+hook (`approval-wait` / `approval-result` events already fire for it).
+Session approvals persist in `<session-dir>/approvals.json`, so "approved
+for this session" survives across turns and restarts; turn approvals
+clear every `run_turn`. The model's own `context.md` curation never
+prompts. Denials return a `DENIED` tool result the model must respect.
+
+Never allowed (no prompt): destructive shell (`rm -rf /`, `mkfs`,
+`dd of=/dev`, fork bombs, power commands, `curl|sh`) and writes under
+`~/.ssh`, `~/.gnupg`, `~/.aws`.
+
+Tunable (config file, CLI flag wins):
+
+| setting | default | flag |
+|---|---|---|
+| `approval_timeout` | 120s | `--approval-timeout` |
+| `exec_timeout` | 60s | `--exec-timeout` |
+| `exec_timeout_max` | 300s | `--exec-timeout-max` |
 
 ## Debugging
 
