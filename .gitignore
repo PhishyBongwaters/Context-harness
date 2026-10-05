@@ -1,0 +1,41 @@
+# Python bytecode — the pycache spam
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage caches
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+
+# Env / secrets (keys come from env, never config file)
+.env
+.env.*
+
+# Local runtime sessions (default is outside repo, but cover --workdir / custom sessions_dir)
+sessions/
+.current
+context.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
