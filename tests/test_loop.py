@@ -220,8 +220,27 @@ class TestLoop(unittest.TestCase):
         loop = Loop(main, Budget(100000, 80000))
         self.assertIs(loop.prune_provider, main)
 
-    def test_prune_gate_uses_full_tool_measure(self):
-        # The transcript can be UNDER by the prune-tools measure while OVER
+    def test_prune_backs_up_context_first(self):
+        import glob
+        s = self._bloated_session()
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "p1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": render_user("fresh start")}}]},
+            {"content": "PRUNED"},
+            {"content": "all good"},
+        ]
+        loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
+        before = s.context.load()
+        self.assertEqual(loop.run_turn(s, "hi"), "all good")
+        baks = glob.glob(str(s.dir / "context.pre-prune-*.bak"))
+        self.assertEqual(len(baks), 1)
+        # backup is taken at prune time, i.e. after the user msg appends
+        self.assertEqual(open(baks[0], encoding="utf-8").read(),
+                         before + "\n" + render_user("hi"))
+
+    def test_prune_gate_uses_full_tool_measure(self):        # The transcript can be UNDER by the prune-tools measure while OVER
         # by the full-tools measure (3 extra schemas). The gate must use
         # the full measure, or prune_turn returns True instantly, the main
         # check stays over, and the loop burns all MAX_STEPS on OVER lines.

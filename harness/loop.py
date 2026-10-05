@@ -254,6 +254,15 @@ class Loop:
         """
         ctx_path = str(session.context.path)
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
+        try:
+            import datetime as _dt
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = session.context.path.with_name(
+                f"context.pre-prune-{stamp}.bak")
+            backup.write_text(session.context.load(), encoding="utf-8")
+            self._emit("backup", {"path": str(backup)})
+        except OSError:
+            pass  # best effort: never block the prune on a backup
         # Gate on the EXACT next request: main system + full tools. Any
         # cheaper ruler (prune system, prune tools) reads under while the
         # main check stays over: prune declares victory without touching

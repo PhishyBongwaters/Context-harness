@@ -11,7 +11,9 @@ special compact tool.
 
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
-Pruning fails repeatedly → loud error, never silent truncation. The prune
+Pruning fails repeatedly → loud error, never silent truncation. Every
+prune turn backs up `context.md` first (`context.pre-prune-<ts>.bak`),
+so all model curation is reversible. The prune
 turn can run on a separate janitor model — cheaper/smaller, even local
 while the main model is cloud (see `prune_*` config).
 
@@ -114,7 +116,7 @@ model's chat template; results vary.)
 `harness/project.py` — project registry + session markers ·
 `harness/spinner.py` — console activity indicator
 
-`tests/` — 98 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 99 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Projects
 
