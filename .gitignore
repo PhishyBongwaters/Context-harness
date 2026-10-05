@@ -20,9 +20,10 @@ build/
 dist/
 *.egg-info/
 
-# Env / secrets (keys come from env, never config file)
+# Env / secrets (keys come from env/.env, never config file)
 .env
 .env.*
+!.env.example
 
 # Local runtime sessions (default is outside repo, but cover --workdir / custom sessions_dir)
 sessions/

@@ -1,7 +1,10 @@
-"""Configuration: JSON file + environment, no secrets on disk.
+"""Configuration: JSON file + environment (.env supported), no secrets on disk.
 
 Config file: platform default (see default_config_dir())
 API keys come from environment variables only, never from the config file.
+A `.env` file may supply those variables for convenience: the harness
+loads (low to high precedence) `<config-dir>/.env`, then `./.env`.
+Real environment variables always win over `.env` entries.
 
 Example config.json:
 {
@@ -13,6 +16,10 @@ Example config.json:
   "budget_soft": 80000,
   "sessions_dir": null
 }
+
+Example .env:
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 
 sessions_dir null -> platform default (LOCALAPPDATA on Windows,
 ~/.local/share on POSIX).
@@ -100,7 +107,59 @@ def config_path() -> Path:
     return default_config_dir() / "config.json"
 
 
-def load_config(path: str | Path | None = None) -> Config:
+def dotenv_paths() -> list[Path]:
+    """Candidate .env files, low to high precedence."""
+    return [default_config_dir() / ".env", Path.cwd() / ".env"]
+
+
+def parse_dotenv_text(text: str) -> dict[str, str]:
+    """Minimal .env parser (stdlib only): KEY=VALUE, # comments,
+    optional `export ` prefix, single/double quotes stripped."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        # Expand escaped sequences inside double quotes only.
+        if val and key:
+            out[key] = val
+    return out
+
+
+def load_dotenv(path: str | Path | None = None,
+                override: bool = False) -> dict[str, str]:
+    """Load .env entries into os.environ (real env wins by default).
+
+    path: load exactly this file; None: load dotenv_paths() in order.
+    Returns the entries read from file(s).
+    """
+    candidates = [Path(path)] if path else dotenv_paths()
+    loaded: dict[str, str] = {}
+    for cand in candidates:
+        try:
+            if not cand.is_file():
+                continue
+            entries = parse_dotenv_text(
+                cand.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        loaded.update(entries)
+        for k, v in entries.items():
+            if override or k not in os.environ:
+                os.environ[k] = v
+    return loaded
+
+
+def load_config(path: str | Path | None = None,
+                dotenv_path: str | Path | None = None) -> Config:
+    load_dotenv(dotenv_path)
     raw: dict = {}
     cfg_file = Path(path) if path else config_path()
     if cfg_file.exists():

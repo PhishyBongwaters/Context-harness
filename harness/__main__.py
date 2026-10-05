@@ -96,7 +96,7 @@ def _require_key(provider_name: str, base_url: str | None,
     default_base = PROVIDER_DEFAULTS.get(provider_name, {}).get("base_url")
     if not api_key and base_url == default_base:
         sys.exit(f"No API key for {role} model: "
-                 f"set {key_env} in your environment.")
+                 f"set {key_env} in your environment or .env file.")
 
 
 def _build_loop(cfg, args) -> Loop:
@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Write an example config file.")
     ap.add_argument("--provider", choices=["openai", "anthropic"])
     ap.add_argument("--model", help="Model id override.")
+    ap.add_argument("--env-file", default=None,
+                    help="Path to .env file (default: <config-dir>/.env, then ./.env).")
     ap.add_argument("--workdir", default=os.getcwd(),
                     help="Working directory for tools.")
     args = ap.parse_args(argv)
@@ -143,10 +145,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.config:
         p = write_example_config()
         print(f"Wrote example config to {p}")
-        print("Set your API key env var, then run: python -m harness \"task\"")
+        print("Set your API key in .env or env var, then run: python -m harness \"task\"")
         return 0
 
-    cfg = load_config()
+    cfg = load_config(dotenv_path=args.env_file)
 
     if args.list:
         sessions = _sessions(cfg)
