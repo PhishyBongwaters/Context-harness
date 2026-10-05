@@ -77,19 +77,40 @@ def _print_event(kind: str, data) -> None:
         pass  # quiet; available for metering
 
 
+def _require_key(provider_name: str, base_url: str | None,
+                 api_key: str | None, key_env: str, role: str) -> None:
+    # Cloud endpoints need a key; a custom base_url (e.g. LM Studio,
+    # llama.cpp) is assumed local and goes without one.
+    default_base = PROVIDER_DEFAULTS.get(provider_name, {}).get("base_url")
+    if not api_key and base_url == default_base:
+        sys.exit(f"No API key for {role} model: "
+                 f"set {key_env} in your environment.")
+
+
 def _build_loop(cfg, args) -> Loop:
     if args.provider:
         cfg.provider = args.provider
     if args.model:
         cfg.model = args.model
-    # Cloud endpoints need a key; a custom base_url (e.g. LM Studio,
-    # llama.cpp) is assumed local and goes without one.
-    default_base = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
-    if not cfg.api_key and cfg.base_url == default_base:
-        sys.exit(f"No API key: set {cfg.api_key_env} in your environment.")
+    _require_key(cfg.provider, cfg.base_url, cfg.api_key, cfg.api_key_env,
+                 "main")
     provider = make_provider(cfg)
+
+    # Janitor model for prune-only turns; each setting falls back to main.
+    prune_provider = cfg.prune_provider or cfg.provider
+    prune_model = cfg.prune_model or cfg.model
+    prune_base_url = cfg.prune_base_url or cfg.base_url
+    prune_key_env = (cfg.prune_api_key_env
+                     or PROVIDER_DEFAULTS.get(prune_provider, {})
+                     .get("api_key_env"))
+    prune_key = os.environ.get(prune_key_env) if prune_key_env else None
+    _require_key(prune_provider, prune_base_url, prune_key, prune_key_env,
+                 "prune")
+    prune = make_provider(cfg, provider=prune_provider, model=prune_model,
+                           base_url=prune_base_url, api_key=prune_key)
+
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
-                on_event=_print_event)
+                on_event=_print_event, prune_provider=prune)
 
 
 def main(argv: list[str] | None = None) -> int:

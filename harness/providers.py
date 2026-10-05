@@ -219,11 +219,25 @@ class MockProvider(Provider):
         }
 
 
-def make_provider(cfg) -> Provider:
-    if cfg.provider == "anthropic":
-        return AnthropicProvider(api_key=cfg.api_key, model=cfg.model,
-                                 base_url=cfg.base_url)
-    if cfg.provider == "openai":
-        return OpenAIProvider(api_key=cfg.api_key, model=cfg.model,
-                              base_url=cfg.base_url)
-    raise ProviderError(f"Unknown provider: {cfg.provider}")
+_UNSET = object()
+
+
+def make_provider(cfg, *, provider=None, model=None, base_url=None,
+                  api_key=_UNSET) -> Provider:
+    """Build a provider from cfg, with explicit overrides winning.
+
+    api_key uses a sentinel so an explicit None (no key, e.g. local
+    server) is distinguishable from "fall back to cfg".
+    """
+    name = provider or cfg.provider
+    if name == "anthropic":
+        return AnthropicProvider(
+            api_key=cfg.api_key if api_key is _UNSET else api_key,
+            model=model or cfg.model,
+            base_url=base_url or cfg.base_url)
+    if name == "openai":
+        return OpenAIProvider(
+            api_key=cfg.api_key if api_key is _UNSET else api_key,
+            model=model or cfg.model,
+            base_url=base_url or cfg.base_url)
+    raise ProviderError(f"Unknown provider: {name}")

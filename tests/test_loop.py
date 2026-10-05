@@ -138,6 +138,30 @@ class TestLoop(unittest.TestCase):
         self.assertNotIn("original question", text)
         self.assertIn("done", text)
 
+    def test_prune_turn_uses_janitor_provider(self):
+        # Separate janitor model handles the prune turn; the main model
+        # only sees the resumed normal turn.
+        s = self._bloated_session()
+        main = MockProvider([{"content": "all good"}])
+        janitor = MockProvider([
+            {"content": None, "tool_calls": [
+                {"id": "p1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": render_user("fresh start")}}]},
+            {"content": "PRUNED"},
+        ])
+        loop = Loop(main, Budget(hard=2000, soft=1000),
+                    prune_provider=janitor)
+        self.assertEqual(loop.run_turn(s, "hi"), "all good")
+        self.assertEqual(len(janitor.calls), 2)  # prune chats
+        self.assertEqual(len(main.calls), 1)     # resumed normal chat
+        self.assertEqual(janitor.calls[0]["tools"], ["write", "edit"])
+
+    def test_prune_provider_defaults_to_main(self):
+        main = MockProvider([])
+        loop = Loop(main, Budget(100000, 80000))
+        self.assertIs(loop.prune_provider, main)
+
     def test_prune_turn_restricts_tools(self):
         s = self._bloated_session()
         # exec is not allowed on a prune turn: 5 attempts x 2 responses,

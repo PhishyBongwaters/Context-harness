@@ -107,6 +107,29 @@ class TestMakeProvider(unittest.TestCase):
         with self.assertRaises(ProviderError):
             make_provider(C())
 
+    def test_overrides(self):
+        class C:
+            provider = "openai"
+            model = "m"
+            base_url = "https://x.test/v1"
+            api_key = "k"
+        p = make_provider(C(), model="other", base_url="https://y.test/v1",
+                           api_key=None)
+        self.assertIsInstance(p, OpenAIProvider)
+        self.assertEqual(p.model, "other")
+        self.assertEqual(p.base_url, "https://y.test/v1")
+        self.assertIsNone(p.api_key)  # explicit None beats cfg key
+
+    def test_fallback_to_cfg(self):
+        class C:
+            provider = "anthropic"
+            model = "m"
+            base_url = "https://x.test/v1"
+            api_key = "k"
+        p = make_provider(C())
+        self.assertIsInstance(p, AnthropicProvider)
+        self.assertEqual(p.api_key, "k")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,16 @@ Cloud (key from env, e.g. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
 { "provider": "openai", "model": "gpt-5" }
 ```
 
+Janitor model for prune-only turns (optional — cheaper/smaller model,
+can be local while main is cloud):
+
+```json
+{ "prune_provider": "openai", "prune_model": "small-local-model",
+  "prune_base_url": "http://localhost:1234/v1" }
+```
+
+Each `prune_*` falls back to the main setting when unset.
+
 No API key needed when `base_url` is overridden — the Authorization
 header is simply omitted. (Tool calling with local models depends on the
 model's chat template; results vary.)

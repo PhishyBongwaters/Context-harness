@@ -79,6 +79,13 @@ class Config:
     budget_soft: int = 80_000
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
+    # Prune (janitor) model: cheaper/smaller model for prune-only turns.
+    # Each falls back to the main setting when unset; resolution happens
+    # in __main__ after CLI overrides so --provider/--model apply.
+    prune_provider: str | None = None
+    prune_model: str | None = None
+    prune_base_url: str | None = None
+    prune_api_key_env: str | None = None
 
     def __post_init__(self):
         if not self.sessions_dir:
@@ -120,8 +127,12 @@ def load_config(path: str | Path | None = None) -> Config:
         api_key_env=key_env,
         budget_hard=int(merged.get("budget_hard", 100_000)),
         budget_soft=int(merged.get("budget_soft", 80_000)),
-        sessions_dir=merged.get("sessions_dir", DEFAULTS["sessions_dir"]),
+        sessions_dir=merged.get("sessions_dir"),
         api_key=api_key,
+        prune_provider=merged.get("prune_provider"),
+        prune_model=merged.get("prune_model"),
+        prune_base_url=merged.get("prune_base_url"),
+        prune_api_key_env=merged.get("prune_api_key_env"),
     )
 
 
@@ -137,11 +148,18 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "budget_hard": 100000,
         "budget_soft": 80000,
         "sessions_dir": None,
+        "prune_provider": None,
+        "prune_model": None,
+        "prune_base_url": None,
+        "prune_api_key_env": None,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "
             "OpenAI-compatible /v1 endpoint (e.g. a local server). "
-            "sessions_dir null selects the platform default."
+            "sessions_dir null selects the platform default. "
+            "prune_* selects the janitor model for prune-only turns "
+            "(e.g. a small local model); each falls back to the main "
+            "setting when null."
         ),
     }
     target.write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")

@@ -96,8 +96,10 @@ def _estimate(system: str, messages: list[dict]) -> int:
 
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
-                 on_event=None):
+                 on_event=None, prune_provider: Provider | None = None):
         self.provider = provider
+        # Janitor model for prune-only turns; defaults to the main provider.
+        self.prune_provider = prune_provider or provider
         self.budget = budget
         self.on_event = on_event or (lambda kind, data: None)
         self._tools = tool_definitions()
@@ -133,8 +135,8 @@ class Loop:
                 f"{self.budget.hard:,}):\n<context-file>\n{raw}\n"
                 f"</context-file>")}]
             for _ in range(MAX_PRUNE_STEPS):
-                resp = self.provider.chat(system=system, messages=turn,
-                                          tools=self._prune_tools)
+                resp = self.prune_provider.chat(system=system, messages=turn,
+                                                tools=self._prune_tools)
                 turn.append({"role": "assistant",
                              "content": resp.get("content"),
                              "tool_calls": resp.get("tool_calls")})
