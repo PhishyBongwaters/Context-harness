@@ -299,7 +299,7 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         cfg.provider = args.provider
         # Reset base_url to provider default when provider is overridden via CLI
         # unless user explicitly set base_url in config or via CLI flag.
-        if args.base_url is None:
+        if getattr(args, "base_url", None) is None:
             default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
             if default_url:
                 cfg.base_url = default_url
