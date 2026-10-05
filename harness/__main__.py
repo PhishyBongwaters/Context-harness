@@ -200,8 +200,33 @@ REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/project [name]  show/switch project\n"
              "/list        list sessions (* = current)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
+             "/config      show effective config (redacted)\n"
              "/help        this list\n"
              "/quit        leave (empty line also quits)")
+
+
+def _show_config(cfg) -> None:
+    import json
+    data = {
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": cfg.base_url,
+        "budget_hard": cfg.budget_hard,
+        "budget_soft": cfg.budget_soft,
+        "approval_timeout": cfg.approval_timeout,
+        "exec_timeout": cfg.exec_timeout,
+        "exec_timeout_max": cfg.exec_timeout_max,
+        "request_timeout": cfg.request_timeout,
+        "usage_note": cfg.usage_note,
+        "prune_target": cfg.prune_target,
+        "prune_keep_tools": cfg.prune_keep_tools,
+        "prune_section_cap": cfg.prune_section_cap,
+        "sessions_dir": cfg.sessions_dir,
+        "config_file": str(config_path()),
+    }
+    print("[config]")
+    for k, v in data.items():
+        print(f"  {k}: {v}")
 
 
 def _show_usage(tracker, rest: str) -> None:
@@ -476,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"No unique session matches '{rest}'. (/list)")
                 else:
                     switch_session(sid)
+        elif cmd == "config":
+            _show_config(cfg)
         else:
             print(f"Unknown command /{cmd} (/help).")
     return 0

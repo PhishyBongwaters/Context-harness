@@ -44,6 +44,7 @@ The REPL stays in its session: plain text appends to the same
 - `/open 20261005-0826` — switch back (full id or unambiguous prefix)
 - `/project [name]` — show/switch project
 - `/usage [N]` — ledger totals + last N calls (default 5)
+- `/config` — show effective config (redacted)
 - `/quit` — leave (empty line also quits)
 
 Flow: `/new` once, then just type. Only `/new` mints a new
@@ -63,7 +64,9 @@ Platform-default location (`%APPDATA%/context-harness/config.json` on
 Windows, `~/.config/context-harness/config.json` elsewhere):
 `provider` (`openai` / `anthropic`), `model`, `base_url` (any
 OpenAI-compatible `/v1`, including local servers), `budget_hard` /
-`budget_soft`. API key comes from the environment (`api_key_env`) —
+`budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
+`request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
+`prune_section_cap`. API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
