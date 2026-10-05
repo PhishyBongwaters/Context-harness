@@ -419,7 +419,13 @@ def main(argv: list[str] | None = None) -> int:
         sess = box["session"]
         tracker = UsageTracker(sess.dir)
         box["tracker"] = tracker
-        _show_session(cfg, sess, tracker.totals, box["project"])
+        # Apply CLI overrides for display before showing session header
+        cfg_disp = Config(**cfg.__dict__)
+        if args.provider:
+            cfg_disp.provider = args.provider
+        if args.model:
+            cfg_disp.model = args.model
+        _show_session(cfg_disp, sess, tracker.totals, box["project"])
         dbg = None
         if args.debug_file:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
