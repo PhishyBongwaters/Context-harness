@@ -93,9 +93,26 @@ model's chat template; results vary.)
 `harness/context.py` — transcript render/parse, token counting ·
 `harness/providers.py` — OpenAI, Anthropic, Mock ·
 `harness/tools.py` — exec / read / write / edit ·
-`harness/config.py`, `harness/__main__.py` — config, CLI
+`harness/config.py`, `harness/__main__.py` — config, CLI ·
+`harness/debug.py` — JSONL debug log
 
-`tests/` — 45 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 49 unittest tests, stdlib only. `python -m unittest discover -s tests`
+
+## Debugging
+
+```bash
+python -m harness --debug "task"              # JSONL log next to the transcript
+python -m harness --debug-file .debug/h.jsonl "task"  # explicit path
+```
+
+`--debug` writes `<session-dir>/debug.jsonl` (next to `context.md`);
+`--debug-file PATH` implies `--debug` and writes there instead.
+One JSON object per line: `{"ts", "session", "kind", "data"}` covering
+`session`, `request` (full messages + token estimate), `response`
+(content, tool calls, usage), `tool` (name, args, result), `budget`,
+`prune`, `context-diff`, `usage`, and `error`. Console output is
+unchanged — the file is the tee. `.debug/` and `debug.jsonl` are
+git-ignored.
 
 ## Notes
 

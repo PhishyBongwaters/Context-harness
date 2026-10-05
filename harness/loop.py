@@ -160,8 +160,16 @@ class Loop:
                 f"{self.budget.hard:,}):\n<context-file>\n{raw}\n"
                 f"</context-file>")}]
             for _ in range(MAX_PRUNE_STEPS):
+                self._emit("request", {"phase": "prune", "attempt": attempt + 1,
+                                       "messages": turn,
+                                       "tools": [t["name"]
+                                                 for t in self._prune_tools]})
                 resp = self.prune_provider.chat(system=system, messages=turn,
                                                 tools=self._prune_tools)
+                self._emit("response", {"phase": "prune",
+                                        "content": resp.get("content"),
+                                        "tool_calls": resp.get("tool_calls"),
+                                        "usage": resp.get("usage")})
                 turn.append({"role": "assistant",
                              "content": resp.get("content"),
                              "tool_calls": resp.get("tool_calls")})
@@ -204,8 +212,17 @@ class Loop:
                 warned = True
                 self._emit("budget", {"status": "warn", "tokens": est})
 
+            self._emit("request", {"phase": "main", "step": step,
+                                       "tokens_est": est, "status": status,
+                                       "messages": messages,
+                                       "tools": [t["name"]
+                                                 for t in self._tools]})
             resp = self.provider.chat(system=system, messages=messages,
                                       tools=self._tools)
+            self._emit("response", {"phase": "main",
+                                    "content": resp.get("content"),
+                                    "tool_calls": resp.get("tool_calls"),
+                                    "usage": resp.get("usage")})
             self._emit("usage", resp.get("usage") or {})
             tool_calls = resp.get("tool_calls") or []
             # The reply joins the file-transcript before tools run, so a

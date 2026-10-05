@@ -99,7 +99,7 @@ def _require_key(provider_name: str, base_url: str | None,
                  f"set {key_env} in your environment or .env file.")
 
 
-def _build_loop(cfg, args) -> Loop:
+def _build_loop(cfg, args, on_event=None) -> Loop:
     if args.provider:
         cfg.provider = args.provider
     if args.model:
@@ -122,7 +122,7 @@ def _build_loop(cfg, args) -> Loop:
                            base_url=prune_base_url, api_key=prune_key)
 
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
-                on_event=_print_event, prune_provider=prune)
+                on_event=on_event or _print_event, prune_provider=prune)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -138,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", help="Model id override.")
     ap.add_argument("--env-file", default=None,
                     help="Path to .env file (default: <config-dir>/.env, then ./.env).")
+    ap.add_argument("--debug", action="store_true",
+                    help="Write a JSONL debug log next to the transcript.")
+    ap.add_argument("--debug-file", default=None,
+                    help="Explicit debug log path (implies --debug).")
     ap.add_argument("--workdir", default=os.getcwd(),
                     help="Working directory for tools.")
     args = ap.parse_args(argv)
@@ -166,18 +170,34 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
           f"budget={cfg.budget_hard:,} ctx={session.context.path}")
 
-    loop = _build_loop(cfg, args)
+    from .debug import DebugLog
+    debug = None
+    if args.debug_file:
+        debug = DebugLog(args.debug_file, session_id=session.id)
+    elif args.debug:
+        debug = DebugLog(session.dir / "debug.jsonl", session_id=session.id)
+    on_event = debug.handler(_print_event) if debug else _print_event
+    if debug:
+        debug.write("session", {"id": session.id,
+                                "provider": cfg.provider, "model": cfg.model,
+                                "ctx": str(session.context.path)})
+        print(f"[debug log {debug.path}]")
+
+    loop = _build_loop(cfg, args, on_event=on_event)
 
     def do_turn(text: str) -> int:
         try:
             loop.run_turn(session, text)
         except BudgetExceeded as e:
+            on_event("error", {"type": "budget-exceeded", "message": str(e)})
             print(f"\nBUDGET EXCEEDED: {e}")
             return 1
         except ProviderError as e:
+            on_event("error", {"type": "provider-error", "message": str(e)})
             print(f"\nPROVIDER ERROR: {e}")
             return 1
         except KeyboardInterrupt:
+            on_event("error", {"type": "interrupted"})
             print("\n[interrupted]")
             return 130
         return 0

@@ -30,6 +30,10 @@ sessions/
 .current
 context.md
 
+# Debug logs
+.debug/
+debug.jsonl
+
 # OS
 .DS_Store
 Thumbs.db
