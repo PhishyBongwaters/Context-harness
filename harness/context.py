@@ -26,20 +26,27 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import tiktoken
+ESTIMATOR = "tiktoken/cl100k_base"
 
-    _ENC = tiktoken.get_encoding("cl100k_base")
-    ESTIMATOR = "tiktoken/cl100k_base"
-except Exception:
-    _ENC = None
-    ESTIMATOR = "heuristic(chars/4)"
+_ENC = None
+
+
+def _encoding():
+    """cl100k_base encoder, loaded lazily so the BPE download happens on
+    first use rather than at import."""
+    global _ENC
+    if _ENC is None:
+        try:
+            import tiktoken
+        except ImportError:
+            raise RuntimeError(
+                "tiktoken is required: pip install -r requirements.txt")
+        _ENC = tiktoken.get_encoding("cl100k_base")
+    return _ENC
 
 
 def count_tokens(text: str) -> int:
-    if _ENC is not None:
-        return len(_ENC.encode(text))
-    return max(1, len(text) // 4)
+    return len(_encoding().encode(text))
 
 
 @dataclass

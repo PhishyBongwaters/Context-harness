@@ -21,7 +21,8 @@ implemented from scratch for interactive use.
 ## Run
 
 ```bash
-python -m harness --config        # writes ~/.config/context-harness/config.json
+pip install -r requirements.txt
+python -m harness --config        # writes platform-default config.json
 export OPENAI_API_KEY=...         # or ANTHROPIC_API_KEY
 python -m harness "summarize this repo"
 python -m harness                 # REPL, continues current session
@@ -29,8 +30,13 @@ python -m harness --new "task"    # fresh session
 python -m harness --list          # list sessions
 ```
 
-Stdlib only. `tiktoken` used for the meter if installed, else chars/4
-(the meter says which).
+## Requirements
+
+- Python 3.10+
+- `tiktoken` (pinned in `requirements.txt`) — the budget meter counts
+  with cl100k_base on every machine, so enforcement is consistent. First
+  run downloads the BPE file once (needs internet; set `TIKTOKEN_CACHE_DIR`
+  to control where it lands).
 
 ## Config
 

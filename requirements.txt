@@ -1,0 +1,3 @@
+# Single hard dependency: tiktoken, so token counting (and therefore
+# budget enforcement) is identical on every machine. Pinned for consistency.
+tiktoken==0.14.0
