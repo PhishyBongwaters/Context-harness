@@ -297,6 +297,12 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 usage_tracker=None, project=None) -> Loop:
     if args.provider:
         cfg.provider = args.provider
+        # Reset base_url to provider default when provider is overridden via CLI
+        # unless user explicitly set base_url in config or via CLI flag.
+        if args.base_url is None:
+            default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
+            if default_url:
+                cfg.base_url = default_url
     if args.model:
         cfg.model = args.model
     if getattr(args, "request_timeout", None):
