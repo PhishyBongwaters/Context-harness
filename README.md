@@ -72,6 +72,10 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
+CLI `--provider` overrides also reset `base_url` to the provider default
+unless you set `base_url` in `config.json`. This prevents a leftover llama.cpp
+URL from being used with NVIDIA/OpenAI.
+
 Keys can live in a `.env` file instead of exports (see `.env.example`):
 `<config-dir>/.env` loads first, then `./.env`; real environment
 variables always win. `--env-file PATH` points at one explicitly.

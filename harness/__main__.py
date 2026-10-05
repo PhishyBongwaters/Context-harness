@@ -303,6 +303,11 @@ def _build_loop(cfg, args, on_event=None, approver=None,
             default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
             if default_url:
                 cfg.base_url = default_url
+        # Update api_key_env to match new provider and reload api_key from env
+        default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("api_key_env")
+        if default_key_env:
+            cfg.api_key_env = default_key_env
+            cfg.api_key = os.environ.get(cfg.api_key_env)
     if args.model:
         cfg.model = args.model
     if getattr(args, "request_timeout", None):
