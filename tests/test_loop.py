@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from harness.context import Budget, render_tool, render_user
-from harness.loop import BudgetExceeded, Loop, Session
+from harness.loop import BudgetExceeded, Loop, Session, _estimate
 from harness.providers import MockProvider
 
 
@@ -198,6 +198,13 @@ class TestLoop(unittest.TestCase):
         main = MockProvider([])
         loop = Loop(main, Budget(100000, 80000))
         self.assertIs(loop.prune_provider, main)
+
+    def test_estimate_counts_tool_schemas(self):
+        tools = [{"name": "exec", "description": "d" * 400,
+                  "parameters": {"type": "object"}}]
+        msgs = [{"role": "user", "content": "hi"}]
+        self.assertGreater(_estimate("sys", msgs, tools),
+                           _estimate("sys", msgs))
 
     def test_prune_turn_restricts_tools(self):
         s = self._bloated_session()

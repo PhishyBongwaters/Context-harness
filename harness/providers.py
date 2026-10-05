@@ -45,6 +45,12 @@ def _post(url: str, headers: dict, payload: dict, timeout: int = 120) -> dict:
                             status=e.code, body=body) from e
     except urllib.error.URLError as e:
         raise ProviderError(f"Connection failed to {url}: {e}") from e
+    except TimeoutError as e:
+        # Raw socket timeouts (e.g. mid-response read stalls on a loaded
+        # local server) escape urlopen unwrapped — convert, never crash.
+        raise ProviderError(
+            f"Request to {url} timed out: {e}. The server may still be "
+            f"evaluating (long prompt, slow model); retry the turn.") from e
 
 
 class Provider:

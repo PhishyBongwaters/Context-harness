@@ -109,7 +109,7 @@ model's chat template; results vary.)
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny)
 
-`tests/` — 76 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 78 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Approvals
 
@@ -166,3 +166,7 @@ git-ignored.
 - Assistant replies are sanitized before display/storage: echoed `## `
   headers and ```tool-calls fences (local models mimic the file format)
   are stripped so phantom sections can't accumulate.
+- The meter is a cl100k_base estimate of system + messages + tool schemas
+  — consistent for enforcement, but your model's own tokenizer counts
+  differently (compare `usage` in `--debug`). Server network stalls
+  surface as `PROVIDER ERROR`, never a traceback.

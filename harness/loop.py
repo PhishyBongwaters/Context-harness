@@ -97,12 +97,16 @@ class Session:
         self.context = ContextFile(self.dir / "context.md")
 
 
-def _estimate(system: str, messages: list[dict]) -> int:
+def _estimate(system: str, messages: list[dict],
+              tools: list[dict] | None = None) -> int:
     total = count_tokens(system)
     for m in messages:
         total += count_tokens(m.get("content") or "")
         for tc in m.get("tool_calls") or []:
             total += count_tokens(json.dumps(tc.get("arguments") or {}))
+    for t in tools or []:
+        # Tool schemas ride along on every request; count them too.
+        total += count_tokens(json.dumps(t))
     return total
 
 
@@ -182,13 +186,14 @@ class Loop:
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
         for attempt in range(MAX_PRUNE_ATTEMPTS):
             raw, messages = self._transcript_messages(session)
-            if _estimate(system, messages) < self.budget.hard:
+            if _estimate(system, messages, self._prune_tools) < self.budget.hard:
                 return True
             self._emit("prune", {"attempt": attempt + 1,
-                                 "tokens": _estimate(system, messages)})
+                                 "tokens": _estimate(system, messages,
+                                                     self._prune_tools)})
             turn = [{"role": "user", "content": (
                 f"Current context file "
-                f"({_estimate(system, messages):,} tokens, hard limit "
+                f"({_estimate(system, messages, self._prune_tools):,} tokens, hard limit "
                 f"{self.budget.hard:,}):\n<context-file>\n{raw}\n"
                 f"</context-file>")}]
             for _ in range(MAX_PRUNE_STEPS):
@@ -212,7 +217,7 @@ class Loop:
                     turn.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
         raw, messages = self._transcript_messages(session)
-        return _estimate(system, messages) < self.budget.hard
+        return _estimate(system, messages, self._prune_tools) < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
         ctx_path = str(session.context.path)
@@ -231,7 +236,7 @@ class Loop:
                 raise ProviderError(
                     "Context file parses to zero messages -- the transcript "
                     f"was emptied. Restore {ctx_path} and retry.")
-            est = _estimate(system, messages)
+            est = _estimate(system, messages, self._tools)
             status = self.budget.status(est)
             if status == "over":
                 self._emit("budget", {"status": "over", "tokens": est})

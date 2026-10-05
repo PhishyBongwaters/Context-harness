@@ -45,6 +45,16 @@ class TestOpenAI(unittest.TestCase):
         self.assertEqual(out["content"], "done")
         self.assertEqual(out["tool_calls"], [])
 
+    def test_socket_timeout_becomes_provider_error(self):
+        import urllib.request
+        from unittest import mock
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=TimeoutError("timed out")):
+            with self.assertRaises(ProviderError) as cm:
+                self.p.chat(system="s", messages=[], tools=[])
+        self.assertNotIsInstance(cm.exception, TimeoutError)
+        self.assertIn("timed out", str(cm.exception))
+
     def test_translate_assistant_tool_calls_wire_format(self):
         msgs = self.p.translate_messages([{
             "role": "assistant", "content": None,
