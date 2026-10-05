@@ -18,10 +18,11 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .context import (Budget, ContextFile, count_tokens, parse_transcript,
-                      render_assistant, render_tool, render_user)
+from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
+                      parse_transcript, render_assistant, render_tool,
+                      render_user)
 from .providers import Provider, ProviderError
-from .tools import run_tool, tool_definitions
+from .tools import _resolve, run_tool, tool_definitions
 
 MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
@@ -109,6 +110,30 @@ class Loop:
     def _emit(self, kind: str, data):
         self.on_event(kind, data)
 
+    def _touches_context(self, session: Session, name: str,
+                         args: dict) -> bool:
+        if name not in ("write", "edit"):
+            return False
+        try:
+            return (_resolve(args.get("path") or "", session.workdir)
+                    == session.context.path)
+        except Exception:
+            return False
+
+    def _execute_tool(self, session: Session, tc: dict) -> str:
+        """Run one tool call. If it edits the context file, emit a
+        mechanical diff of what changed (sections + tokens recovered)."""
+        name, args = tc["name"], tc.get("arguments") or {}
+        before = (session.context.load()
+                  if self._touches_context(session, name, args) else None)
+        result = run_tool(name, args, session.workdir)
+        if before is not None:
+            after = session.context.load()
+            if after != before:
+                self._emit("context-diff", diff_transcripts(before, after))
+        self._emit("tool", {"name": name, "args": args, "result": result})
+        return result
+
     def _transcript_messages(self, session: Session) -> tuple[str, list[dict]]:
         """Read the file, parse it, return (raw_text, messages)."""
         raw = session.context.load()
@@ -143,12 +168,9 @@ class Loop:
                 if not resp.get("tool_calls"):
                     break
                 for tc in resp["tool_calls"]:
-                    name, args = tc["name"], tc.get("arguments") or {}
-                    result = run_tool(name, args, session.workdir)
+                    result = self._execute_tool(session, tc)
                     turn.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
-                    self._emit("tool", {"name": name, "args": args,
-                                        "result": result})
         raw, messages = self._transcript_messages(session)
         return _estimate(system, messages) < self.budget.hard
 
@@ -195,10 +217,7 @@ class Loop:
             if not tool_calls:
                 return resp.get("content") or ""
             for tc in tool_calls:
-                name, args = tc["name"], tc.get("arguments") or {}
-                result = run_tool(name, args, session.workdir)
+                result = self._execute_tool(session, tc)
                 session.context.append(render_tool(tc["id"], result))
-                self._emit("tool", {"name": name, "args": args,
-                                    "result": result})
         raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
                             f"finishing.")

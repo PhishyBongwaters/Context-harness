@@ -1,7 +1,7 @@
 import unittest
 
-from harness.context import (parse_transcript, render_assistant, render_tool,
-                             render_user)
+from harness.context import (diff_transcripts, parse_transcript,
+                             render_assistant, render_tool, render_user)
 
 
 def big_transcript(n=100):
@@ -67,6 +67,40 @@ class TestTranscriptFormat(unittest.TestCase):
         msgs = parse_transcript(text)
         tool = [m for m in msgs if m["role"] == "tool"][0]
         self.assertEqual(tool["tool_call_id"], "c7")
+
+
+class TestDiffTranscripts(unittest.TestCase):
+    def test_removed_and_added(self):
+        old = (render_user("q1") + render_tool("c1", "x" * 400)
+               + render_user("q2"))
+        new = render_user("q1") + render_user("q2")
+        d = diff_transcripts(old, new)
+        self.assertEqual(len(d["removed"]), 1)
+        self.assertEqual(d["removed"][0]["header"], "## tool c1")
+        self.assertEqual(d["added"], [])
+        self.assertGreater(d["recovered"], 0)
+        self.assertEqual(d["tokens_before"] - d["tokens_after"],
+                         d["recovered"])
+
+    def test_identical_is_empty(self):
+        text = render_user("hi") + render_assistant("yo", None)
+        d = diff_transcripts(text, text)
+        self.assertEqual(d["removed"], [])
+        self.assertEqual(d["added"], [])
+        self.assertEqual(d["recovered"], 0)
+
+    def test_reorder_is_not_a_diff(self):
+        a, b = render_user("aaa"), render_user("bbb")
+        d = diff_transcripts(a + b, b + a)
+        self.assertEqual(d["removed"], [])
+        self.assertEqual(d["added"], [])
+
+    def test_modified_section_shows_as_replace(self):
+        old = render_user("old text here")
+        new = render_user("new text here")
+        d = diff_transcripts(old, new)
+        self.assertEqual(len(d["removed"]), 1)
+        self.assertEqual(len(d["added"]), 1)
 
 
 if __name__ == "__main__":

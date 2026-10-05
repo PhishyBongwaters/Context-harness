@@ -15,6 +15,10 @@ Pruning fails repeatedly → loud error, never silent truncation. The prune
 turn can run on a separate janitor model — cheaper/smaller, even local
 while the main model is cloud (see `prune_*` config).
 
+Every model edit of the transcript prints a mechanical diff: which
+sections were removed/added and how many tokens were recovered. You always
+see what the model threw away.
+
 Design follows the Context Language Models paper (arXiv:2609.37725),
 implemented from scratch for interactive use.
 
@@ -84,7 +88,7 @@ model's chat template; results vary.)
 `harness/tools.py` — exec / read / write / edit ·
 `harness/config.py`, `harness/__main__.py` — config, CLI
 
-`tests/` — 39 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 45 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Notes
 

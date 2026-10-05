@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.context import Budget, render_user
+from harness.context import Budget, render_tool, render_user
 from harness.loop import BudgetExceeded, Loop, Session
 from harness.providers import MockProvider
 
@@ -94,6 +94,43 @@ class TestLoop(unittest.TestCase):
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
         with self.assertRaises(BudgetExceeded):
             loop.run_turn(s, "hi")
+
+    def test_model_edit_emits_context_diff(self):
+        # A write targeting context.md produces a context-diff event with
+        # the token delta; a write elsewhere does not.
+        s = make_session()
+        s.context.save(render_user("keep me") + render_tool("c9", "x" * 400))
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "e1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": render_user("keep me")}}]},
+            {"content": "pruned"},
+        ]
+        events = []
+        loop = Loop(MockProvider(script), Budget(100000, 80000),
+                    on_event=lambda k, v: events.append((k, v)))
+        self.assertEqual(loop.run_turn(s, "tidy up"), "pruned")
+        diffs = [v for k, v in events if k == "context-diff"]
+        self.assertEqual(len(diffs), 1)
+        removed_headers = [r["header"] for r in diffs[0]["removed"]]
+        self.assertIn("## tool c9", removed_headers)
+        self.assertGreater(diffs[0]["recovered"], 0)
+
+    def test_edit_elsewhere_emits_no_diff(self):
+        s = make_session()
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "e1", "name": "write",
+                 "arguments": {"path": "notes.txt",
+                               "content": "hello"}}]},
+            {"content": "done"},
+        ]
+        events = []
+        loop = Loop(MockProvider(script), Budget(100000, 80000),
+                    on_event=lambda k, v: events.append(k))
+        self.assertEqual(loop.run_turn(s, "write a file"), "done")
+        self.assertNotIn("context-diff", events)
 
     def test_multi_turn_continuity_through_file(self):
         # Turn 1: model runs a tool and answers. Turn 2 (fresh Loop, same

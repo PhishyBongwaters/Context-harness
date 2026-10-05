@@ -73,6 +73,18 @@ def _print_event(kind: str, data) -> None:
     elif kind == "prune":
         print(f"\n[prune-only turn {data['attempt']}: "
               f"{data['tokens']:,} tokens]", flush=True)
+    elif kind == "context-diff":
+        rec = data["recovered"]
+        sign = "+" if rec >= 0 else ""
+        print(f"\n[context diff: {sign}{rec:,} tokens]", flush=True)
+        for r in data["removed"][:5]:
+            print(f"  - {r['header']} ({r['tokens']:,} tokens)", flush=True)
+        if len(data["removed"]) > 5:
+            print(f"  - ... +{len(data['removed']) - 5} more", flush=True)
+        for a in data["added"][:5]:
+            print(f"  + {a['header']} ({a['tokens']:,} tokens)", flush=True)
+        if len(data["added"]) > 5:
+            print(f"  + ... +{len(data['added']) - 5} more", flush=True)
     elif kind == "usage":
         pass  # quiet; available for metering
 

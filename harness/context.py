@@ -124,6 +124,35 @@ def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
     return text, calls
 
 
+def _split_sections(text: str) -> list[tuple[str, str | None, str, str]]:
+    """Split the file into (role, label, header_line, body) sections.
+
+    Anything before the first ## header is preamble and ignored.
+    """
+    sections: list[tuple[str, str | None, str, str]] = []
+    cur: list[str] | None = None
+    cur_role: str | None = None
+    cur_label: str | None = None
+    cur_header: str = ""
+
+    def flush():
+        if cur_role is not None:
+            sections.append((cur_role, cur_label, cur_header,
+                             "\n".join(cur or [])))
+
+    for line in text.splitlines():
+        m = _HEADER_RE.match(line)
+        if m:
+            flush()
+            cur_role, cur_label = m.group(1), m.group(2)
+            cur_header, cur = line.strip(), []
+        elif cur_role is not None:
+            cur.append(line)
+        # else: preamble line, ignored
+    flush()
+    return sections
+
+
 def parse_transcript(text: str) -> list[dict]:
     """Parse the context file back into internal (OpenAI-style) messages.
 
@@ -131,28 +160,9 @@ def parse_transcript(text: str) -> list[dict]:
     section whose id matches no earlier assistant tool call is dropped
     (orphan results are never sent to the provider).
     """
-    sections: list[tuple[str, str | None, str]] = []
-    cur: list[str] | None = None
-    cur_role: str | None = None
-    cur_label: str | None = None
-
-    def flush():
-        if cur_role is not None:
-            sections.append((cur_role, cur_label, "\n".join(cur or [])))
-
-    for line in text.splitlines():
-        m = _HEADER_RE.match(line)
-        if m:
-            flush()
-            cur_role, cur_label, cur = m.group(1), m.group(2), []
-        elif cur_role is not None:
-            cur.append(line)
-        # else: preamble line, ignored
-    flush()
-
     messages: list[dict] = []
     seen_ids: set[str] = set()
-    for role, label, body in sections:
+    for role, label, _header, body in _split_sections(text):
         body = body.strip()
         if role == "user":
             messages.append({"role": "user", "content": body})
@@ -170,6 +180,33 @@ def parse_transcript(text: str) -> list[dict]:
                                  "content": body})
             # orphan tool result: dropped, never sent
     return messages
+
+
+def diff_transcripts(old: str, new: str) -> dict:
+    """Mechanical diff of two context-file states.
+
+    Compares sections by (header, body); reordered-but-identical sections
+    produce no diff. Returns removed/added section headers with token
+    counts plus the net token delta (positive recovered = context freed).
+    """
+    from collections import Counter
+
+    def keyed(text: str) -> list[tuple[str, str]]:
+        return [(h, b.strip()) for _, _, h, b in _split_sections(text)]
+
+    old_c, new_c = Counter(keyed(old)), Counter(keyed(new))
+    removed = list((old_c - new_c).elements())
+    added = list((new_c - old_c).elements())
+    tb, ta = count_tokens(old), count_tokens(new)
+    return {
+        "removed": [{"header": h, "tokens": count_tokens(b)}
+                    for h, b in removed],
+        "added": [{"header": h, "tokens": count_tokens(b)}
+                  for h, b in added],
+        "tokens_before": tb,
+        "tokens_after": ta,
+        "recovered": tb - ta,
+    }
 
 
 class ContextFile:
