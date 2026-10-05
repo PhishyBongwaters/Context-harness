@@ -205,8 +205,9 @@ class Loop:
                 f"tokens (sys {breakdown['system']:,} + "
                 f"chat {breakdown['transcript']:,} + "
                 f"tools {breakdown['tools']:,}) of "
-                f"{self.budget.hard:,} budget; session lifetime in "
-                f"{t['input']:,} out {t['output']:,}]")
+                f"{self.budget.hard:,} budget -- only this-request tokens "
+                f"count against budget. Session lifetime in {t['input']:,} "
+                f"out {t['output']:,} is informational, not budget.]")
         return [{"role": "user", "content": "\n".join(lines)}]
 
     def _touches_context(self, session: Session, name: str,
