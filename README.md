@@ -27,7 +27,6 @@ implemented from scratch for interactive use.
 ```bash
 pip install -r requirements.txt
 python -m harness --config        # writes platform-default config.json
-export OPENAI_API_KEY=...         # or ANTHROPIC_API_KEY
 python -m harness "summarize this repo"
 python -m harness                 # REPL, continues current session
 python -m harness --new "task"    # fresh session
@@ -52,15 +51,23 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
-Local server (LM Studio / llama.cpp — OpenAI-compatible `/v1`):
+Keys can live in a `.env` file instead of exports (see `.env.example`):
+`<config-dir>/.env` loads first, then `./.env`; real environment
+variables always win. `--env-file PATH` points at one explicitly.
+`.env` is git-ignored; only `.env.example` commits.
+
+Local server example (llama.cpp + Qwen — OpenAI-compatible `/v1`):
 
 ```json
-{ "provider": "openai", "model": "whatever-you-loaded",
-  "base_url": "http://localhost:1234/v1" }
+{ "provider": "openai", "model": "Qwen",
+  "base_url": "http://127.0.0.1:8080/v1" }
 ```
-LM Studio default port is 1234; llama.cpp server is `http://localhost:8080/v1`.
 
-Cloud (key from env, e.g. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
+llama.cpp server defaults to `http://127.0.0.1:8080/v1`;
+LM Studio defaults to `http://localhost:1234/v1`. The model id is
+whatever the server advertises under `/v1/models` (here `Qwen`).
+
+Cloud (key from env or `.env`, e.g. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
 
 ```json
 { "provider": "openai", "model": "gpt-5" }
