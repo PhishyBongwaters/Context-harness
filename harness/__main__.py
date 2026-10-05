@@ -218,6 +218,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         cfg.provider = args.provider
     if args.model:
         cfg.model = args.model
+    if getattr(args, "request_timeout", None):
+        cfg.request_timeout = args.request_timeout
     _require_key(cfg.provider, cfg.base_url, cfg.api_key, cfg.api_key_env,
                  "main")
     provider = make_provider(cfg)
@@ -279,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Ceiling on exec runtime in seconds (default 300).")
     ap.add_argument("--no-usage-note", action="store_true",
                     help="Omit the ephemeral per-request usage line.")
+    ap.add_argument("--request-timeout", type=int, default=None,
+                    help="HTTP seconds per model call (default 120; raise "
+                         "for huge prompts on slow local servers).")
     ap.add_argument("--project", default=None,
                     help="Project name: resume it or start it.")
     ap.add_argument("--workdir", default=None,

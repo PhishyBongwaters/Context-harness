@@ -43,6 +43,9 @@ DEFAULTS = {
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "usage_note": True,  # ephemeral per-request usage line (never stored)
+    "request_timeout": 120,  # HTTP seconds per model call (raise for huge
+    # prompts on slow local servers; prefill of ~100k tokens can take
+    # many minutes on big models)
 }
 
 PROVIDER_DEFAULTS = {
@@ -94,6 +97,7 @@ class Config:
     exec_timeout: int = 60
     exec_timeout_max: int = 300
     usage_note: bool = True
+    request_timeout: int = 120
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -200,6 +204,7 @@ def load_config(path: str | Path | None = None,
         exec_timeout=int(merged.get("exec_timeout", 60)),
         exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
         usage_note=bool(merged.get("usage_note", True)),
+        request_timeout=int(merged.get("request_timeout", 120)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
@@ -227,6 +232,7 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "exec_timeout": 60,
         "exec_timeout_max": 300,
         "usage_note": True,
+        "request_timeout": 120,
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "

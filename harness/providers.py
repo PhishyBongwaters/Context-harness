@@ -67,10 +67,12 @@ class OpenAIProvider(Provider):
     name = "openai"
 
     def __init__(self, *, api_key: str | None, model: str,
-                 base_url: str = "https://api.openai.com/v1"):
+                 base_url: str = "https://api.openai.com/v1",
+                 timeout: int = 120):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
 
     def _headers(self) -> dict:
         h = {}
@@ -151,7 +153,8 @@ class OpenAIProvider(Provider):
         data = _post(f"{self.base_url}/chat/completions",
                      self._headers(),
                      self.build_payload(system=system, messages=messages,
-                                        tools=tools))
+                                        tools=tools),
+                     timeout=self.timeout)
         return self.parse_response(data)
 
 
@@ -162,11 +165,12 @@ class AnthropicProvider(Provider):
 
     def __init__(self, *, api_key: str | None, model: str,
                  base_url: str = "https://api.anthropic.com/v1",
-                 max_tokens: int = 4096):
+                 max_tokens: int = 4096, timeout: int = 120):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.max_tokens = max_tokens
+        self.timeout = timeout
 
     def _headers(self) -> dict:
         h = {"anthropic-version": "2023-06-01"}
@@ -230,7 +234,8 @@ class AnthropicProvider(Provider):
              tools: list[dict]) -> dict:
         data = _post(f"{self.base_url}/messages", self._headers(),
                      self.build_payload(system=system, messages=messages,
-                                        tools=tools))
+                                        tools=tools),
+                     timeout=self.timeout)
         return self.parse_response(data)
 
 
@@ -268,14 +273,17 @@ def make_provider(cfg, *, provider=None, model=None, base_url=None,
     server) is distinguishable from "fall back to cfg".
     """
     name = provider or cfg.provider
+    timeout = getattr(cfg, "request_timeout", 120)
     if name == "anthropic":
         return AnthropicProvider(
             api_key=cfg.api_key if api_key is _UNSET else api_key,
             model=model or cfg.model,
-            base_url=base_url or cfg.base_url)
+            base_url=base_url or cfg.base_url,
+            timeout=timeout)
     if name == "openai":
         return OpenAIProvider(
             api_key=cfg.api_key if api_key is _UNSET else api_key,
             model=model or cfg.model,
-            base_url=base_url or cfg.base_url)
+            base_url=base_url or cfg.base_url,
+            timeout=timeout)
     raise ProviderError(f"Unknown provider: {name}")

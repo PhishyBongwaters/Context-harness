@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.context import Budget, render_tool, render_user
+from harness.context import (Budget, parse_transcript, render_tool,
+                               render_user)
 from harness.loop import BudgetExceeded, Loop, Session, _estimate
 from harness.providers import MockProvider
 
@@ -90,10 +91,29 @@ class TestLoop(unittest.TestCase):
     def test_prune_failure_raises_loudly(self):
         s = self._bloated_session()
         # mock never shrinks the file -> prune attempts exhaust
-        script = [{"content": "PRUNED"}] * 40
+        script = [{"content": "PRUNED"}] * 70
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
         with self.assertRaises(BudgetExceeded):
             loop.run_turn(s, "hi")
+
+    def test_prune_bare_reply_nudges_then_succeeds(self):
+        # The model says PRUNED without editing: the loop must nudge and
+        # retry within the attempt, not burn the whole attempt on nothing.
+        s = self._bloated_session()
+        script = [
+            {"content": "PRUNED"},
+            {"content": None, "tool_calls": [
+                {"id": "p1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": render_user("fresh start")}}]},
+            {"content": "PRUNED"},
+            {"content": "all good"},
+        ]
+        events = []
+        loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000),
+                    on_event=lambda k, v: events.append(k))
+        self.assertEqual(loop.run_turn(s, "hi"), "all good")
+        self.assertIn("fresh start", s.context.load())
 
     def test_model_edit_emits_context_diff(self):
         # A write targeting context.md produces a context-diff event with
@@ -200,6 +220,39 @@ class TestLoop(unittest.TestCase):
         loop = Loop(main, Budget(100000, 80000))
         self.assertIs(loop.prune_provider, main)
 
+    def test_prune_gate_uses_full_tool_measure(self):
+        # The transcript can be UNDER by the prune-tools measure while OVER
+        # by the full-tools measure (3 extra schemas). The gate must use
+        # the full measure, or prune_turn returns True instantly, the main
+        # check stays over, and the loop burns all MAX_STEPS on OVER lines.
+        from harness.loop import SYSTEM_PROMPT
+        s = make_session()
+        prov = MockProvider([])
+        loop = Loop(prov, Budget(hard=100000, soft=80000))
+        system = SYSTEM_PROMPT.format(ctx_path="x", hard=100000, soft=80000)
+        s.context.save("".join(render_user("x" * 200) for _ in range(12)))
+        messages = parse_transcript(s.context.load())
+        full = loop._measure(prov, system, messages, loop._tools)["total"]
+        small = loop._measure(prov, system, messages,
+                              loop._prune_tools)["total"]
+        self.assertGreater(full - small, 200)  # the gap is real
+        hard = (full + small) // 2
+
+        main = MockProvider([{"content": "done"}])
+        janitor = MockProvider([
+            {"content": None, "tool_calls": [
+                {"id": "p1", "name": "write",
+                 "arguments": {"path": str(s.context.path),
+                               "content": render_user("fresh start")}}]},
+            {"content": "PRUNED"},
+        ])
+        loop2 = Loop(main, Budget(hard=hard, soft=hard - 500),
+                     prune_provider=janitor)
+        self.assertEqual(loop2.run_turn(s, "hi"), "done")
+        # Old code: gate passed instantly, janitor never called.
+        self.assertGreaterEqual(len(janitor.calls), 1)
+        self.assertIn("fresh start", s.context.load())
+
     def test_estimate_counts_tool_schemas(self):
         tools = [{"name": "exec", "description": "d" * 400,
                   "parameters": {"type": "object"}}]
@@ -209,14 +262,14 @@ class TestLoop(unittest.TestCase):
 
     def test_prune_turn_restricts_tools(self):
         s = self._bloated_session()
-        # exec is not allowed on a prune turn: 5 attempts x 2 responses,
+        # exec is not allowed on a prune turn: 5 attempts x 12 responses,
         # file never shrinks -> BudgetExceeded, command never runs.
         script = [
             {"content": None, "tool_calls": [
                 {"id": "p1", "name": "exec",
                  "arguments": {"command": "echo evil-during-prune"}}]},
             {"content": "PRUNED"},
-        ] * 6
+        ] * 40
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
         with self.assertRaises(BudgetExceeded):
             loop.run_turn(s, "hi")

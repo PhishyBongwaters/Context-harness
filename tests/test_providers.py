@@ -45,6 +45,34 @@ class TestOpenAI(unittest.TestCase):
         self.assertEqual(out["content"], "done")
         self.assertEqual(out["tool_calls"], [])
 
+    def test_request_timeout_default_and_plumbing(self):
+        self.assertEqual(self.p.timeout, 120)
+        import harness.providers as prov
+        from unittest import mock
+        with mock.patch.object(prov, "_post",
+                               return_value={"choices": [{"message": {
+                                   "content": "ok"}}], "usage": {}}) as m:
+            self.p.chat(system="s", messages=[], tools=[])
+            _, kwargs = m.call_args
+            self.assertEqual(kwargs["timeout"], 120)
+        p2 = OpenAIProvider(api_key="k", model="m",
+                            base_url="https://x.test/v1", timeout=600)
+        with mock.patch.object(prov, "_post",
+                               return_value={"choices": [{"message": {
+                                   "content": "ok"}}], "usage": {}}) as m:
+            p2.chat(system="s", messages=[], tools=[])
+            _, kwargs = m.call_args
+            self.assertEqual(kwargs["timeout"], 600)
+
+    def test_make_provider_request_timeout(self):
+        class C:
+            provider = "openai"
+            model = "m"
+            base_url = "https://x.test/v1"
+            api_key = "k"
+            request_timeout = 600
+        self.assertEqual(make_provider(C()).timeout, 600)
+
     def test_socket_timeout_becomes_provider_error(self):
         import urllib.request
         from unittest import mock

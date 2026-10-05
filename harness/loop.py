@@ -88,7 +88,9 @@ for the task; keep the newest ~15-20 turns in full. Keep the `## user` /
 `## assistant` / `## tool <id>` section format parseable, and do not
 delete the most recent ## user section.
 Do not attempt the user's task now -- just prune.
-When the file is under budget, reply with one line: PRUNED.
+Reply with one line (PRUNED) only after your edits have actually shrunk
+the file -- the harness re-measures, and an unchanged file just repeats
+this turn. Replying PRUNED without editing accomplishes nothing.
 """
 
 
@@ -252,18 +254,23 @@ class Loop:
         """
         ctx_path = str(session.context.path)
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
+        # Gate on the EXACT next request: main system + full tools. Any
+        # cheaper ruler (prune system, prune tools) reads under while the
+        # main check stays over: prune declares victory without touching
+        # the file and the loop burns all MAX_STEPS on identical OVER lines.
+        main_system = SYSTEM_PROMPT.format(
+            ctx_path=ctx_path, hard=self.budget.hard, soft=self.budget.soft)
+        gate = lambda msgs: self._measure(
+            self.provider, main_system, msgs, self._tools)["total"]
         for attempt in range(MAX_PRUNE_ATTEMPTS):
             raw, messages = self._transcript_messages(session)
-            if self._measure(self.prune_provider, system, messages,
-                             self._prune_tools)["total"] < self.budget.hard:
+            if gate(messages) < self.budget.hard:
                 return True
             self._emit("prune", {"attempt": attempt + 1,
-                                 "tokens": self._measure(
-                                     self.prune_provider, system, messages,
-                                     self._prune_tools)["total"]})
+                                 "tokens": gate(messages)})
             turn = [{"role": "user", "content": (
                 f"Current context file "
-                f"({self._measure(self.prune_provider, system, messages, self._prune_tools)['total']:,} tokens, hard limit "
+                f"({gate(messages):,} tokens, hard limit "
                 f"{self.budget.hard:,}):\n<context-file>\n{raw}\n"
                 f"</context-file>")}]
             for _step in range(MAX_PRUNE_STEPS):
@@ -296,14 +303,28 @@ class Loop:
                              "content": resp.get("content"),
                              "tool_calls": resp.get("tool_calls")})
                 if not resp.get("tool_calls"):
-                    break
+                    # A bare reply ends the round ONLY if the file is
+                    # actually under budget -- otherwise the model has
+                    # learned to escape by saying PRUNED. Nudge and retry
+                    # within the same attempt instead of burning a whole
+                    # multi-minute attempt on an unchanged file.
+                    if gate(self._transcript_messages(session)[1]) < \
+                            self.budget.hard:
+                        break
+                    over_by = gate(self._transcript_messages(session)[1]) - \
+                        self.budget.hard
+                    turn.append({"role": "user", "content": (
+                        f"No edits detected and the file is still "
+                        f"{over_by:,} tokens over budget. Replying PRUNED "
+                        f"without editing changes nothing. Use write/edit "
+                        f"on {ctx_path} now.")})
+                    continue
                 for tc in resp["tool_calls"]:
                     result = self._execute_tool(session, tc)
                     turn.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
         raw, messages = self._transcript_messages(session)
-        return self._measure(self.prune_provider, system, messages,
-                             self._prune_tools)["total"] < self.budget.hard
+        return gate(messages) < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
         ctx_path = str(session.context.path)
@@ -312,7 +333,11 @@ class Loop:
                                      soft=self.budget.soft)
         if self.approver is not None:
             self.approver.new_turn()
-        self._turn_seq += 1
+        if self.tracker is not None and self.tracker.turns:
+            self._turn_seq = max(t["turn"]
+                                 for t in self.tracker.turns) + 1
+        else:
+            self._turn_seq += 1
         # The user's message joins the file-transcript first.
         session.context.append(render_user(user_text))
         warned = False

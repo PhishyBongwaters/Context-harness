@@ -113,7 +113,7 @@ model's chat template; results vary.)
 `harness/usage.py` — server usage ledger (`usage.json`) ·
 `harness/project.py` — project registry + session markers
 
-`tests/` — 91 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 96 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Projects
 
@@ -178,6 +178,7 @@ Tunable (config file, CLI flag wins):
 | `approval_timeout` | 120s | `--approval-timeout` |
 | `exec_timeout` | 60s | `--exec-timeout` |
 | `exec_timeout_max` | 300s | `--exec-timeout-max` |
+| `request_timeout` | 120s | `--request-timeout` (raise for ~100k prompts on slow local servers — prefill can take many minutes) |
 
 ## Debugging
 
