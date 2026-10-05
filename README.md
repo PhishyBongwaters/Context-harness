@@ -46,6 +46,7 @@ The REPL stays in its session: plain text appends to the same
 - `/usage [N]` — ledger totals + last N calls (default 5)
 - `/config` — show effective config (redacted)
 - `/providers` — list known providers
+- `/models` — list models from current provider (OpenAI-compatible)
 - `/quit` — leave (empty line also quits)
 
 Flow: `/new` once, then just type. Only `/new` mints a new

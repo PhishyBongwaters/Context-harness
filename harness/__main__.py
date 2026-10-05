@@ -202,6 +202,7 @@ REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/config      show effective config (redacted)\n"
              "/providers   list known providers\n"
+             "/models      list models from current provider (OpenAI-compatible)\n"
              "/help        this list\n"
              "/quit        leave (empty line also quits)")
 
@@ -235,6 +236,34 @@ def _show_providers() -> None:
     print("[providers]")
     for name, meta in sorted(PROVIDER_DEFAULTS.items()):
         print(f"  {name}: base_url={meta.get('base_url')} api_key_env={meta.get('api_key_env')}")
+
+
+def _show_models(cfg) -> None:
+    import urllib.request, json
+    # Only OpenAI-compatible providers support /v1/models
+    if cfg.provider not in ("openai", "nvidia"):
+        print(f"[models] provider {cfg.provider} does not support /v1/models listing")
+        return
+    base = (cfg.base_url or "").rstrip("/")
+    if not base:
+        print("[models] no base_url configured")
+        return
+    url = f"{base}/models"
+    headers = {}
+    if cfg.api_key:
+        headers["Authorization"] = f"Bearer {cfg.api_key}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        models = data.get("data", [])
+        print(f"[models] {len(models)} models from {cfg.provider}")
+        for m in models[:100]:
+            print(f"  {m.get('id')}")
+        if len(models) > 100:
+            print(f"  ... +{len(models)-100} more")
+    except Exception as e:
+        print(f"[models] error fetching models: {e}")
 
 
 def _show_usage(tracker, rest: str) -> None:
@@ -513,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
             _show_config(cfg)
         elif cmd == "providers":
             _show_providers()
+        elif cmd == "models":
+            _show_models(cfg)
         else:
             print(f"Unknown command /{cmd} (/help).")
     return 0
