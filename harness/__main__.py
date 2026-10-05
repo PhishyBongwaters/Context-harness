@@ -201,6 +201,7 @@ REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/list        list sessions (* = current)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/config      show effective config (redacted)\n"
+             "/providers   list known providers\n"
              "/help        this list\n"
              "/quit        leave (empty line also quits)")
 
@@ -227,6 +228,13 @@ def _show_config(cfg) -> None:
     print("[config]")
     for k, v in data.items():
         print(f"  {k}: {v}")
+
+
+def _show_providers() -> None:
+    from .config import PROVIDER_DEFAULTS
+    print("[providers]")
+    for name, meta in sorted(PROVIDER_DEFAULTS.items()):
+        print(f"  {name}: base_url={meta.get('base_url')} api_key_env={meta.get('api_key_env')}")
 
 
 def _show_usage(tracker, rest: str) -> None:
@@ -314,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true", help="List sessions.")
     ap.add_argument("--config", action="store_true",
                     help="Write an example config file.")
-    ap.add_argument("--provider", choices=["openai", "anthropic"])
+    ap.add_argument("--provider", choices=["openai", "anthropic", "nvidia"])
     ap.add_argument("--model", help="Model id override.")
     ap.add_argument("--env-file", default=None,
                     help="Path to .env file (default: <config-dir>/.env, then ./.env).")
@@ -503,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
                     switch_session(sid)
         elif cmd == "config":
             _show_config(cfg)
+        elif cmd == "providers":
+            _show_providers()
         else:
             print(f"Unknown command /{cmd} (/help).")
     return 0

@@ -45,6 +45,7 @@ The REPL stays in its session: plain text appends to the same
 - `/project [name]` — show/switch project
 - `/usage [N]` — ledger totals + last N calls (default 5)
 - `/config` — show effective config (redacted)
+- `/providers` — list known providers
 - `/quit` — leave (empty line also quits)
 
 Flow: `/new` once, then just type. Only `/new` mints a new
@@ -62,7 +63,7 @@ Flow: `/new` once, then just type. Only `/new` mints a new
 
 Platform-default location (`%APPDATA%/context-harness/config.json` on
 Windows, `~/.config/context-harness/config.json` elsewhere):
-`provider` (`openai` / `anthropic`), `model`, `base_url` (any
+`provider` (`openai` / `anthropic` / `nvidia`), `model`, `base_url` (any
 OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,

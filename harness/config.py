@@ -60,6 +60,10 @@ PROVIDER_DEFAULTS = {
         "base_url": "https://api.anthropic.com/v1",
         "api_key_env": "ANTHROPIC_API_KEY",
     },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "api_key_env": "NVIDIA_API_KEY",
+    },
 }
 
 

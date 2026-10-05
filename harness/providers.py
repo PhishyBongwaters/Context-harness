@@ -158,6 +158,18 @@ class OpenAIProvider(Provider):
         return self.parse_response(data)
 
 
+class NvidiaProvider(OpenAIProvider):
+    """NVIDIA NIM /v1/chat/completions – OpenAI compatible."""
+
+    name = "nvidia"
+
+    def __init__(self, *, api_key: str | None, model: str,
+                 base_url: str = "https://integrate.api.nvidia.com/v1",
+                 timeout: int = 120):
+        super().__init__(api_key=api_key, model=model,
+                         base_url=base_url, timeout=timeout)
+
+
 class AnthropicProvider(Provider):
     """Anthropic /v1/messages."""
 
@@ -280,8 +292,10 @@ def make_provider(cfg, *, provider=None, model=None, base_url=None,
             model=model or cfg.model,
             base_url=base_url or cfg.base_url,
             timeout=timeout)
-    if name == "openai":
-        return OpenAIProvider(
+    if name in ("openai", "nvidia"):
+        # Both use OpenAI-compatible chat completions.
+        ProviderCls = NvidiaProvider if name == "nvidia" else OpenAIProvider
+        return ProviderCls(
             api_key=cfg.api_key if api_key is _UNSET else api_key,
             model=model or cfg.model,
             base_url=base_url or cfg.base_url,
