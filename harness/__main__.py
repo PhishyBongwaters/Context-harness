@@ -324,9 +324,16 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     prune_provider = cfg.prune_provider or cfg.provider
     prune_model = cfg.prune_model or cfg.model
     prune_base_url = cfg.prune_base_url or cfg.base_url
-    prune_key_env = (cfg.prune_api_key_env
-                     or PROVIDER_DEFAULTS.get(prune_provider, {})
-                     .get("api_key_env"))
+    if cfg.prune_api_key_env:
+        prune_key_env = cfg.prune_api_key_env
+    elif (prune_provider == cfg.provider
+          and prune_base_url == cfg.base_url):
+        # Janitor is the main model: inherit its key env, which may be a
+        # custom value rather than the provider default.
+        prune_key_env = cfg.api_key_env
+    else:
+        prune_key_env = PROVIDER_DEFAULTS.get(prune_provider, {}).get(
+            "api_key_env")
     prune_key = os.environ.get(prune_key_env) if prune_key_env else None
     _require_key(prune_provider, prune_base_url, prune_key, prune_key_env,
                  "prune")
