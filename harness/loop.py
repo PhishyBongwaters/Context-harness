@@ -118,7 +118,8 @@ class Loop:
                  exec_timeout: int = EXEC_TIMEOUT_DEFAULT,
                  exec_timeout_max: int = EXEC_TIMEOUT_MAX,
                  usage_tracker: UsageTracker | None = None,
-                 usage_note: bool = True):
+                 usage_note: bool = True,
+                 project: str | None = None):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -129,6 +130,7 @@ class Loop:
         self.exec_timeout_max = exec_timeout_max
         self.tracker = usage_tracker
         self.usage_note = usage_note
+        self.project = project
         self._turn_seq = 0
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
@@ -169,19 +171,24 @@ class Loop:
 
         The meter is console-only, so without this the model reasons
         from stale numbers pasted into its transcript. ~30 tokens.
+        The project line rides along when a project is active.
         """
-        if not self.usage_note:
+        if not self.usage_note and not self.project:
             return []
         t = self.tracker.totals if self.tracker else {"input": 0,
                                                       "output": 0}
-        return [{"role": "user",
-                 "content": (
-                     f"[harness note: this request ≈ {breakdown['total']:,} "
-                     f"tokens (sys {breakdown['system']:,} + "
-                     f"chat {breakdown['transcript']:,} + "
-                     f"tools {breakdown['tools']:,}) of "
-                     f"{self.budget.hard:,} budget; session lifetime in "
-                     f"{t['input']:,} out {t['output']:,}]")}]
+        lines = []
+        if self.project:
+            lines.append(f"[project: {self.project}]")
+        if self.usage_note:
+            lines.append(
+                f"[harness note: this request ≈ {breakdown['total']:,} "
+                f"tokens (sys {breakdown['system']:,} + "
+                f"chat {breakdown['transcript']:,} + "
+                f"tools {breakdown['tools']:,}) of "
+                f"{self.budget.hard:,} budget; session lifetime in "
+                f"{t['input']:,} out {t['output']:,}]")
+        return [{"role": "user", "content": "\n".join(lines)}]
 
     def _touches_context(self, session: Session, name: str,
                          args: dict) -> bool:

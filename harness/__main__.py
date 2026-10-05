@@ -144,7 +144,8 @@ def _match_session(cfg, ident: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _show_session(cfg, session: Session, totals=None) -> None:
+def _show_session(cfg, session: Session, totals=None,
+                  project: str | None = None) -> None:
     try:
         toks = session.context.tokens()
     except Exception:
@@ -154,13 +155,30 @@ def _show_session(cfg, session: Session, totals=None) -> None:
     if totals and (totals.get("input") or totals.get("output")):
         life = (f" | lifetime in {totals['input']:,} "
                 f"out {totals['output']:,}")
-    print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
+    proj = f" project={project}" if project else ""
+    print(f"[session {session.id}{proj}] provider={cfg.provider} "
+          f"model={cfg.model} "
           f"budget={cfg.budget_hard:,}{using}{life} "
           f"ctx={session.context.path}")
 
 
+def _workdir(args) -> str:
+    return args.workdir or os.getcwd()
+
+
+def _latest_project_session(cfg, name: str, workdir: str):
+    from .project import session_project
+    sessions = _sessions(cfg)
+    hits = [p for p in sessions.iterdir()
+            if p.is_dir() and session_project(p) == name]
+    if not hits:
+        return None
+    return _open_session(cfg, max(p.name for p in hits), workdir)
+
+
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/open <id>  switch session (id prefix ok)\n"
+             "/project [name]  show/switch project\n"
              "/list        list sessions (* = current)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/help        this list\n"
@@ -195,7 +213,7 @@ def _approver(cfg, args, session, on_event):
 
 
 def _build_loop(cfg, args, on_event=None, approver=None,
-                usage_tracker=None) -> Loop:
+                usage_tracker=None, project=None) -> Loop:
     if args.provider:
         cfg.provider = args.provider
     if args.model:
@@ -225,7 +243,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 exec_timeout_max=getattr(args, "exec_timeout_max", None)
                 or cfg.exec_timeout_max,
                 usage_note=cfg.usage_note
-                and not getattr(args, "no_usage_note", False))
+                and not getattr(args, "no_usage_note", False),
+                project=project)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,8 +279,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="Ceiling on exec runtime in seconds (default 300).")
     ap.add_argument("--no-usage-note", action="store_true",
                     help="Omit the ephemeral per-request usage line.")
-    ap.add_argument("--workdir", default=os.getcwd(),
-                    help="Working directory for tools.")
+    ap.add_argument("--project", default=None,
+                    help="Project name: resume it or start it.")
+    ap.add_argument("--workdir", default=None,
+                    help="Working directory for tools (default: cwd; with "
+                         "--project, sets/updates the project workdir).")
     args = ap.parse_args(argv)
 
     if args.config:
@@ -277,15 +299,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from .debug import DebugLog
+    from .project import (resolve_project, session_project,
+                          set_session_project)
     from .usage import UsageTracker
 
     box: dict = {}
+
+    if args.project:
+        proj = resolve_project(args.project, workdir=args.workdir)
+        box["project"] = proj["name"]
+        args.workdir = proj["workdir"]
+    else:
+        box["project"] = None
+
+    def stamp(sess) -> None:
+        if box["project"]:
+            set_session_project(sess.dir, box["project"])
+        else:
+            box["project"] = session_project(sess.dir)
 
     def attach() -> None:
         sess = box["session"]
         tracker = UsageTracker(sess.dir)
         box["tracker"] = tracker
-        _show_session(cfg, sess, tracker.totals)
+        _show_session(cfg, sess, tracker.totals, box["project"])
         dbg = None
         if args.debug_file:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
@@ -301,13 +338,15 @@ def main(argv: list[str] | None = None) -> int:
         box["loop"] = _build_loop(
             cfg, args, on_event=handler,
             approver=_approver(cfg, args, sess, handler),
-            usage_tracker=tracker)
+            usage_tracker=tracker, project=box["project"])
 
     if args.new or args.session:
-        box["session"] = (_new_session(cfg, args.workdir) if args.new
-                          else _open_session(cfg, args.session, args.workdir))
+        box["session"] = (_new_session(cfg, _workdir(args)) if args.new
+                          else _open_session(cfg, args.session,
+                                             _workdir(args)))
     else:
-        box["session"] = _open_session(cfg, None, args.workdir)
+        box["session"] = _open_session(cfg, None, _workdir(args))
+    stamp(box["session"])
     attach()
 
     def do_turn(text: str) -> int:
@@ -330,7 +369,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     def switch_session(sid: str) -> None:
-        box["session"] = _open_session(cfg, sid, args.workdir)
+        box["session"] = _open_session(cfg, sid, _workdir(args))
+        stamp(box["session"])
+        attach()
+
+    def switch_project(name: str) -> None:
+        proj = resolve_project(name)
+        box["project"] = proj["name"]
+        args.workdir = proj["workdir"]
+        sess = _latest_project_session(cfg, name, _workdir(args))
+        box["session"] = (sess if sess is not None
+                          else _new_session(cfg, _workdir(args)))
+        stamp(box["session"])
         attach()
 
     if args.task:
@@ -368,10 +418,20 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "usage":
             _show_usage(box.get("tracker"), rest)
         elif cmd == "new":
-            box["session"] = _new_session(cfg, args.workdir)
+            box["session"] = _new_session(cfg, _workdir(args))
+            stamp(box["session"])
             attach()
             if rest:
                 do_turn(rest)
+        elif cmd == "project":
+            if not rest:
+                from .project import load_registry
+                cur = box["project"] or "(none)"
+                names = sorted(load_registry())
+                print(f"project: {cur}" +
+                      (f"  (known: {', '.join(names)})" if names else ""))
+            else:
+                switch_project(rest.split()[0])
         elif cmd in ("open", "session"):
             if not rest:
                 print("usage: /open <id>  (/list to see ids)")

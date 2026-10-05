@@ -40,6 +40,7 @@ The REPL stays in its session: plain text appends to the same
 - `/new` — fresh session and switch to it
 - `/new summarize this repo` — fresh session + run that task immediately
 - `/open 20261005-0826` — switch back (full id or unambiguous prefix)
+- `/project [name]` — show/switch project
 - `/usage [N]` — ledger totals + last N calls (default 5)
 - `/quit` — leave (empty line also quits)
 
@@ -109,9 +110,24 @@ model's chat template; results vary.)
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
-`harness/usage.py` — server usage ledger (`usage.json`)
+`harness/usage.py` — server usage ledger (`usage.json`) ·
+`harness/project.py` — project registry + session markers
 
-`tests/` — 86 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 91 unittest tests, stdlib only. `python -m unittest discover -s tests`
+
+## Projects
+
+A project is a name plus a workdir (`<config-dir>/projects.json`):
+
+```bash
+python -m harness --project demo "task"   # resume demo or start it (cwd)
+python -m harness --project demo --workdir D:\work\demo "task"
+```
+
+Sessions are stamped with their project; `/project` shows the current
+one, `/project demo` resumes demo's latest session (or starts one).
+Until modes land, a project is one ephemeral `[project: NAME]` line per
+request (sent, never stored) — the hook SPEC/facts/goal will hang off.
 
 ## Usage accounting
 
