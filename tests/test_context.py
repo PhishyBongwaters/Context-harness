@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.context import Budget, ContextFile, count_tokens
+from harness.context import (Budget, ContextFile, count_tokens,
+                               sanitize_assistant_content)
 
 
 class TestBudget(unittest.TestCase):

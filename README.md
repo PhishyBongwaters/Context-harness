@@ -109,7 +109,7 @@ model's chat template; results vary.)
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny)
 
-`tests/` — 70 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 72 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Approvals
 
@@ -163,3 +163,6 @@ git-ignored.
 - One session in the foreground at a time.
 - A `## tool <id>` section with no matching tool call is dropped on parse,
   never sent to the provider.
+- Assistant replies are sanitized before display/storage: echoed `## `
+  headers and ```tool-calls fences (local models mimic the file format)
+  are stripped so phantom sections can't accumulate.

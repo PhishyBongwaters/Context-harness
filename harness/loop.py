@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
                       parse_transcript, render_assistant, render_tool,
-                      render_user)
+                      render_user, sanitize_assistant_content)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .providers import Provider, ProviderError
@@ -51,6 +51,10 @@ needs three things:
   - keep ```tool-calls blocks as valid JSON if you keep them;
   - a `## tool <id>` section is ignored unless an earlier assistant section
     lists that tool call id.
+
+Never emit `## ` headers or ```tool-calls fences in your reply text --
+the harness adds structure when it appends your reply. Echoing headers
+back corrupts the transcript.
 
 The harness appends new turns to the end of the file automatically (your
 replies, tool results, user messages). Your edits apply on top.
@@ -255,14 +259,17 @@ class Loop:
                                     "usage": resp.get("usage")})
             self._emit("usage", resp.get("usage") or {})
             tool_calls = resp.get("tool_calls") or []
+            # Strip echoed transcript structure (## headers, tool-calls
+            # fences) before storing or showing the reply.
+            content = sanitize_assistant_content(resp.get("content"))
             # The reply joins the file-transcript before tools run, so a
             # mid-turn edit of the file sees the reply already in place.
             session.context.append(
-                render_assistant(resp.get("content"), tool_calls))
-            if resp.get("content"):
-                self._emit("assistant", resp["content"])
+                render_assistant(content, tool_calls))
+            if content:
+                self._emit("assistant", content)
             if not tool_calls:
-                return resp.get("content") or ""
+                return content or ""
             for tc in tool_calls:
                 result = self._execute_tool(session, tc)
                 session.context.append(render_tool(tc["id"], result))

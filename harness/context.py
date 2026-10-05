@@ -124,6 +124,34 @@ def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
     return text, calls
 
 
+def sanitize_assistant_content(content: str | None) -> str | None:
+    """Drop echoed transcript structure from a reply before storing it.
+
+    Chat-templated local models often mimic the file format, emitting
+    `## user` / `## assistant` headers or ```tool-calls fences in their
+    text. Stored verbatim, those lines would parse back as phantom
+    sections (or phantom tool calls). The harness owns structure, so
+    echoed structure lines are removed; body text is kept.
+    """
+    if not content:
+        return content
+    kept: list[str] = []
+    in_fence = False
+    for line in content.splitlines():
+        if line.strip() == _FENCE_OPEN:
+            in_fence = True
+            continue
+        if in_fence:
+            if line.strip() == _FENCE_CLOSE:
+                in_fence = False
+            continue
+        if _HEADER_RE.match(line):
+            continue
+        kept.append(line)
+    text = "\n".join(kept).strip()
+    return text or None
+
+
 def _split_sections(text: str) -> list[tuple[str, str | None, str, str]]:
     """Split the file into (role, label, header_line, body) sections.
 
