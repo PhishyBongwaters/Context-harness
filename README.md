@@ -33,6 +33,10 @@ python -m harness --new "task"    # fresh session
 python -m harness --list          # list sessions
 ```
 
+The REPL stays in its session: plain text appends to the same
+`context.md`; `/new [task]`, `/open <id>`, `/list`, `/help`, `/quit`
+manage sessions without leaving the prompt.
+
 ## Requirements
 
 - Python 3.10+
@@ -97,7 +101,7 @@ model's chat template; results vary.)
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny)
 
-`tests/` — 66 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 70 unittest tests, stdlib only. `python -m unittest discover -s tests`
 
 ## Approvals
 

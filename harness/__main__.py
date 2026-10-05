@@ -104,6 +104,46 @@ def _require_key(provider_name: str, base_url: str | None,
                  f"set {key_env} in your environment or .env file.")
 
 
+def parse_repl_command(text: str) -> tuple[str, str] | None:
+    """Split '/cmd rest' -> (cmd, rest). None for non-command input."""
+    if not text.startswith("/"):
+        return None
+    parts = text[1:].split(None, 1)
+    if not parts or not parts[0]:
+        return None
+    return parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
+
+
+def _list_sessions(cfg) -> None:
+    sessions = _sessions(cfg)
+    cur = _current_id(sessions)
+    for d in sorted(p.name for p in sessions.iterdir() if p.is_dir()):
+        mark = " *" if d == cur else ""
+        print(f"{d}{mark}")
+
+
+def _match_session(cfg, ident: str) -> str | None:
+    """Exact session id, else unique prefix. None when missing/ambiguous."""
+    sessions = _sessions(cfg)
+    ids = sorted(p.name for p in sessions.iterdir() if p.is_dir())
+    if ident in ids:
+        return ident
+    hits = [i for i in ids if i.startswith(ident)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _show_session(cfg, session: Session) -> None:
+    print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
+          f"budget={cfg.budget_hard:,} ctx={session.context.path}")
+
+
+REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
+             "/open <id>  switch session (id prefix ok)\n"
+             "/list        list sessions (* = current)\n"
+             "/help        this list\n"
+             "/quit        leave (empty line also quits)")
+
+
 def _approver(cfg, args, session, on_event):
     from .approvals import Approver
     timeout = getattr(args, "approval_timeout", None) or cfg.approval_timeout
@@ -186,59 +226,68 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(dotenv_path=args.env_file)
 
     if args.list:
-        sessions = _sessions(cfg)
-        cur = _current_id(sessions)
-        for d in sorted(p.name for p in sessions.iterdir() if p.is_dir()):
-            mark = " *" if d == cur else ""
-            print(f"{d}{mark}")
+        _list_sessions(cfg)
         return 0
 
-    if args.new or args.session:
-        session = (_new_session(cfg, args.workdir) if args.new
-                   else _open_session(cfg, args.session, args.workdir))
-    else:
-        session = _open_session(cfg, None, args.workdir)
-    print(f"[session {session.id}] provider={cfg.provider} model={cfg.model} "
-          f"budget={cfg.budget_hard:,} ctx={session.context.path}")
-
     from .debug import DebugLog
-    debug = None
-    if args.debug_file:
-        debug = DebugLog(args.debug_file, session_id=session.id)
-    elif args.debug:
-        debug = DebugLog(session.dir / "debug.jsonl", session_id=session.id)
-    on_event = debug.handler(_print_event) if debug else _print_event
-    if debug:
-        debug.write("session", {"id": session.id,
-                                "provider": cfg.provider, "model": cfg.model,
-                                "ctx": str(session.context.path)})
-        print(f"[debug log {debug.path}]")
 
-    loop = _build_loop(cfg, args, on_event=on_event,
-                       approver=_approver(cfg, args, session, on_event))
+    box: dict = {}
+
+    def attach() -> None:
+        sess = box["session"]
+        dbg = None
+        if args.debug_file:
+            dbg = DebugLog(args.debug_file, session_id=sess.id)
+        elif args.debug:
+            dbg = DebugLog(sess.dir / "debug.jsonl", session_id=sess.id)
+        handler = dbg.handler(_print_event) if dbg else _print_event
+        if dbg:
+            dbg.write("session", {"id": sess.id,
+                                  "provider": cfg.provider, "model": cfg.model,
+                                  "ctx": str(sess.context.path)})
+            print(f"[debug log {dbg.path}]")
+        box["on_event"] = handler
+        box["loop"] = _build_loop(
+            cfg, args, on_event=handler,
+            approver=_approver(cfg, args, sess, handler))
+
+    if args.new or args.session:
+        box["session"] = (_new_session(cfg, args.workdir) if args.new
+                          else _open_session(cfg, args.session, args.workdir))
+    else:
+        box["session"] = _open_session(cfg, None, args.workdir)
+    _show_session(cfg, box["session"])
+    attach()
 
     def do_turn(text: str) -> int:
         try:
-            loop.run_turn(session, text)
+            box["loop"].run_turn(box["session"], text)
         except BudgetExceeded as e:
-            on_event("error", {"type": "budget-exceeded", "message": str(e)})
+            box["on_event"]("error", {"type": "budget-exceeded",
+                                      "message": str(e)})
             print(f"\nBUDGET EXCEEDED: {e}")
             return 1
         except ProviderError as e:
-            on_event("error", {"type": "provider-error", "message": str(e)})
+            box["on_event"]("error", {"type": "provider-error",
+                                      "message": str(e)})
             print(f"\nPROVIDER ERROR: {e}")
             return 1
         except KeyboardInterrupt:
-            on_event("error", {"type": "interrupted"})
+            box["on_event"]("error", {"type": "interrupted"})
             print("\n[interrupted]")
             return 130
         return 0
 
+    def switch_session(sid: str) -> None:
+        box["session"] = _open_session(cfg, sid, args.workdir)
+        _show_session(cfg, box["session"])
+        attach()
+
     if args.task:
         return do_turn(" ".join(args.task))
 
-    # REPL
-    print("Type your task (empty line quits).")
+    # REPL — stays in the current session until /new or /open.
+    print("Type your task (/help for commands, empty line quits).")
     while True:
         try:
             text = input("\n> ").strip()
@@ -247,7 +296,34 @@ def main(argv: list[str] | None = None) -> int:
             break
         if not text:
             break
-        do_turn(text)
+        parsed = parse_repl_command(text)
+        if parsed is None:
+            do_turn(text)
+            continue
+        cmd, rest = parsed
+        if cmd in ("quit", "exit", "q"):
+            break
+        elif cmd == "help":
+            print(REPL_HELP)
+        elif cmd == "list":
+            _list_sessions(cfg)
+        elif cmd == "new":
+            box["session"] = _new_session(cfg, args.workdir)
+            _show_session(cfg, box["session"])
+            attach()
+            if rest:
+                do_turn(rest)
+        elif cmd in ("open", "session"):
+            if not rest:
+                print("usage: /open <id>  (/list to see ids)")
+            else:
+                sid = _match_session(cfg, rest.split()[0])
+                if sid is None:
+                    print(f"No unique session matches '{rest}'. (/list)")
+                else:
+                    switch_session(sid)
+        else:
+            print(f"Unknown command /{cmd} (/help).")
     return 0
 
 
