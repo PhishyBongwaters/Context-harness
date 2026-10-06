@@ -33,6 +33,7 @@ python -m harness "summarize this repo"
 python -m harness                 # REPL, continues current session
 python -m harness --new "task"    # fresh session
 python -m harness --list          # list sessions
+python -m harness --tui          # terminal UI (needs the optional extra)
 ```
 
 The REPL stays in its session: plain text appends to the same
@@ -51,6 +52,33 @@ The REPL stays in its session: plain text appends to the same
 
 Flow: `/new` once, then just type. Only `/new` mints a new
 `sessions/<id>/context.md`; everything else appends to the current one.
+
+## TUI (optional)
+
+The CLI is the default interface and works with stdlib-only deps.
+The TUI is the same agent loop with a terminal UI — install the extra:
+
+```bash
+pip install -r requirements-tui.txt   # textual
+python -m harness --tui
+```
+
+Same session, same provider registry, same ledger as the CLI.
+
+- transcript pane (assistant text, tool calls, budget/prune lines),
+  budget bar, status line, input box
+- mutating tools pop an approval dialog: `a` turn / `s` session /
+  `d` or `esc` deny, countdown default-deny (same timeout as CLI)
+- `ctrl+s` session picker, `ctrl+o` provider/model picker,
+  `ctrl+d` debug-log tail, `ctrl+e` export transcript to a file
+- drag with the mouse to select transcript text; `ctrl+c` copies
+  (never quits — quit is `/quit` or `ctrl+q`)
+- slash commands work in the input box exactly like the REPL
+  (`/new`, `/open`, `/list`, `/project`, `/usage`, `/config`,
+  `/providers`, `/models`, `/help`, `/quit`)
+- `--no-mouse` leaves selection to the terminal instead (keyboard
+  still drives everything in-app)
+- turn errors tee to `<session-dir>/tui-errors.log` with tracebacks
 
 ## Requirements
 
@@ -152,9 +180,12 @@ model's chat template; results vary.)
 `harness/usage.py` — server usage ledger (`usage.json`) ·
 `harness/project.py` — project registry + session markers ·
 `harness/spinner.py` — console activity indicator ·
-`harness/deterministic.py` — model-free prune stages
+`harness/deterministic.py` — model-free prune stages ·
+`harness/tui/` — optional Textual interface (`--tui`): app, bridge,
+widgets, commands, modal approvals (needs `requirements-tui.txt`)
 
-`tests/` — 109 unittest tests, stdlib only. `python -m unittest discover -s tests`
+`tests/` — 225 unittest tests; the Textual pilots skip cleanly when
+the extra is missing. `python -m unittest discover -s tests`
 
 ## Deterministic prune
 
@@ -192,7 +223,7 @@ Every model call prints its window share with the parts that make it up:
 `tools` = schemas riding along. Server-reported `input`/`output`
 accumulate in `<session-dir>/usage.json` (per-turn breakdowns plus
 lifetime totals, shown as `sess in/out` and in the session header), so
-the CLI — and later a TUI/GUI — read the same ledger. `request` /
+the CLI and the TUI read the same ledger. `request` /
 `response` events already carry `breakdown` + `usage_total` for that.
 `/usage [N]` prints the ledger; the `tokens` tool lets the model count
 any file or text with the same estimator instead of guessing. Every
@@ -213,6 +244,8 @@ python -m harness --yes "task"    # auto-approve (denylist still denied)
 Each prompt offers `(a)pprove turn / (s)ession / (d)eny` with a 120s
 default-deny timeout — the slot the future notification system will
 hook (`approval-wait` / `approval-result` events already fire for it).
+The TUI shows the same decision as an in-app modal with a countdown,
+same keys and same default-deny.
 Session approvals persist in `<session-dir>/approvals.json`, so "approved
 for this session" survives across turns and restarts; turn approvals
 clear every `run_turn`. The model's own `context.md` curation never
@@ -231,7 +264,7 @@ Tunable (config file, CLI flag wins):
 | `exec_timeout_max` | 300s | `--exec-timeout-max` |
 | `request_timeout` | 120s | `--request-timeout` (raise for ~100k prompts on slow local servers — prefill can take many minutes) |
 
-Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`.
+Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`, `--tui`, `--no-mouse`.
 
 ## Debugging
 

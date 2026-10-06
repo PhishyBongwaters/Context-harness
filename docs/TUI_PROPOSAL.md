@@ -1,7 +1,14 @@
-# TUI Proposal — separate Textual interface, CLI unchanged
+# TUI — separate Textual interface, CLI unchanged
 
-Status: **draft** (`feature/tui-proposal` branch — merge nothing to `main` until V1 scope is agreed).
-Track as feature request: paste this file body into a GitHub issue titled `TUI: Textual interface (CLI unchanged)`, or keep iterating here.
+Status: **shipped** (merged to `main`; tracked in issue #2). Phases 1-3
+landed: transcript + input + budget bar + status line, approval modal,
+slash parity, session + provider/model pickers, provider registry
+with templates and reachability dots, drag-select + `ctrl+c` copy
+(transcript is a `Log`, not `RichLog`), `ctrl+c` never quits,
+`--no-mouse` for terminal-native selection, `tui-errors.log` tee,
+transcript export (`ctrl+e`). This file is the design record; the
+README is the user-facing doc. Not built yet: streaming, multi-session
+splits, notifications (Phase 4).
 
 ## 1. Goal
 
