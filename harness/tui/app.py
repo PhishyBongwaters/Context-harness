@@ -41,6 +41,12 @@ if _HAS:
                     ("d", "deny", "Deny"),
                     ("escape", "deny", "Deny")]
 
+        CSS = ("ApprovalScreen { align: center middle; } "
+               "#approval-box { width: 64; height: auto; "
+               "border: thick $primary; background: $surface; padding: 1 2; } "
+               "#approval-title { text-style: bold; } "
+               "#approval-count { color: $warning; }")
+
         def __init__(self, info: dict, box: dict):
             super().__init__()
             self._info = info
@@ -96,8 +102,7 @@ if _HAS:
         CSS = ("#transcript { height: 1fr; } #budget { height: 1; } "
                "#status { height: 1; } #input { height: 3; } "
                "#debug { height: 8; display: none; } "
-               "#budget.warn { color: yellow; } #budget.over { color: red; } "
-               "#approval-box { padding: 1 2; }")
+               "#budget.warn { color: yellow; } #budget.over { color: red; }")
 
         BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail")]
 
