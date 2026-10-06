@@ -161,3 +161,39 @@ All green in CI-equivalent: `python -m unittest discover -s tests`
 
 *Next action: Phase 3 (session/project switching, /usage pane,
 config/providers/models views, debug tail toggle).*
+
+---
+
+## 13. Pickers: sessions (ctrl+s) + provider/model (ctrl+p)
+
+Bindings: `ctrl+s` opens the session picker, `ctrl+p` opens the
+provider picker. `/open`/`/list` keep working as before.
+
+- Session picker lists `sessions_info(cfg)` rows newest-first:
+  `*` = current, `[project]` tag, `N tokens` best-effort (never
+  throws, never creates a context file). `Enter` opens via
+  `control.do_open` + `_sync_state`; `n` creates new via
+  `control.do_new` + `_sync_state`; `esc` closes.
+- Provider picker is two steps: provider ChoiceList
+  (openai/anthropic/nvidia, current marked), then a model list
+  fetched in a worker thread via `control.models_lines()` (fetching
+  status shown, error line on failure) plus a free-text input for a
+  custom id (empty falls back to the current model).
+- Confirm calls `retarget_loop(box, cfg, args, provider, model)`,
+  which mirrors `_build_loop` provider-override semantics exactly:
+  `base_url` resets to the new provider default unless explicitly
+  set, `api_key_env` reloads from the environment, `_require_key`
+  gates main + prune, `prune_*` falls back to main. The live
+  `Loop.provider`/`prune_provider` are swapped in place —
+  session/tracker/approver are untouched. Missing key raises
+  (`SystemExit`); the picker shows the error and keeps the old
+  provider/model.
+- The header always shows the effective provider/model: `_sync_state`
+  refreshes labels from `control.get_provider_model()` (else `cfg`),
+  so picker retargets and session switches never leave stale labels.
+
+Still manual: project switching stays `/project`; no streaming;
+`/models` remains a read-only view (the picker is the switch path).
+Manual checks: `pip install -r requirements-tui.txt` if needed,
+`--tui`, `ctrl+s` open/new, `ctrl+p` provider+model switch
+including the missing-key path.

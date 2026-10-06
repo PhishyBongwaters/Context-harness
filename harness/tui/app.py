@@ -14,11 +14,40 @@ try:
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+    from textual.widgets import (Footer, Header, Input, Label, OptionList,
+                                 RichLog, Static)
+    from textual.widgets.option_list import Option
 
     _HAS = True
 except ImportError:  # textual extra missing
     _HAS = False
+
+# Stdlib-only picker helpers (no Textual needed).
+
+
+def format_session_row(row: dict) -> str:
+    """One picker line: current marker, id, project tag, tokens."""
+    mark = "*" if row.get("current") else " "
+    proj = f" [{row['project']}]" if row.get("project") else ""
+    toks = row.get("tokens")
+    tk = f" {toks:,} tokens" if isinstance(toks, int) else ""
+    return f"{mark} {row.get('id', '?')}{proj}{tk}"
+
+
+def parse_model_ids(lines) -> list[str]:
+    """Model ids from models_lines output (skip headers/errors)."""
+    ids: list[str] = []
+    for line in lines or []:
+        if isinstance(line, str) and line.startswith("  "):
+            s = line.strip()
+            if s and not s.startswith("..."):
+                ids.append(s)
+    return ids
+
+
+def format_provider_row(name: str, current: str | None) -> str:
+    mark = "*" if name == current else " "
+    return f"{mark} {name}"
 
 if _HAS:
     from .approvals import TUIApprover, approval_brief
@@ -98,13 +127,224 @@ if _HAS:
             self._resolve("deny")
 
 
+    PICKER_PROVIDERS = ("openai", "anthropic", "nvidia")
+
+
+    class SessionPickerScreen(ModalScreen):
+        """Session list, newest-first. Enter opens, n makes new."""
+
+        BINDINGS = [("escape", "close", "Close"),
+                    ("n", "new_session", "New session")]
+
+        CSS = ("SessionPickerScreen { align: center middle; } "
+               "#sess-box { width: 72; height: 24; "
+               "border: thick $primary; background: $surface; padding: 1 2; }")
+
+        def __init__(self, rows):
+            super().__init__()
+            self._rows = list(rows or [])
+
+        def compose(self) -> "ComposeResult":
+            with Vertical(id="sess-box"):
+                yield Label("[sessions] enter=open, n=new, esc=close",
+                            id="sess-title")
+                yield OptionList(id="sessions")
+                yield Label("current marked *", id="sess-hint")
+
+        def on_mount(self) -> None:
+            opts = [Option(format_session_row(r), id=r.get("id"))
+                    for r in self._rows]
+            lst = self.query_one("#sessions", OptionList)
+            if opts:
+                lst.add_options(opts)
+            else:
+                lst.add_option(Option("(no sessions)", id="__none__"))
+            lst.focus()
+
+        def choose(self, sid: str) -> None:
+            if sid and sid != "__none__":
+                run = getattr(self.app, "_open_picked_session", None)
+                if callable(run):
+                    run(sid)
+            try:
+                self.app.pop_screen()
+            except Exception:
+                pass
+
+        def on_option_list_option_selected(
+                self, event: "OptionList.OptionSelected") -> None:
+            self.choose(event.option_id)
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+        def action_new_session(self) -> None:
+            run = getattr(self.app, "_picker_new", None)
+            if callable(run):
+                run("")
+            try:
+                self.app.pop_screen()
+            except Exception:
+                pass
+
+
+    class ProviderScreen(ModalScreen):
+        """Step 1: pick a provider; step 2 pushes ModelScreen."""
+
+        BINDINGS = [("escape", "close", "Close")]
+
+        CSS = ("ProviderScreen { align: center middle; } "
+               "#prov-box { width: 48; height: auto; "
+               "border: thick $primary; background: $surface; padding: 1 2; }")
+
+        def __init__(self, current: str | None = None):
+            super().__init__()
+            self._current = current
+
+        def compose(self) -> "ComposeResult":
+            with Vertical(id="prov-box"):
+                yield Label("[provider] enter=next, esc=close",
+                            id="prov-title")
+                yield OptionList(id="providers")
+
+        def on_mount(self) -> None:
+            lst = self.query_one("#providers", OptionList)
+            lst.add_options([Option(format_provider_row(p, self._current),
+                                    id=p) for p in PICKER_PROVIDERS])
+            lst.focus()
+
+        def choose(self, provider: str) -> None:
+            run = getattr(self.app, "_provider_chosen", None)
+            if callable(run):
+                run(provider)
+            # _provider_chosen pushes ModelScreen (which replaces us).
+
+        def on_option_list_option_selected(
+                self, event: "OptionList.OptionSelected") -> None:
+            if event.option_id:
+                self.choose(event.option_id)
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+
+    class ModelScreen(ModalScreen):
+        """Step 2: model list (worker fetch) + custom input."""
+
+        BINDINGS = [("escape", "close", "Close")]
+
+        CSS = ("ModelScreen { align: center middle; } "
+               "#model-box { width: 72; height: 26; "
+               "border: thick $primary; background: $surface; padding: 1 2; }")
+
+        def __init__(self, provider: str, current_model: str = "",
+                     control=None, cfg=None):
+            super().__init__()
+            self._provider = provider
+            self._current_model = current_model or ""
+            self._control = control
+            self._cfg = cfg
+
+        def compose(self) -> "ComposeResult":
+            with Vertical(id="model-box"):
+                yield Label(f"[models: {self._provider}]",
+                            id="model-title")
+                yield Label("fetching models...", id="model-status")
+                yield OptionList(id="models")
+                yield Input(value=self._current_model,
+                            placeholder="custom model id, Enter to use",
+                            id="model-input")
+                yield Label("enter=use selected/typed, esc=back",
+                            id="model-hint")
+
+        def on_mount(self) -> None:
+            self.query_one("#model-input", Input).focus()
+            threading.Thread(target=self._fetch, daemon=True,
+                             name="tui-models-picker").start()
+
+        def _fetch_lines(self):
+            try:
+                if self._control is not None and hasattr(
+                        self._control, "models_lines"):
+                    return list(self._control.models_lines())
+                if self._cfg is not None:
+                    from ..__main__ import models_lines
+                    return list(models_lines(self._cfg))
+            except Exception as e:  # noqa: BLE001 - shown, not raised
+                return [f"[models] error fetching models: {e}"]
+            return ["[models] unavailable"]
+
+        def _fetch(self) -> None:
+            lines = self._fetch_lines()
+            try:
+                self.app.call_from_thread(self.set_models, lines)
+            except Exception:
+                pass
+
+        def set_models(self, lines) -> None:
+            try:
+                status = self.query_one("#model-status", Label)
+                lst = self.query_one("#models", OptionList)
+            except Exception:
+                return
+            ids = parse_model_ids(lines)
+            err = next((l for l in (lines or [])
+                        if isinstance(l, str) and l.startswith("[models]")),
+                       "")
+            if ids:
+                status.update(f"{err} (or type custom below)"
+                              if err else f"{len(ids)} models")
+                lst.add_options([Option(m, id=m) for m in ids])
+                lst.add_option(Option("custom... (use input box)",
+                                      id="__custom__"))
+            else:
+                status.update((err or "[models] no models listed — "
+                               "type custom below"))
+
+        def confirm(self, model: str) -> None:
+            model = (model or "").strip() or self._current_model
+            if model == "__custom__":
+                try:
+                    model = (self.query_one("#model-input",
+                                            Input).value.strip()
+                             or self._current_model)
+                except Exception:
+                    model = self._current_model
+            if not model:
+                return
+            run = getattr(self.app, "_retarget_provider_model", None)
+            if callable(run):
+                run(self._provider, model)
+            try:
+                self.app.pop_screen()  # model screen
+                # Also drop the provider screen underneath, if present.
+                if isinstance(self.app.screen, ProviderScreen):
+                    self.app.pop_screen()
+            except Exception:
+                pass
+
+        def on_option_list_option_selected(
+                self, event: "OptionList.OptionSelected") -> None:
+            if event.option_id:
+                self.confirm(event.option_id)
+
+        def on_input_submitted(
+                self, event: "Input.Submitted") -> None:
+            self.confirm(event.value)
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+
     class HarnessApp(App):
         CSS = ("#transcript { height: 1fr; } #budget { height: 1; } "
                "#status { height: 1; } #input { height: 3; } "
                "#debug { height: 8; display: none; } "
                "#budget.warn { color: yellow; } #budget.over { color: red; }")
 
-        BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail")]
+        BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail"),
+                    ("ctrl+s", "open_sessions", "Sessions"),
+                    ("ctrl+p", "pick_provider", "Provider/model")]
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -231,6 +471,18 @@ if _HAS:
             except Exception as e:  # never break the turn loop
                 self._log(f"[error: session switch failed: {e}]")
                 return
+            # Header shows the EFFECTIVE provider/model: picker retarget
+            # mutates cfg, so prefer it (via control) over init values.
+            try:
+                get_pm = getattr(self._control, "get_provider_model", None)
+                if callable(get_pm):
+                    self._provider_name, self._model = get_pm()
+                elif self._cfg is not None:
+                    self._provider_name = getattr(
+                        self._cfg, "provider", self._provider_name)
+                    self._model = getattr(self._cfg, "model", self._model)
+            except Exception:
+                pass
             self._dedupe = TranscriptDedupe()  # don't leak pending lines
             self._wire_approver()  # attach() built a fresh approver
             self._title = (f"{self._session.id} "
@@ -305,6 +557,69 @@ if _HAS:
         def _models_done(self, lines) -> None:
             self._set_status("")
             self._log_lines(lines)
+
+        # --- session + provider/model pickers (ctrl+s / ctrl+p) ---
+
+        def _picker_rows(self):
+            try:
+                fn = getattr(self._control, "sessions_info", None)
+                if callable(fn):
+                    return list(fn())
+                if self._cfg is not None:
+                    from ..__main__ import sessions_info
+                    return list(sessions_info(self._cfg))
+            except Exception:
+                pass
+            return []
+
+        def _open_session_picker(self) -> None:
+            self.push_screen(SessionPickerScreen(self._picker_rows()))
+
+        def _open_picked_session(self, sid: str) -> None:
+            if self._control is not None:
+                self._log_lines(self._control.do_open(sid))
+                self._sync_state()
+
+        def _picker_new(self, rest: str = "") -> None:
+            if self._control is not None:
+                self._log_lines(self._control.do_new(rest))
+                self._sync_state()
+
+        def _open_provider_picker(self) -> None:
+            self.push_screen(ProviderScreen(current=self._provider_name))
+
+        def _provider_chosen(self, provider: str) -> None:
+            self.push_screen(ModelScreen(
+                provider, self._model,
+                control=self._control, cfg=self._cfg))
+
+        def _retarget_provider_model(self, provider: str,
+                                     model: str) -> bool:
+            """Retarget live loop; missing key keeps old, shows error."""
+            fn = (getattr(self._control, "do_retarget", None)
+                  if self._control is not None else None)
+            if not callable(fn):
+                self._log("[retarget] unavailable (no control)")
+                return False
+            try:
+                lines = fn(provider, model)
+            except SystemExit as e:
+                # _require_key path: keep old provider, show why.
+                msg = e.code if isinstance(e.code, str) else e
+                self._log(f"[retarget] {msg}")
+                return False
+            except Exception as e:  # noqa: BLE001 - show, don't crash
+                self._log(f"[retarget error: {e}]")
+                return False
+            self._sync_state()  # picks up box['loop'] + new labels
+            self._log_lines(lines)
+            return True
+
+        def action_open_sessions(self) -> None:
+            self._open_session_picker()
+
+        def action_pick_provider(self) -> None:
+            self._open_provider_picker()
 
         # --- debug tail toggle (best-effort, never breaks the turn) ---
 

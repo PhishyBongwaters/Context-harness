@@ -145,13 +145,41 @@ def parse_repl_command(text: str) -> tuple[str, str] | None:
     return parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
 
 
-def sessions_lines(cfg) -> list[str]:
-    """Session ids for /list, current marked. Pure (no printing)."""
+def sessions_info(cfg) -> list[dict]:
+    """Structured session rows, newest-first. Never throws per-row.
+
+    Each row: {id, current, project|None, tokens|None}. Project and
+    token reads are best-effort (missing/corrupt -> None); token
+    counting never creates a context file.
+    """
+    from .project import session_project
     sessions = _sessions(cfg)
     cur = _current_id(sessions)
-    return [f"{d}{' *' if d == cur else ''}"
-            for d in sorted(p.name for p in sessions.iterdir()
-                            if p.is_dir())]
+    ids = sorted((p.name for p in sessions.iterdir() if p.is_dir()),
+                 reverse=True)
+    rows: list[dict] = []
+    for sid in ids:
+        try:
+            proj = session_project(sessions / sid)
+        except Exception:
+            proj = None
+        toks = None
+        try:
+            from .context import ContextFile
+            ctx = sessions / sid / "context.md"
+            if ctx.is_file():
+                toks = ContextFile(ctx).tokens()
+        except Exception:
+            toks = None
+        rows.append({"id": sid, "current": sid == cur,
+                     "project": proj, "tokens": toks})
+    return rows
+
+
+def sessions_lines(cfg) -> list[str]:
+    """Session ids for /list, current marked. Pure (no printing)."""
+    rows = sorted(sessions_info(cfg), key=lambda r: r["id"])
+    return [f"{r['id']}{' *' if r['current'] else ''}" for r in rows]
 
 
 def _list_sessions(cfg) -> None:
@@ -408,6 +436,58 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 prune_section_cap=cfg.prune_section_cap)
 
 
+def retarget_loop(box: dict, cfg, args, provider: str, model: str):
+    """Retarget the live loop to provider/model without rebuilding.
+
+    Mirrors _build_loop's provider-override semantics exactly: base_url
+    resets to the new provider default unless explicitly set on args,
+    api_key_env reloads from the environment, _require_key gates both
+    main and prune, prune_* falls back to main. Mutates cfg + the live
+    loop in place; session/tracker/approver untouched. On failure the
+    old cfg is restored and the error propagates (caller keeps old).
+    """
+    old = (cfg.provider, cfg.model, cfg.base_url, cfg.api_key_env,
+           cfg.api_key)
+    cfg.provider = provider
+    if getattr(args, "base_url", None) is None:
+        default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
+        if default_url:
+            cfg.base_url = default_url
+    default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get(
+        "api_key_env")
+    if default_key_env:
+        cfg.api_key_env = default_key_env
+        cfg.api_key = os.environ.get(cfg.api_key_env)
+    cfg.model = model
+    try:
+        _require_key(cfg.provider, cfg.base_url, cfg.api_key,
+                     cfg.api_key_env, "main")
+        new_main = make_provider(cfg)
+        prune_provider = (getattr(cfg, "prune_provider", None)
+                          or cfg.provider)
+        prune_model = getattr(cfg, "prune_model", None) or cfg.model
+        prune_base_url = (getattr(cfg, "prune_base_url", None)
+                          or cfg.base_url)
+        prune_key_env = (getattr(cfg, "prune_api_key_env", None)
+                         or PROVIDER_DEFAULTS.get(prune_provider, {})
+                         .get("api_key_env"))
+        prune_key = (os.environ.get(prune_key_env)
+                     if prune_key_env else None)
+        _require_key(prune_provider, prune_base_url, prune_key,
+                     prune_key_env, "prune")
+        prune = make_provider(cfg, provider=prune_provider,
+                              model=prune_model, base_url=prune_base_url,
+                              api_key=prune_key)
+    except BaseException:
+        (cfg.provider, cfg.model, cfg.base_url, cfg.api_key_env,
+         cfg.api_key) = old
+        raise
+    loop = box["loop"]
+    loop.provider = new_main
+    loop.prune_provider = prune
+    return loop
+
+
 def main(argv: list[str] | None = None) -> int:
     try:  # model output may contain emoji; cp1252 consoles would crash
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -623,16 +703,30 @@ def main(argv: list[str] | None = None) -> int:
                 return box["session"].dir / "debug.jsonl"
             return None
 
+        def _tui_retarget(provider: str, model: str) -> list[str]:
+            retarget_loop(box, cfg, args, provider, model)
+            # Keep CLI-override display in sync so the header
+            # reflects the picker (not stale args).
+            try:
+                args.provider = provider
+                args.model = model
+            except Exception:
+                pass
+            return [_tui_header()]
+
         control = SimpleNamespace(
             do_new=_tui_new,
             do_open=_tui_open,
             do_project=_tui_project,
+            do_retarget=_tui_retarget,
             list_lines=lambda: sessions_lines(cfg),
+            sessions_info=lambda: sessions_info(cfg),
             usage_lines=lambda rest: usage_lines(box.get("tracker"), rest),
             config_lines=lambda: config_lines(cfg),
             providers_lines=providers_lines,
             models_lines=lambda: models_lines(cfg),
             get_tracker=lambda: box.get("tracker"),
+            get_provider_model=lambda: (cfg.provider, cfg.model),
             sync_state=lambda: (box["loop"], box["session"]),
             debug_path=_tui_debug_path,
         )
