@@ -12,19 +12,58 @@ from __future__ import annotations
 
 from pathlib import Path
 
+try:
+    from rich.syntax import Syntax
+    from rich.console import Console
+    _RICH_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _RICH_AVAILABLE = False
+
 # --- transcript formatting (moved from bridge.py, verbatim) ---
 
 
 def format_event(kind: str, data) -> str | None:
     """Render one loop event as a transcript line. None = not shown."""
     if kind == "assistant":
-        return data if isinstance(data, str) else str(data)
+        txt = data if isinstance(data, str) else str(data)
+        return f"[bold green]assistant[/]\n{txt}" if txt else None
     if kind == "tool":
         data = data or {}
+        name = data.get("name", "?")
         args = data.get("args") or {}
         brief = args.get("command") or args.get("path") or ""
         denied = " [denied]" if data.get("denied") else ""
-        return f"$ {data.get('name', '?')} {brief}{denied}".rstrip()
+        header = f"[dim]$ {name} {brief}{denied}[/]".rstrip()
+        # Inline syntax-highlighted view for write/edit of source files
+        if _RICH_AVAILABLE and name in ("write", "edit"):
+            path = args.get("path")
+            if path:
+                try:
+                    p = Path(path)
+                    if p.is_file():
+                        # Limit to reasonable size to keep TUI responsive
+                        try:
+                            text = p.read_text(encoding="utf-8", errors="replace")
+                        except OSError:
+                            text = ""
+                        if text:
+                            # Cap to ~20KB / 500 lines
+                            lines = text.splitlines()
+                            if len("\n".join(lines)) > 20000:
+                                lines = lines[:500]
+                                text = "\n".join(lines) + "\n…"
+                            try:
+                                syn = Syntax(text, lexer=None, theme="monokai", line_numbers=False)
+                                console = Console(record=True, color_system="standard", force_terminal=True)
+                                console.print(syn)
+                                code_blob = console.export_text(styles=True)
+                            except Exception:
+                                code_blob = text
+                            if code_blob:
+                                return f"{header}\n[bold]file[/] {p}\n{code_blob}"
+                except Exception:
+                    pass
+        return header
     if kind == "budget":
         data = data or {}
         return (f"[{str(data.get('status', '?')).upper()} budget: "
