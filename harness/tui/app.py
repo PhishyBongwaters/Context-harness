@@ -715,7 +715,7 @@ if _HAS:
                 self._transcript_lines.append(text)
             except AttributeError:
                 self._transcript_lines = [text]
-            self.query_one("#transcript", TranscriptLog).write(text)
+            self.query_one("#transcript", TranscriptLog).write_wrapped(text)
 
         def _export_transcript(self) -> None:
             """Copyable record: dump transcript lines to a session file.

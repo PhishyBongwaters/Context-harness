@@ -297,14 +297,106 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         def clear(self) -> None:
             self.update("")
 
-    class TranscriptLog(Log):
+    class WrappedLog(Log):
+        """Log + manual soft wrap (keeps drag-select working).
+
+        Log is the drag-selectable text widget, but it has no wrap
+        support -- long lines scroll horizontally, which reads terribly
+        for chat text. So: wrap each write to the widget width
+        (cell-aware, wide chars count 2) and rewrap everything on
+        terminal resize. Raw lines are kept for the rewrap; Log itself
+        keeps selection + ctrl+c copy on the wrapped lines.
+        """
+
+        MAX_LINES = 10_000
+
+        def __init__(self, *a, **k) -> None:
+            super().__init__(*a, **k)
+            self._raw: list[str] = []
+            self._wrap_w = 0
+
+        def _wrap_width(self) -> int:
+            try:
+                w = self.size.width
+            except Exception:
+                w = 0
+            if not w:
+                return 78  # not laid out yet; first resize corrects it
+            # size is the outer box, so scrollbar show/hide can't change
+            # it and rewraps can't oscillate. -2 keeps lines under the
+            # scrollable width even when the vertical scrollbar shows.
+            return max(20, w - 2)
+
+        @staticmethod
+        def _wrap(text: str, width: int) -> list[str]:
+            """Greedy wrap by display cells (rich cell_len), not chars."""
+            from rich.cells import cell_len
+
+            def _wrap_line(line: str) -> list[str]:
+                if not line:
+                    return [""]
+                if cell_len(line) <= width:
+                    return [line]
+                out: list[str] = []
+                cur = ""
+                for word in line.split(" "):
+                    # Hard-break words wider than the pane.
+                    while cell_len(word) > width:
+                        if cur:
+                            out.append(cur)
+                            cur = ""
+                        n = width
+                        while cell_len(word[:n]) > width and n > 1:
+                            n -= 1
+                        out.append(word[:n])
+                        word = word[n:]
+                    cand = word if not cur else cur + " " + word
+                    if cur and cell_len(cand) > width:
+                        out.append(cur)
+                        cur = word
+                    else:
+                        cur = cand
+                if cur or not out:
+                    out.append(cur)
+                return out
+
+            return [l for part in (str(text).splitlines() or [str(text)])
+                    for l in _wrap_line(part)]
+
+        def write_wrapped(self, text: str) -> None:
+            self._raw.append(text)
+            if len(self._raw) > self.MAX_LINES:
+                del self._raw[:len(self._raw) - self.MAX_LINES]
+            for line in self._wrap(text, self._wrap_width()):
+                # write(), not write_line, CONCATENATES newline-less
+                # strings into one line -- wrapped chunks must each be
+                # their own line.
+                self.write_line(line)
+
+        def clear_all(self) -> None:
+            self._raw.clear()
+            self.clear()
+
+        def rewrap(self) -> None:
+            w = self._wrap_width()
+            if w == self._wrap_w:
+                return
+            self._wrap_w = w
+            self.clear()
+            for text in self._raw:
+                for line in self._wrap(text, w):
+                    self.write_line(line)
+
+        def on_resize(self, event) -> None:
+            self.rewrap()
+
+    class TranscriptLog(WrappedLog):
         """Transcript with a deduping write helper.
 
         Log (not RichLog): RichLog is a scroll *container*, which
         Textual's text-selection machinery never targets -- Log is a
         plain leaf widget with drag-select support built in (plus
-        get_selection for ctrl+c copy). No wrap kwarg; long lines
-        scroll horizontally instead of reflowing.
+        get_selection for ctrl+c copy). Wrapping comes from WrappedLog.
         """
 
         def __init__(self, *a, **k) -> None:
@@ -313,19 +405,19 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
 
         def write_entries(self, entries: list) -> None:
             for line in self._dedupe.feed(entries):
-                self.write(line)
+                self.write_wrapped(line)
 
-    class DebugPanel(Log):
+    class DebugPanel(WrappedLog):
         """Live tail of the session debug.jsonl (best-effort)."""
 
         def refresh_from(self, path: str | Path | None,
                          n: int = DEBUG_TAIL_LINES) -> None:
             try:
-                self.clear()
+                self.clear_all()
             except Exception:
                 return
             for line in debug_panel_lines(path, n):
                 try:
-                    self.write(line)
+                    self.write_wrapped(line)
                 except Exception:
                     return

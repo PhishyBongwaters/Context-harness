@@ -410,6 +410,37 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertFalse(app.screen._selecting)
 
+    async def test_transcript_wraps_and_rewraps(self):
+        # Regression: the Log switch (for drag-select) dropped RichLog's
+        # wrap=True -- long lines scrolled horizontally. WrappedLog must
+        # wrap to the pane width and rewrap on resize, keeping selection.
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test(size=(60, 20)) as pilot:
+                tl = app.query_one("#transcript")
+                app._log("word " * 60)  # 300 chars, spaces to wrap on
+                app._log("x" * 400)     # pathological long single word
+                await pilot.pause()
+                # No horizontal overflow: everything fits the pane.
+                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
+                for line in tl.lines:
+                    if line:
+                        # ASCII test lines: char len == cell len <= wrap w
+                        self.assertLessEqual(
+                            len(line), tl.size.width - 2,
+                            f"line exceeds wrap width: {line[:60]!r}")
+                # Narrow the terminal: content rewraps, still no overflow.
+                await pilot.resize_terminal(40, 20)
+                await pilot.pause()
+                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
+                # Widen again: still consistent, raw lines preserved.
+                await pilot.resize_terminal(80, 24)
+                await pilot.pause()
+                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
+                self.assertTrue(any("word word" in l for l in tl.lines))
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 
