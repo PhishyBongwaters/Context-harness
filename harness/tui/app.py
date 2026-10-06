@@ -658,8 +658,26 @@ if _HAS:
             self.title = self._title or "harness"
             self._wire_approver()
             self.set_interval(0.1, self._poll)
+            self._focus_input()
             if self._initial:
                 self._submit(self._initial)
+
+        def _focus_input(self) -> None:
+            """Pin focus to the input box (main screen only).
+
+            Input is the sole focusable widget on the main screen, so
+            any other focus there means keystrokes vanish -- typically
+            after a dialog closes. Modal screens manage their own
+            focus and are left alone.
+            """
+            try:
+                if isinstance(self.screen, ModalScreen):
+                    return
+                box = self.query_one("#input", Input)
+                if self.screen.focused is not box:
+                    box.focus()
+            except Exception:
+                pass
 
         def _wire_approver(self) -> None:
             approver = getattr(self._agent_loop, "approver", None)
@@ -751,6 +769,7 @@ if _HAS:
             self._tick_status()
             if self._debug_visible:
                 self._refresh_debug()
+            self._focus_input()
 
         # --- slash parity with the CLI REPL ---
 

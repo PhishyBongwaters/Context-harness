@@ -335,6 +335,34 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("[tui keys]", text)
                 self.assertIn("ctrl+c", text)
 
+    async def test_focus_returns_to_input_after_dialog(self):
+        from textual.widgets import Input
+        from harness.tui.app import SessionPickerScreen
+        control = SimpleNamespace(
+            do_open=lambda sid: [f"opened {sid}"],
+            do_new=lambda rest="": ["new session"],
+            sync_state=lambda: (control.loop, control.sess),
+            sessions_info=lambda: [
+                {"id": "b", "current": False, "project": None,
+                 "tokens": None}],
+            get_provider_model=lambda: ("openai", "m"),
+            loop=SimpleNamespace(approver=None), sess=None)
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                self.assertIsInstance(app.screen.focused, Input)
+                app._open_session_picker()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, SessionPickerScreen)
+                await pilot.press("escape")
+                await pilot.pause()
+                await pilot.pause()
+                self.assertNotIsInstance(app.screen,
+                                         SessionPickerScreen)
+                self.assertIsInstance(app.screen.focused, Input)
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 
