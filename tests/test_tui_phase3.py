@@ -251,6 +251,21 @@ class TestAppPhase3(unittest.TestCase):
                                          StatusLine)
         self.assertTrue(BudgetBar and DebugPanel and StatusLine)
 
+    def test_no_mouse_construct(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from harness.loop import Session
+        from harness.tui.app import HarnessApp
+        from harness.tui.bridge import TuiBridge
+        with tempfile.TemporaryDirectory() as d:
+            sdir = Path(d) / "s1"
+            sdir.mkdir(exist_ok=True)
+            sess = Session(id="s1", dir=sdir, workdir=d)
+            app = HarnessApp(SimpleNamespace(approver=None), sess,
+                             TuiBridge(), mouse=False)
+            self.assertIsNotNone(app)
+
 
 if __name__ == "__main__":
     unittest.main()

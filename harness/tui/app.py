@@ -39,6 +39,7 @@ TUI_KEYS_HELP = [
     "  ctrl+s sessions   ctrl+o provider/model   ctrl+d debug tail",
     "  ctrl+e export transcript to a file (copy from there)",
     "  drag with the mouse to select transcript text, ctrl+c copies",
+    "  (no mouse? restart with --no-mouse for terminal selection)",
     "  a/s/d/esc in approval + picker dialogs",
 ]
 
@@ -618,8 +619,13 @@ if _HAS:
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
                      initial: str | None = None, cfg=None, control=None,
-                     debug_path=None, debug_path_getter=None):
+                     debug_path=None, debug_path_getter=None,
+                     mouse: bool = True):
+            # mouse=False leaves mouse events to the terminal: native
+            # selection/copy works, in-app mouse does nothing. Textual
+            # takes it on run(), so stash it for run_app.
             super().__init__()
+            self._tui_mouse = mouse
             self._agent_loop = loop
             self._session = session
             self._bridge = bridge
@@ -1085,7 +1091,8 @@ if _HAS:
                 return "<could not write tui-errors.log>"
 
     def run_app(loop, session, bridge, **kw) -> int:
-        HarnessApp(loop, session, bridge, **kw).run()
+        mouse = kw.get("mouse", True)
+        HarnessApp(loop, session, bridge, **kw).run(mouse=mouse)
         return 0
 
 else:  # fallback when the extra is missing

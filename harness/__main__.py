@@ -673,6 +673,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Explicit debug log path (implies --debug).")
     ap.add_argument("--tui", action="store_true",
                      help="Run the optional Textual TUI (needs the textual extra).")
+    ap.add_argument("--no-mouse", action="store_true",
+                     help="TUI: don't capture the mouse, so the terminal's "
+                          "own selection/copy works (keyboard still drives "
+                          "everything in-app).")
     ap.add_argument("--yes", action="store_true",
                     help="Auto-approve tool prompts (denylist still denied).")
     ap.add_argument("--approval-timeout", type=int, default=None,
@@ -899,7 +903,8 @@ def main(argv: list[str] | None = None) -> int:
                        provider_name=cfg.provider, model=cfg.model,
                        initial=" ".join(args.task) or None,
                        cfg=cfg, control=control,
-                       debug_path_getter=_tui_debug_path)
+                       debug_path_getter=_tui_debug_path,
+                       mouse=not getattr(args, "no_mouse", False))
 
     if args.task:
         return do_turn(" ".join(args.task))
