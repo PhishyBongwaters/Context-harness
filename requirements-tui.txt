@@ -1,0 +1,2 @@
+# Optional TUI extra (Phase 1). Core requirements.txt stays tiktoken-only.
+textual>=3,<4

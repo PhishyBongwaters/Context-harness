@@ -293,6 +293,14 @@ def _approver(cfg, args, session, on_event):
                     auto_approve=getattr(args, "yes", False))
 
 
+def _tui_approver(cfg, args, session, on_event):
+    from .tui.approvals import TUIApprover
+    timeout = getattr(args, "approval_timeout", None) or cfg.approval_timeout
+    return TUIApprover(session.dir, on_event=on_event,
+                       approval_timeout=timeout,
+                       auto_approve=getattr(args, "yes", False))
+
+
 def _build_loop(cfg, args, on_event=None, approver=None,
                 usage_tracker=None, project=None) -> Loop:
     if args.provider:
@@ -377,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Write a JSONL debug log next to the transcript.")
     ap.add_argument("--debug-file", default=None,
                     help="Explicit debug log path (implies --debug).")
+    ap.add_argument("--tui", action="store_true",
+                     help="Run the optional Textual TUI (needs the textual extra).")
     ap.add_argument("--yes", action="store_true",
                     help="Auto-approve tool prompts (denylist still denied).")
     ap.add_argument("--approval-timeout", type=int, default=None,
@@ -400,6 +410,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="Working directory for tools (default: cwd; with "
                          "--project, sets/updates the project workdir).")
     args = ap.parse_args(argv)
+    is_tui = getattr(args, "tui", False)
+    if is_tui:  # deferred import: CLI path never touches textual
+        from .tui import has_tui
+        if not has_tui():
+            print("TUI needs the extra: "
+                  "pip install -r requirements-tui.txt "
+                  "then run: python -m harness --tui",
+                  file=sys.stderr)
+            return 2
 
     if args.config:
         p = write_example_config()
@@ -433,6 +452,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             box["project"] = session_project(sess.dir)
 
+    if is_tui:
+        from .tui.bridge import TuiBridge
+        box["bridge"] = TuiBridge()
+
     def attach() -> None:
         sess = box["session"]
         tracker = UsageTracker(sess.dir)
@@ -449,16 +472,24 @@ def main(argv: list[str] | None = None) -> int:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
         elif args.debug:
             dbg = DebugLog(sess.dir / "debug.jsonl", session_id=sess.id)
-        handler = dbg.handler(_print_event) if dbg else _print_event
+        if is_tui:
+            handler = (dbg.handler(box["bridge"]) if dbg
+                       else box["bridge"])
+        else:
+            handler = dbg.handler(_print_event) if dbg else _print_event
         if dbg:
             dbg.write("session", {"id": sess.id,
                                   "provider": cfg.provider, "model": cfg.model,
                                   "ctx": str(sess.context.path)})
             print(f"[debug log {dbg.path}]")
         box["on_event"] = handler
+        if is_tui:  # TUI never touches StdinPump (see TUIApprover)
+            approver = _tui_approver(cfg, args, sess, handler)
+        else:
+            approver = _approver(cfg, args, sess, handler)
         box["loop"] = _build_loop(
             cfg, args, on_event=handler,
-            approver=_approver(cfg, args, sess, handler),
+            approver=approver,
             usage_tracker=tracker, project=box["project"])
 
     if args.new or args.session:
@@ -503,6 +534,12 @@ def main(argv: list[str] | None = None) -> int:
                           else _new_session(cfg, _workdir(args)))
         stamp(box["session"])
         attach()
+
+    if is_tui:
+        from .tui.app import run_app
+        return run_app(box["loop"], box["session"], box["bridge"],
+                       provider_name=cfg.provider, model=cfg.model,
+                       initial=" ".join(args.task) or None)
 
     if args.task:
         return do_turn(" ".join(args.task))
