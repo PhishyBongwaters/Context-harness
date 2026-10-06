@@ -199,3 +199,52 @@ Still manual: project switching stays `/project`; no streaming;
 Manual checks: `pip install -r requirements-tui.txt` if needed,
 `--tui`, `ctrl+s` open/new, `ctrl+o` provider+model switch
 including the missing-key path.
+
+---
+
+## 14. Provider registry: named providers + templates + reachability
+
+Reference model (locked): the `provider` config field is a **registry
+name**; connection params resolve from the `providers` dict at load.
+Legacy kind names (`openai`/`anthropic`/`nvidia`) keep working when no
+registry entry matches. Reachability is display-only (dot, never
+blocks). `nvidia` stays its own kind.
+
+Schema (`harness/config.py` — `Config.providers`, `DEFAULTS`
+`providers: {}`):
+
+```json
+{ "provider": "mylocal",
+  "providers": {
+    "mylocal": { "kind": "openai",
+                 "base_url": "http://127.0.0.1:8080/v1",
+                 "model": "Qwen", "api_key_env": null } } }
+```
+
+- `resolve_provider(cfg)` is the single funnel: registry hit → entry
+  fields fall back per-field to that kind's `PROVIDER_DEFAULTS`, key
+  from env (`api_key_env: null` = local, no key); else the legacy
+  path, byte-identical to the old `load_config` post-processing.
+  `_build_loop`, `retarget_loop`, `models_lines`, and the header all
+  route through it. Empty `providers` → no behavior change.
+- Templates (`PROVIDER_TEMPLATES`): `openai-cloud`, `anthropic-cloud`,
+  `nvidia-cloud`, `llama.cpp`, `lmstudio`, `ollama` — prefill only,
+  never auto-seeded. No auto-migration, no config rewrites.
+- `save_provider_entry(path, name, entry, activate=True)` reads
+  `config.json` raw (unknown keys preserved), upserts, optionally
+  activates. Add-flow validates: non-empty unique name, known kind,
+  non-empty model.
+- `probe_provider(base_url, kind)` → `True`/`False`/`None` (`None`
+  when no `base_url` or kind is `anthropic`); stdlib `urllib` GET of
+  `{base}/models`, all exceptions → `False`. Picker rows and CLI
+  `/providers` only.
+- CLI: `--provider` takes a registry name or kind (registry first).
+  `/providers` lists entries (`●`/`○`/`·` dot, `*` active) or the
+  legacy kind list when empty; `/providers save-current <name>`
+  snapshots the live legacy connection.
+- Picker (`ctrl+o`): registry entries + `+ add provider` row (legacy
+  kinds shown while the registry is empty). Selecting an entry dives
+  to the model list; confirming a model persists it to that entry
+  (registry is the source of truth; CLI `--model` stays ephemeral).
+  Add flow: template list → prefilled form → `save_provider_entry` +
+  retarget; errors inline, `esc` backs out.

@@ -30,6 +30,8 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from urllib import request as _urlrequest
 
 DEFAULTS = {
     "provider": "openai",
@@ -49,6 +51,50 @@ DEFAULTS = {
     "prune_target": None,  # deterministic stages aim here (null -> soft)
     "prune_keep_tools": 5,  # newest tool sections exempt from eviction
     "prune_section_cap": 8000,  # per-section token cap (head+tail kept)
+    "providers": {},  # named registry: name -> {kind, base_url, model,
+    #   api_key_env}; "provider" names a registry entry when it matches,
+    #   else a legacy kind (openai/anthropic/nvidia)
+}
+
+# Add-flow starting points (prefilled into the form, never auto-seeded
+# into the user's config). api_key_env None = local server, no key.
+PROVIDER_TEMPLATES = {
+    "openai-cloud": {
+        "kind": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5",
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "anthropic-cloud": {
+        "kind": "anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+        "model": "claude-opus-4-1-20250822",
+        "api_key_env": "ANTHROPIC_API_KEY",
+    },
+    "nvidia-cloud": {
+        "kind": "nvidia",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "model": "",
+        "api_key_env": "NVIDIA_API_KEY",
+    },
+    "llama.cpp": {
+        "kind": "openai",
+        "base_url": "http://127.0.0.1:8080/v1",
+        "model": "",
+        "api_key_env": None,
+    },
+    "lmstudio": {
+        "kind": "openai",
+        "base_url": "http://localhost:1234/v1",
+        "model": "",
+        "api_key_env": None,
+    },
+    "ollama": {
+        "kind": "openai",
+        "base_url": "http://localhost:11434/v1",
+        "model": "",
+        "api_key_env": None,
+    },
 }
 
 PROVIDER_DEFAULTS = {
@@ -115,6 +161,7 @@ class Config:
     prune_model: str | None = None
     prune_base_url: str | None = None
     prune_api_key_env: str | None = None
+    providers: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.sessions_dir:
@@ -191,18 +238,31 @@ def load_config(path: str | Path | None = None,
     merged.update(raw)
     if not merged.get("sessions_dir"):
         merged["sessions_dir"] = default_sessions_dir()
-    provider = merged.get("provider", "openai")
-    pdefs = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
-    if not merged.get("base_url"):
-        merged["base_url"] = pdefs["base_url"]
-    if not merged.get("api_key_env"):
-        merged["api_key_env"] = pdefs["api_key_env"]
+    providers = merged.get("providers") or {}
+    if not isinstance(providers, dict):
+        providers = {}
+    # All connection decisions go through resolve_provider: a registry
+    # hit resolves entry fields (falling back to kind defaults), else
+    # the legacy path below is identical to the old post-processing.
+    _tmp = SimpleNamespace(
+        provider=merged.get("provider", "openai"),
+        model=merged.get("model", "gpt-5"),
+        base_url=merged.get("base_url"),
+        api_key_env=merged.get("api_key_env"),
+        api_key=None,
+        providers=providers,
+    )
+    res = resolve_provider(_tmp)
+    merged["base_url"] = res.base_url
+    merged["api_key_env"] = res.api_key_env
+    if res.registry_hit and res.model:
+        merged["model"] = res.model
 
     key_env = merged["api_key_env"]
-    api_key = os.environ.get(key_env)
+    api_key = os.environ.get(key_env) if key_env else None
 
     return Config(
-        provider=provider,
+        provider=merged.get("provider", "openai"),
         model=merged.get("model", "gpt-5"),
         base_url=merged["base_url"],
         api_key_env=key_env,
@@ -223,7 +283,159 @@ def load_config(path: str | Path | None = None,
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
         prune_api_key_env=merged.get("prune_api_key_env"),
+        providers=providers,
     )
+
+
+def resolve_provider(cfg) -> SimpleNamespace:
+    """Resolve connection params for cfg.provider (registry name or kind).
+
+    Registry hit (cfg.provider names an entry in cfg.providers): entry
+    fields fall back per-field to that kind's PROVIDER_DEFAULTS, api_key
+    from the environment (None key_env = local, no key). Else the legacy
+    path: kind = cfg.provider, base_url/api_key_env default per kind.
+    Returns namespace(kind, model, base_url, api_key_env, api_key,
+    name, registry_hit). Display-only reachability lives in probe_provider.
+    """
+    providers = getattr(cfg, "providers", None) or {}
+    name = getattr(cfg, "provider", "openai")
+    entry = providers.get(name) if isinstance(providers, dict) else None
+    if isinstance(entry, dict):
+        kind = entry.get("kind") or "openai"
+        pdefs = PROVIDER_DEFAULTS.get(kind, PROVIDER_DEFAULTS["openai"])
+        base_url = entry.get("base_url") or pdefs["base_url"]
+        model = entry.get("model") or getattr(cfg, "model", "") or ""
+        if "api_key_env" in entry:
+            key_env = entry["api_key_env"]  # explicit null = local/no key
+        else:
+            key_env = pdefs["api_key_env"]
+        api_key = os.environ.get(key_env) if key_env else None
+        return SimpleNamespace(kind=kind, model=model, base_url=base_url,
+                               api_key_env=key_env, api_key=api_key,
+                               name=name, registry_hit=True)
+    pdefs = PROVIDER_DEFAULTS.get(name, PROVIDER_DEFAULTS["openai"])
+    base_url = getattr(cfg, "base_url", None) or pdefs["base_url"]
+    key_env = getattr(cfg, "api_key_env", None) or pdefs["api_key_env"]
+    api_key = os.environ.get(key_env) if key_env else None
+    if api_key is None and getattr(cfg, "api_key", None):
+        # Keep an explicitly attached key (e.g. test fixtures) when the
+        # environment has nothing for this key env.
+        api_key = cfg.api_key
+    return SimpleNamespace(kind=name, model=getattr(cfg, "model", "gpt-5"),
+                           base_url=base_url, api_key_env=key_env,
+                           api_key=api_key, name=name, registry_hit=False)
+
+
+def probe_provider(base_url: str | None, kind: str | None,
+                   timeout: int = 5) -> bool | None:
+    """Display-only reachability: True/False, None when not probeable.
+
+    None when there is no base_url or kind is anthropic (no /models
+    endpoint). Otherwise GET {base_url}/models via stdlib; any failure
+    (DNS, refused, timeout, HTTP error) is False. Never raises, never
+    blocks connection decisions.
+    """
+    if not base_url or (kind or "") == "anthropic":
+        return None
+    url = base_url.rstrip("/") + "/models"
+    try:
+        req = _urlrequest.Request(url, headers={"Accept": "application/json"},
+                                  method="GET")
+        with _urlrequest.urlopen(req, timeout=timeout) as resp:
+            resp.read(1)
+        return True
+    except Exception:
+        return False
+
+
+def validate_provider_entry(name: str, entry: dict,
+                            existing: dict | None = None,
+                            require_unique: bool = False) -> dict:
+    """Check an add-flow entry; returns a cleaned copy. Raises ValueError.
+
+    Name must be non-empty (unique among existing when require_unique),
+    kind known, model non-empty.
+    """
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("provider name must be non-empty")
+    if require_unique and existing is not None and clean_name in existing:
+        raise ValueError(f"provider '{clean_name}' already exists")
+    if not isinstance(entry, dict):
+        raise ValueError("provider entry must be an object")
+    kind = (entry.get("kind") or "").strip()
+    if kind not in PROVIDER_DEFAULTS:
+        raise ValueError(
+            f"unknown kind '{kind}' (expected one of "
+            f"{sorted(PROVIDER_DEFAULTS)})")
+    model = (entry.get("model") or "").strip()
+    if not model:
+        raise ValueError("model must be non-empty")
+    base_url = (entry.get("base_url") or "").strip() or None
+    key_env = entry.get("api_key_env")
+    if isinstance(key_env, str):
+        key_env = key_env.strip() or None
+    elif key_env is not None:
+        raise ValueError("api_key_env must be a string or null")
+    return {"kind": kind, "base_url": base_url, "model": model,
+            "api_key_env": key_env}
+
+
+def save_provider_entry(path: str | Path, name: str, entry: dict,
+                        activate: bool = True) -> Path:
+    """Upsert providers[name] in config.json, preserving unknown keys.
+
+    Reads the file raw ({} when missing), validates the entry, writes
+    back; sets top-level provider=name when activate. Returns the path.
+    """
+    target = Path(path)
+    raw: dict = {}
+    if target.exists():
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raw = {}
+    providers = raw.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+    clean = validate_provider_entry(name, entry, providers)
+    clean_name = (name or "").strip()
+    providers[clean_name] = clean
+    raw["providers"] = providers
+    if activate:
+        raw["provider"] = clean_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
+def snapshot_current(cfg) -> dict:
+    """Registry entry snapshotting the live resolved connection."""
+    res = resolve_provider(cfg)
+    return {"kind": res.kind, "base_url": res.base_url,
+            "model": getattr(cfg, "model", res.model),
+            "api_key_env": res.api_key_env}
+
+
+def save_current_provider(cfg, name: str,
+                           path: str | Path | None = None) -> list[str]:
+    """Snapshot the live connection into the registry under name."""
+    target = Path(path) if path else config_path()
+    providers = getattr(cfg, "providers", None) or {}
+    clean_name = (name or "").strip()
+    if not clean_name:
+        return ["usage: /providers save-current <name>"]
+    if isinstance(providers, dict) and clean_name in providers:
+        return [f"[providers] '{clean_name}' already exists"]
+    try:
+        entry = snapshot_current(cfg)
+        saved = validate_provider_entry(clean_name, entry, providers)
+    except ValueError as e:
+        return [f"[providers] cannot snapshot: {e}"]
+    save_provider_entry(target, clean_name, saved, activate=False)
+    if isinstance(getattr(cfg, "providers", None), dict):
+        cfg.providers[clean_name] = saved
+    return [f"[providers] saved '{clean_name}' "
+            f"({saved['kind']}/{saved['model']})"]
 
 
 def write_example_config(path: str | Path | None = None) -> Path:
@@ -250,6 +462,7 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "prune_target": None,
         "prune_keep_tools": 5,
         "prune_section_cap": 8000,
+        "providers": {},
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "
@@ -258,7 +471,10 @@ def write_example_config(path: str | Path | None = None) -> Path:
             "prune_* selects the janitor model for prune-only turns "
             "(e.g. a small local model); each falls back to the main "
             "setting when null. approval_timeout is how long an approval "
-            "prompt waits (seconds); exec_timeout/max bound tool runtime."
+            "prompt waits (seconds); exec_timeout/max bound tool runtime. "
+            "providers maps a name to {kind, base_url, model, api_key_env} "
+            "(api_key_env null = local, no key); provider names a registry "
+            "entry when it matches, else a kind (openai/anthropic/nvidia)."
         ),
     }
     target.write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")

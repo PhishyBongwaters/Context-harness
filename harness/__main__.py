@@ -15,8 +15,10 @@ import datetime
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
+                     probe_provider, resolve_provider, save_current_provider,
                      write_example_config)
 from .context import Budget
 from .loop import BudgetExceeded, Loop, Session
@@ -241,7 +243,8 @@ REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/list        list sessions (* = current)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/config      show effective config (redacted)\n"
-             "/providers   list known providers\n"
+             "/providers   list known providers (registry entries when set)\n"
+             "/providers save-current <name>  snapshot live connection\n"
              "/models      list models from current provider (OpenAI-compatible)\n"
              "/help        this list\n"
              "/quit        leave (empty line also quits)")
@@ -274,17 +277,38 @@ def _show_config(cfg) -> None:
         print(line)
 
 
-def providers_lines() -> list[str]:
-    """Known providers. Pure (no printing)."""
-    from .config import PROVIDER_DEFAULTS
+def providers_lines(cfg=None, _probe=None) -> list[str]:
+    """Known providers. Pure except the registry reachability dots.
+
+    Registry non-empty: one row per entry (dot, * = active). Else the
+    legacy kind list. Dots are display-only, never block.
+    """
+    providers = getattr(cfg, "providers", None) if cfg is not None else None
+    if isinstance(providers, dict) and providers:
+        probe = _probe or probe_provider
+        lines = ["[providers]"]
+        for name in sorted(providers):
+            entry = providers[name] or {}
+            kind = entry.get("kind", "?")
+            model = entry.get("model", "")
+            base = entry.get("base_url", "")
+            try:
+                state = probe(base, kind)
+            except Exception:
+                state = False
+            dot = "●" if state is True else ("○" if state is False else "·")
+            star = (" *" if getattr(cfg, "provider", None) == name else "")
+            lines.append(f"  {dot} {name}{star}: kind={kind} "
+                         f"model={model} base_url={base}")
+        return lines
     return (["[providers]"]
             + [f"  {name}: base_url={meta.get('base_url')} "
                f"api_key_env={meta.get('api_key_env')}"
                for name, meta in sorted(PROVIDER_DEFAULTS.items())])
 
 
-def _show_providers() -> None:
-    for line in providers_lines():
+def _show_providers(cfg=None) -> None:
+    for line in providers_lines(cfg):
         print(line)
 
 
@@ -295,9 +319,11 @@ def models_lines(cfg) -> list[str]:
     """
     import urllib.request
     import json
-    # Only OpenAI-compatible providers support /v1/models
-    if cfg.provider not in ("openai", "nvidia"):
-        return [f"[models] provider {cfg.provider} does not support "
+    # Only OpenAI-compatible kinds support /v1/models (registry names
+    # resolve to their kind first).
+    kind = resolve_provider(cfg).kind
+    if kind not in ("openai", "nvidia"):
+        return [f"[models] provider {kind} does not support "
                 "/v1/models listing"]
     base = (cfg.base_url or "").rstrip("/")
     if not base:
@@ -374,21 +400,77 @@ def _tui_approver(cfg, args, session, on_event):
                        auto_approve=getattr(args, "yes", False))
 
 
+def _apply_provider_override(cfg, args, name: str) -> None:
+    """Apply a --provider/retarget name: registry entry first, legacy kind
+    fallback (with today's base_url-reset semantics). Mutates cfg."""
+    providers = getattr(cfg, "providers", None) or {}
+    cfg.provider = name
+    if isinstance(providers, dict) and name in providers:
+        res = resolve_provider(cfg)
+        if getattr(args, "base_url", None) is not None:
+            cfg.base_url = args.base_url
+        else:
+            cfg.base_url = res.base_url
+        cfg.api_key_env = res.api_key_env
+        cfg.api_key = res.api_key
+        if getattr(args, "model", None) is None and res.model:
+            cfg.model = res.model
+        return
+    # Legacy kind path, identical to the old inline block.
+    if getattr(args, "base_url", None) is None:
+        default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
+        if default_url:
+            cfg.base_url = default_url
+    default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get(
+        "api_key_env")
+    if default_key_env:
+        cfg.api_key_env = default_key_env
+        cfg.api_key = os.environ.get(cfg.api_key_env)
+
+
+def _resolved_kind(cfg) -> str:
+    """Effective kind for connection decisions (registry name -> kind)."""
+    return resolve_provider(cfg).kind
+
+
+def _prune_settings(cfg) -> tuple:
+    """(kind, model, base_url, key_env, key) for the janitor model.
+
+    Each prune_* falls back to main; a registry name resolves through
+    its entry, else the legacy path.
+    """
+    providers = getattr(cfg, "providers", None) or {}
+    prune_name = (getattr(cfg, "prune_provider", None) or cfg.provider)
+    if isinstance(providers, dict) and prune_name in providers:
+        tmp = SimpleNamespace(provider=prune_name,
+                              model=(getattr(cfg, "prune_model", None)
+                                     or cfg.model),
+                              base_url=None, api_key_env=None, api_key=None,
+                              providers=providers)
+        res = resolve_provider(tmp)
+        base_url = getattr(cfg, "prune_base_url", None) or res.base_url
+        key_env = getattr(cfg, "prune_api_key_env", None) or res.api_key_env
+        model = getattr(cfg, "prune_model", None) or res.model or cfg.model
+        key = os.environ.get(key_env) if key_env else None
+        return res.kind, model, base_url, key_env, key
+    model = getattr(cfg, "prune_model", None) or cfg.model
+    base_url = getattr(cfg, "prune_base_url", None) or cfg.base_url
+    if getattr(cfg, "prune_api_key_env", None):
+        key_env = cfg.prune_api_key_env
+    elif (prune_name == cfg.provider and base_url == cfg.base_url):
+        # Janitor is the main model: inherit its key env, which may be a
+        # custom value rather than the provider default (fixes #1).
+        key_env = cfg.api_key_env
+    else:
+        key_env = PROVIDER_DEFAULTS.get(prune_name, {}).get("api_key_env")
+    key = os.environ.get(key_env) if key_env else None
+    return prune_name, model, base_url, key_env, key
+
+
 def _build_loop(cfg, args, on_event=None, approver=None,
                 usage_tracker=None, project=None) -> Loop:
     if args.provider:
-        cfg.provider = args.provider
-        # Reset base_url to provider default when provider is overridden via CLI
-        # unless user explicitly set base_url in config or via CLI flag.
-        if getattr(args, "base_url", None) is None:
-            default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
-            if default_url:
-                cfg.base_url = default_url
-        # Update api_key_env to match new provider and reload api_key from env
-        default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("api_key_env")
-        if default_key_env:
-            cfg.api_key_env = default_key_env
-            cfg.api_key = os.environ.get(cfg.api_key_env)
+        _apply_provider_override(cfg, args, args.provider)
     if args.model:
         cfg.model = args.model
     if getattr(args, "request_timeout", None):
@@ -397,28 +479,28 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         cfg.budget_hard = args.budget_hard
     if getattr(args, "budget_soft", None):
         cfg.budget_soft = args.budget_soft
-    _require_key(cfg.provider, cfg.base_url, cfg.api_key, cfg.api_key_env,
+    kind = _resolved_kind(cfg)
+    # Sync display fields from the registry entry (no-op for legacy, so
+    # load_config values and CLI overrides keep working untouched).
+    res = resolve_provider(cfg)
+    if res.registry_hit:
+        if getattr(args, "base_url", None) is None:
+            cfg.base_url = res.base_url
+        cfg.api_key_env = res.api_key_env
+        cfg.api_key = res.api_key
+        if getattr(args, "model", None) is None and res.model:
+            cfg.model = res.model
+    _require_key(kind, cfg.base_url, cfg.api_key, cfg.api_key_env,
                  "main")
-    provider = make_provider(cfg)
+    provider = make_provider(cfg, provider=kind, model=cfg.model,
+                             base_url=cfg.base_url, api_key=cfg.api_key)
 
     # Janitor model for prune-only turns; each setting falls back to main.
-    prune_provider = cfg.prune_provider or cfg.provider
-    prune_model = cfg.prune_model or cfg.model
-    prune_base_url = cfg.prune_base_url or cfg.base_url
-    if cfg.prune_api_key_env:
-        prune_key_env = cfg.prune_api_key_env
-    elif (prune_provider == cfg.provider
-          and prune_base_url == cfg.base_url):
-        # Janitor is the main model: inherit its key env, which may be a
-        # custom value rather than the provider default.
-        prune_key_env = cfg.api_key_env
-    else:
-        prune_key_env = PROVIDER_DEFAULTS.get(prune_provider, {}).get(
-            "api_key_env")
-    prune_key = os.environ.get(prune_key_env) if prune_key_env else None
-    _require_key(prune_provider, prune_base_url, prune_key, prune_key_env,
+    prune_kind, prune_model, prune_base_url, prune_key_env, prune_key = \
+        _prune_settings(cfg)
+    _require_key(prune_kind, prune_base_url, prune_key, prune_key_env,
                  "prune")
-    prune = make_provider(cfg, provider=prune_provider, model=prune_model,
+    prune = make_provider(cfg, provider=prune_kind, model=prune_model,
                            base_url=prune_base_url, api_key=prune_key)
 
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
@@ -439,49 +521,72 @@ def _build_loop(cfg, args, on_event=None, approver=None,
 def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     """Retarget the live loop to provider/model without rebuilding.
 
-    Mirrors _build_loop's provider-override semantics exactly: base_url
-    resets to the new provider default unless explicitly set on args,
-    api_key_env reloads from the environment, _require_key gates both
-    main and prune, prune_* falls back to main. Mutates cfg + the live
-    loop in place; session/tracker/approver untouched. On failure the
-    old cfg is restored and the error propagates (caller keeps old).
+    Mirrors _build_loop's provider-override semantics exactly: registry
+    name first, legacy kind fallback (base_url resets to the new
+    provider default unless explicitly set on args), api_key_env
+    reloads from the environment, _require_key gates both main and
+    prune, prune_* falls back to main. A registry hit also persists
+    the model into that entry (registry is the source of truth; CLI
+    --model stays ephemeral). Mutates cfg + the live loop in place;
+    session/tracker/approver untouched. On failure the old cfg is
+    restored and the error propagates (caller keeps old).
     """
+    providers = getattr(cfg, "providers", None) or {}
+    old_entry = None
+    if isinstance(providers, dict) and provider in providers:
+        old_entry = dict(providers[provider])
     old = (cfg.provider, cfg.model, cfg.base_url, cfg.api_key_env,
            cfg.api_key)
     cfg.provider = provider
+    if old_entry is not None:
+        # Registry is the source of truth: persist the confirmed model.
+        providers[provider] = {**old_entry, "model": model}
     if getattr(args, "base_url", None) is None:
-        default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get("base_url")
-        if default_url:
-            cfg.base_url = default_url
-    default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get(
-        "api_key_env")
-    if default_key_env:
-        cfg.api_key_env = default_key_env
-        cfg.api_key = os.environ.get(cfg.api_key_env)
+        if old_entry is not None:
+            cfg.base_url = resolve_provider(cfg).base_url
+        else:
+            default_url = PROVIDER_DEFAULTS.get(cfg.provider, {}).get(
+                "base_url")
+            if default_url:
+                cfg.base_url = default_url
+    if old_entry is not None:
+        res = resolve_provider(cfg)
+        cfg.api_key_env = res.api_key_env
+        cfg.api_key = res.api_key
+    else:
+        default_key_env = PROVIDER_DEFAULTS.get(cfg.provider, {}).get(
+            "api_key_env")
+        if default_key_env:
+            cfg.api_key_env = default_key_env
+            cfg.api_key = os.environ.get(cfg.api_key_env)
     cfg.model = model
     try:
-        _require_key(cfg.provider, cfg.base_url, cfg.api_key,
+        kind = _resolved_kind(cfg)
+        _require_key(kind, cfg.base_url, cfg.api_key,
                      cfg.api_key_env, "main")
-        new_main = make_provider(cfg)
-        prune_provider = (getattr(cfg, "prune_provider", None)
-                          or cfg.provider)
-        prune_model = getattr(cfg, "prune_model", None) or cfg.model
-        prune_base_url = (getattr(cfg, "prune_base_url", None)
-                          or cfg.base_url)
-        prune_key_env = (getattr(cfg, "prune_api_key_env", None)
-                         or PROVIDER_DEFAULTS.get(prune_provider, {})
-                         .get("api_key_env"))
-        prune_key = (os.environ.get(prune_key_env)
-                     if prune_key_env else None)
-        _require_key(prune_provider, prune_base_url, prune_key,
+        new_main = make_provider(cfg, provider=kind, model=cfg.model,
+                                 base_url=cfg.base_url, api_key=cfg.api_key)
+        prune_kind, prune_model, prune_base_url, prune_key_env, prune_key = \
+            _prune_settings(cfg)
+        _require_key(prune_kind, prune_base_url, prune_key,
                      prune_key_env, "prune")
-        prune = make_provider(cfg, provider=prune_provider,
+        prune = make_provider(cfg, provider=prune_kind,
                               model=prune_model, base_url=prune_base_url,
                               api_key=prune_key)
     except BaseException:
         (cfg.provider, cfg.model, cfg.base_url, cfg.api_key_env,
          cfg.api_key) = old
+        if old_entry is not None:
+            providers[provider] = old_entry
         raise
+    if old_entry is not None:
+        # Best-effort file persist; in-memory entry already updated.
+        try:
+            from .config import save_provider_entry
+            save_provider_entry(config_path(), provider,
+                                providers[provider], activate=True)
+        except (OSError, ValueError):
+            pass
     loop = box["loop"]
     loop.provider = new_main
     loop.prune_provider = prune
@@ -502,7 +607,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true", help="List sessions.")
     ap.add_argument("--config", action="store_true",
                     help="Write an example config file.")
-    ap.add_argument("--provider", choices=["openai", "anthropic", "nvidia"])
+    ap.add_argument("--provider",
+                      help="Registry name or kind "
+                           "(openai/anthropic/nvidia); registry first, "
+                           "legacy kind fallback.")
     ap.add_argument("--model", help="Model id override.")
     ap.add_argument("--env-file", default=None,
                     help="Path to .env file (default: <config-dir>/.env, then ./.env).")
@@ -665,8 +773,6 @@ def main(argv: list[str] | None = None) -> int:
         attach()
 
     if is_tui:
-        from types import SimpleNamespace
-
         from .tui.app import run_app
 
         def _tui_header() -> str:
@@ -723,7 +829,9 @@ def main(argv: list[str] | None = None) -> int:
             sessions_info=lambda: sessions_info(cfg),
             usage_lines=lambda rest: usage_lines(box.get("tracker"), rest),
             config_lines=lambda: config_lines(cfg),
-            providers_lines=providers_lines,
+            providers_lines=lambda: providers_lines(cfg),
+            save_current_lines=lambda name: save_current_provider(cfg,
+                                                                  name),
             models_lines=lambda: models_lines(cfg),
             get_tracker=lambda: box.get("tracker"),
             get_provider_model=lambda: (cfg.provider, cfg.model),
@@ -796,7 +904,13 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "config":
             _show_config(cfg)
         elif cmd == "providers":
-            _show_providers()
+            if rest.startswith("save-current"):
+                parts = rest.split()
+                name = parts[1] if len(parts) > 1 else ""
+                for line in save_current_provider(cfg, name):
+                    print(line)
+            else:
+                _show_providers(cfg)
         elif cmd == "models":
             _show_models(cfg)
         else:

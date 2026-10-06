@@ -45,9 +45,75 @@ def parse_model_ids(lines) -> list[str]:
     return ids
 
 
-def format_provider_row(name: str, current: str | None) -> str:
+def format_provider_row(name: str, current: str | None,
+                        dot=None, detail: str = "") -> str:
     mark = "*" if name == current else " "
-    return f"{mark} {name}"
+    if dot is None and not detail:
+        return f"{mark} {name}"
+    glyph = "●" if dot is True else ("○" if dot is False else "·")
+    return f"{mark} {glyph} {name}{detail}"
+
+
+def provider_entry_rows(cfg) -> list:
+    """Registry rows for the picker: sorted, active flagged, dots unset.
+
+    Dots are filled in by ProviderScreen._probe (worker thread); the
+    picker never blocks on the network to open.
+    """
+    providers = getattr(cfg, "providers", None) or {}
+    current = getattr(cfg, "provider", None)
+    rows = []
+    for name in sorted(providers):
+        entry = providers[name] or {}
+        rows.append({"name": name, "kind": entry.get("kind"),
+                     "model": entry.get("model") or "",
+                     "base_url": entry.get("base_url"),
+                     "active": name == current, "dot": None})
+    return rows
+
+
+def format_registry_row(entry: dict, current: str | None = None) -> str:
+    """One picker line: active marker, reachability dot, kind/model."""
+    name = entry.get("name", "?")
+    if current is None and entry.get("active"):
+        current = name
+    mark = "*" if name == current else " "
+    dot = entry.get("dot")
+    glyph = "●" if dot is True else ("○" if dot is False else "·")
+    kind = entry.get("kind") or "?"
+    model = entry.get("model") or ""
+    detail = f"{kind}/{model}" if model else kind
+    return f"{mark} {glyph} {name} ({detail})"
+
+
+def validate_new_provider(name: str, entry: dict,
+                          existing=None) -> str | None:
+    """Add-flow validation: None when ok, else an inline error string."""
+    from ..config import validate_provider_entry
+    try:
+        validate_provider_entry(name, entry, existing or {},
+                                require_unique=True)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def prefill_from_template(template_id: str | None) -> dict:
+    """Form defaults from a PROVIDER_TEMPLATES entry (or blank custom)."""
+    from ..config import PROVIDER_TEMPLATES
+    data = {"name": "", "kind": "openai", "base_url": "",
+            "model": "", "api_key_env": ""}
+    if template_id and template_id in PROVIDER_TEMPLATES:
+        tpl = PROVIDER_TEMPLATES[template_id]
+        data.update({"name": template_id, "kind": tpl.get("kind") or "openai",
+                     "base_url": tpl.get("base_url") or "",
+                     "model": tpl.get("model") or "",
+                     "api_key_env": tpl.get("api_key_env") or ""})
+    return data
+
+
+ADD_PROVIDER_ID = "__add__"
+BLANK_TEMPLATE_ID = "__blank__"
 
 if _HAS:
     from .approvals import TUIApprover, approval_brief
@@ -189,17 +255,23 @@ if _HAS:
 
 
     class ProviderScreen(ModalScreen):
-        """Step 1: pick a provider; step 2 pushes ModelScreen."""
+        """Step 1: registry entries (+ add row); legacy kinds when empty.
+
+        Selecting an entry dives to the model list; selecting the add
+        row opens the template list. Dots probe in a worker thread and
+        refresh via call_from_thread (display-only, never blocks).
+        """
 
         BINDINGS = [("escape", "close", "Close")]
 
         CSS = ("ProviderScreen { align: center middle; } "
-               "#prov-box { width: 48; height: auto; "
+               "#prov-box { width: 64; height: auto; "
                "border: thick $primary; background: $surface; padding: 1 2; }")
 
-        def __init__(self, current: str | None = None):
+        def __init__(self, current: str | None = None, entries=None):
             super().__init__()
             self._current = current
+            self._entries = entries  # None = legacy kind list
 
         def compose(self) -> "ComposeResult":
             with Vertical(id="prov-box"):
@@ -207,22 +279,179 @@ if _HAS:
                             id="prov-title")
                 yield OptionList(id="providers")
 
+        def _row_options(self):
+            if self._entries is None:
+                return [Option(format_provider_row(p, self._current),
+                                id=p) for p in PICKER_PROVIDERS]
+            opts = [Option(format_registry_row(e, self._current),
+                           id=e["name"]) for e in self._entries]
+            opts.append(Option("+ add provider", id=ADD_PROVIDER_ID))
+            if not self._entries:
+                legacy = [Option(format_provider_row(p, self._current),
+                                 id=p) for p in PICKER_PROVIDERS]
+                opts = legacy + opts
+            return opts
+
         def on_mount(self) -> None:
             lst = self.query_one("#providers", OptionList)
-            lst.add_options([Option(format_provider_row(p, self._current),
-                                    id=p) for p in PICKER_PROVIDERS])
+            lst.add_options(self._row_options())
             lst.focus()
+            if self._entries:
+                threading.Thread(target=self._probe, daemon=True,
+                                 name="tui-provider-probe").start()
 
-        def choose(self, provider: str) -> None:
+        def _probe(self) -> None:
+            from ..config import probe_provider
+            dots = {}
+            for entry in self._entries or []:
+                try:
+                    dots[entry["name"]] = probe_provider(
+                        entry.get("base_url"), entry.get("kind"))
+                except Exception:  # noqa: BLE001 - dot is best-effort
+                    dots[entry["name"]] = False
+            try:
+                self.app.call_from_thread(self.set_dots, dots)
+            except Exception:
+                pass
+
+        def set_dots(self, dots) -> None:
+            for entry in self._entries or []:
+                if entry["name"] in (dots or {}):
+                    entry["dot"] = dots[entry["name"]]
+            try:
+                lst = self.query_one("#providers", OptionList)
+                lst.clear_options()
+                lst.add_options(self._row_options())
+            except Exception:
+                pass
+
+        def choose(self, pid: str) -> None:
+            if pid == ADD_PROVIDER_ID:
+                run = getattr(self.app, "_provider_add", None)
+                if callable(run):
+                    run()
+                return
             run = getattr(self.app, "_provider_chosen", None)
             if callable(run):
-                run(provider)
+                run(pid)
             # _provider_chosen pushes ModelScreen (which replaces us).
 
         def on_option_list_option_selected(
                 self, event: "OptionList.OptionSelected") -> None:
             if event.option_id:
                 self.choose(event.option_id)
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+
+    class ProviderTemplateScreen(ModalScreen):
+        """Add-flow step 1: pick a template (or blank custom)."""
+
+        BINDINGS = [("escape", "close", "Close")]
+
+        CSS = ("ProviderTemplateScreen { align: center middle; } "
+               "#tpl-box { width: 64; height: auto; "
+               "border: thick $primary; background: $surface; padding: 1 2; }")
+
+        def compose(self) -> "ComposeResult":
+            with Vertical(id="tpl-box"):
+                yield Label("[new provider] pick a template, esc=back",
+                            id="tpl-title")
+                yield OptionList(id="templates")
+
+        def on_mount(self) -> None:
+            from ..config import PROVIDER_TEMPLATES
+            lst = self.query_one("#templates", OptionList)
+            lst.add_options(
+                [Option(f"  {tid}", id=tid)
+                 for tid in sorted(PROVIDER_TEMPLATES)]
+                + [Option("  blank (custom)", id=BLANK_TEMPLATE_ID)])
+            lst.focus()
+
+        def choose(self, tid: str) -> None:
+            run = getattr(self.app, "_provider_template_chosen", None)
+            if callable(run):
+                run(tid)
+
+        def on_option_list_option_selected(
+                self, event: "OptionList.OptionSelected") -> None:
+            if event.option_id:
+                self.choose(event.option_id)
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+
+    class ProviderAddScreen(ModalScreen):
+        """Add-flow step 2: form prefilled from the template."""
+
+        BINDINGS = [("escape", "close", "Close")]
+
+        CSS = ("ProviderAddScreen { align: center middle; } "
+               "#add-box { width: 72; height: auto; "
+               "border: thick $primary; background: $surface; padding: 1 2; }")
+
+        def __init__(self, prefill=None):
+            super().__init__()
+            if isinstance(prefill, str):
+                self._prefill = prefill_from_template(prefill)
+            elif isinstance(prefill, dict):
+                self._prefill = dict(prefill)
+            else:
+                self._prefill = prefill_from_template(None)
+
+        def compose(self) -> "ComposeResult":
+            p = self._prefill
+            with Vertical(id="add-box"):
+                yield Label("[new provider] edit fields, enter=save, "
+                            "esc=back", id="add-title")
+                yield Label("name", id="add-name-lbl")
+                yield Input(value=p.get("name", ""), id="add-name")
+                yield Label("kind (openai/anthropic/nvidia)", id="add-kind-lbl")
+                yield Input(value=p.get("kind", ""), id="add-kind")
+                yield Label("base_url", id="add-base-lbl")
+                yield Input(value=p.get("base_url", ""), id="add-base")
+                yield Label("model", id="add-model-lbl")
+                yield Input(value=p.get("model", ""), id="add-model")
+                yield Label("api_key_env (empty = local, no key)",
+                            id="add-key-lbl")
+                yield Input(value=p.get("api_key_env", ""), id="add-key")
+                yield Label("", id="add-error")
+                yield Label("tab=next field, enter in any field saves",
+                            id="add-hint")
+
+        def on_mount(self) -> None:
+            try:
+                self.query_one("#add-name", Input).focus()
+            except Exception:
+                pass
+
+        def _data(self) -> dict:
+            def _val(qid: str) -> str:
+                try:
+                    return self.query_one(qid, Input).value
+                except Exception:
+                    return ""
+            return {"name": _val("#add-name"), "kind": _val("#add-kind"),
+                    "base_url": _val("#add-base"), "model": _val("#add-model"),
+                    "api_key_env": _val("#add-key")}
+
+        def _submit(self) -> None:
+            run = getattr(self.app, "_provider_add_save", None)
+            err = run(self._data()) if callable(run) else "unavailable"
+            if err:
+                try:
+                    self.query_one("#add-error", Label).update(
+                        f"[error: {err}]")
+                except Exception:
+                    pass
+            # On success the app pops this screen (plus template +
+            # provider screens) after retargeting.
+
+        def on_input_submitted(
+                self, event: "Input.Submitted") -> None:
+            self._submit()
 
         def action_close(self) -> None:
             self.app.pop_screen()
@@ -524,6 +753,16 @@ if _HAS:
             if cmd == "models":
                 self._fetch_models()
                 return True
+            if cmd == "providers" and rest.startswith("save-current"):
+                fn = (getattr(self._control, "save_current_lines", None)
+                      if self._control is not None else None)
+                parts = rest.split()
+                name = parts[1] if len(parts) > 1 else ""
+                if callable(fn):
+                    self._log_lines(fn(name))
+                else:
+                    self._log("usage: /providers save-current <name>")
+                return True
             lines = commands.local_lines(
                 cmd, rest, cfg=self._cfg, tracker=self._tracker(),
                 list_lines=(getattr(self._control, "list_lines", None)
@@ -588,12 +827,66 @@ if _HAS:
                 self._sync_state()
 
         def _open_provider_picker(self) -> None:
-            self.push_screen(ProviderScreen(current=self._provider_name))
+            self.push_screen(ProviderScreen(
+                current=self._provider_name,
+                entries=provider_entry_rows(self._cfg)
+                if self._cfg is not None else []))
 
         def _provider_chosen(self, provider: str) -> None:
+            providers = (getattr(self._cfg, "providers", None)
+                         if self._cfg is not None else None) or {}
+            entry = providers.get(provider) if isinstance(
+                providers, dict) else None
+            current_model = ((entry or {}).get("model")
+                             if isinstance(entry, dict) else None)
             self.push_screen(ModelScreen(
-                provider, self._model,
+                provider, current_model or self._model,
                 control=self._control, cfg=self._cfg))
+
+        def _provider_add(self) -> None:
+            self.push_screen(ProviderTemplateScreen())
+
+        def _provider_template_chosen(self, template_id: str) -> None:
+            if template_id == BLANK_TEMPLATE_ID:
+                template_id = None
+            self.push_screen(ProviderAddScreen(prefill=template_id))
+
+        def _provider_add_save(self, data: dict):
+            """Validate + save + activate + retarget. None when ok,
+            else an inline error string (screen stays open)."""
+            from ..config import (config_path, save_provider_entry,
+                                  validate_provider_entry)
+            name = (data.get("name") or "").strip()
+            entry = {"kind": (data.get("kind") or "").strip(),
+                     "base_url": (data.get("base_url") or "").strip() or None,
+                     "model": (data.get("model") or "").strip(),
+                     "api_key_env": ((data.get("api_key_env") or "").strip()
+                                     or None)}
+            existing = (getattr(self._cfg, "providers", None)
+                        if self._cfg is not None else None) or {}
+            try:
+                clean = validate_provider_entry(
+                    name, entry, existing
+                    if isinstance(existing, dict) else {},
+                    require_unique=True)
+            except ValueError as e:
+                return str(e)
+            try:
+                save_provider_entry(config_path(), name, clean,
+                                    activate=True)
+            except (OSError, ValueError) as e:
+                return f"save failed: {e}"
+            if isinstance(existing, dict):
+                existing[name] = clean
+            if not self._retarget_provider_model(name, clean["model"]):
+                return "retarget failed (see log)"
+            # Drop add + template + provider screens, back to main.
+            try:
+                for _ in range(3):
+                    self.pop_screen()
+            except Exception:
+                pass
+            return None
 
         def _retarget_provider_model(self, provider: str,
                                      model: str) -> bool:

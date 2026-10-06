@@ -72,9 +72,31 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
-CLI `--provider` overrides also reset `base_url` to the provider default
+CLI `--provider` accepts a registry name or a kind
+(`openai`/`anthropic`/`nvidia`); registry first, legacy kind fallback.
+Kind overrides also reset `base_url` to the provider default
 unless you set `base_url` in `config.json`. This prevents a leftover llama.cpp
 URL from being used with NVIDIA/OpenAI.
+
+Named providers (optional registry — existing configs work untouched):
+
+```json
+{ "provider": "mylocal",
+  "providers": {
+    "mylocal": { "kind": "openai",
+                 "base_url": "http://127.0.0.1:8080/v1",
+                 "model": "Qwen", "api_key_env": null }
+  } }
+```
+
+`provider` names a registry entry when it matches, else a kind.
+Entry fields fall back per-field to that kind's defaults;
+`api_key_env: null` means local, no key. Reachability (`/providers`
+dot, picker dot) is display-only and never blocks a connection.
+Add-flow templates: `openai-cloud`, `anthropic-cloud`, `nvidia-cloud`,
+`llama.cpp`, `lmstudio`, `ollama` (see `PROVIDER_TEMPLATES` in
+`harness/config.py`). `/providers save-current <name>` snapshots the
+live connection into the registry.
 
 Keys can live in a `.env` file instead of exports (see `.env.example`):
 `<config-dir>/.env` loads first, then `./.env`; real environment

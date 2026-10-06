@@ -62,7 +62,7 @@ def local_lines(cmd: str, rest: str, *, cfg=None, tracker=None,
             return ["[config] unavailable"]
         return config_lines(cfg)
     if cmd == "providers":
-        return providers_lines()
+        return providers_lines(cfg)
     if cmd in QUIT_COMMANDS or cmd in STATE_COMMANDS or cmd in WORKER_COMMANDS:
         return None
     return [unknown_hint(cmd)]
