@@ -646,12 +646,35 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     return loop
 
 
+def _enable_windows_ansi() -> None:
+    """Enable ANSI escape-sequence processing on Windows consoles.
+
+    Plain print() of \\x1b[... sequences shows as garbage text on conhost
+    unless ENABLE_VIRTUAL_TERMINAL_PROCESSING is set. No-op on non-Windows
+    and where ANSI already works (Windows Terminal, VS Code). Never raises:
+    console setup must not break startup.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong(0)
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            if not mode.value & 0x0004:  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     try:  # model output may contain emoji; cp1252 consoles would crash
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError, OSError):
         pass
+    _enable_windows_ansi()  # conhost: interpret \\x1b[... instead of printing them
     ap = argparse.ArgumentParser(prog="ctx",
                                  description="Agent loop: context as a file.")
     ap.add_argument("task", nargs="*", help="One-shot task text.")
