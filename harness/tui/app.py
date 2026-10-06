@@ -663,6 +663,7 @@ if _HAS:
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
             self._dedupe = TranscriptDedupe()
+            self._transcript_lines: list[str] = []
             self._turn_start: float | None = None
             self._phase = "main"
             self._debug_visible = False
@@ -711,10 +712,7 @@ if _HAS:
                 approver.decide = self._modal_decide
 
         def _log(self, text: str) -> None:
-            try:
-                self._transcript_lines.append(text)
-            except AttributeError:
-                self._transcript_lines = [text]
+            self._transcript_lines.append(text)
             self.query_one("#transcript", TranscriptLog).write_wrapped(text)
 
         def _export_transcript(self) -> None:
@@ -770,18 +768,25 @@ if _HAS:
 
         def _poll(self) -> None:
             entries = self._bridge.drain()
+            shown: list = []
             for kind, data, _line in entries:
                 if kind == "request" and isinstance(data, dict) \
                         and "tokens_est" in data:
+                    # The budget bar + status line own this info in the
+                    # TUI; logging the CLI meter line here would spam
+                    # the transcript on every model call. The CLI and
+                    # the debug log keep their [context ...] lines.
                     self._turn_start = time.monotonic()
                     self._phase = data.get("phase") or "main"
                     bar = budget_bar_text(data)
                     if bar is not None:
                         self._set_budget(bar, budget_bar_status(data))
-                elif kind in ("response", "tool", "error"):
+                    continue
+                if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here
                     self._set_status("")
-            for line in self._dedupe.feed(entries):
+                shown.append((kind, data, _line))
+            for line in self._dedupe.feed(shown):
                 self._log(line)
             self._tick_status()
             if self._debug_visible:

@@ -441,6 +441,38 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(tl.virtual_size.width, tl.size.width)
                 self.assertTrue(any("word word" in l for l in tl.lines))
 
+    async def test_request_meter_is_bar_not_transcript(self):
+        # The [context ...] meter line is CLI furniture; in the TUI the
+        # budget bar owns those numbers, so the transcript must not get
+        # a meter line per model call.
+        from harness.tui.widgets import BudgetBar
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test(size=(80, 30)) as pilot:
+                req = {"tokens_est": 80168, "hard": 100000,
+                       "soft": 80000, "status": "warn",
+                       "breakdown": {"system": 568,
+                                     "transcript": 79090,
+                                     "tools": 510, "total": 80168},
+                       "usage_total": {"input": 385656,
+                                       "output": 8383}}
+                app._bridge("request", req)
+                app._poll()
+                bar = app.query_one("#budget", BudgetBar)
+                self.assertIn("80,168", str(bar.render()))
+                self.assertIn("385,656", str(bar.render()))
+                self.assertIn("warn", bar.classes)
+                joined = "\n".join(app._transcript_lines)
+                self.assertNotIn("[context", joined)
+                # Real transcript content still flows through.
+                app._bridge("assistant", "hello from the model")
+                app._bridge("response", {"content": "hello from the model"})
+                app._poll()
+                joined = "\n".join(app._transcript_lines)
+                self.assertIn("hello from the model", joined)
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 
