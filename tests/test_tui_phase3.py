@@ -252,9 +252,26 @@ class TestAppPhase3(unittest.TestCase):
             self.assertTrue(hasattr(HarnessApp, name), name)
 
     def test_thin_widgets_exist(self):
-        from harness.tui.widgets import (BudgetBar, DebugPanel,
-                                         StatusLine)
-        self.assertTrue(BudgetBar and DebugPanel and StatusLine)
+        from harness.tui.widgets import (BudgetBar, BudgetGauge,
+                                         DebugPanel, StatusLine)
+        self.assertTrue(BudgetBar and DebugPanel and StatusLine
+                        and BudgetGauge)
+
+    def test_gauge_helpers(self):
+        from harness.tui.widgets import gauge_blocks, gauge_line
+        self.assertEqual(gauge_blocks(50, 100, 10), "█████░░░░░")
+        self.assertEqual(gauge_blocks(0, 100, 4), "░░░░")
+        self.assertEqual(gauge_blocks(999, 100, 4), "████")  # clamps
+        self.assertEqual(gauge_blocks(5, 0, 4), "░░░░")      # no hard
+        data = {"tokens_est": 80168, "hard": 100000, "soft": 80000}
+        line = gauge_line(data, "thinking 5s")
+        self.assertIn("80%", line)
+        self.assertIn("80,168/100,000", line)
+        self.assertIn("thinking 5s", line)
+        self.assertTrue(line.startswith("["))
+        # No request data yet: status text only (old status-line role).
+        self.assertEqual(gauge_line(None, "pruning 2s"), "pruning 2s")
+        self.assertEqual(gauge_line(None, ""), "")
 
     def test_no_mouse_construct(self):
         import tempfile

@@ -130,10 +130,10 @@ if _HAS:
     from .approvals import TUIApprover, approval_brief
     from .bridge import run_turn_in_thread
     from . import commands
-    from .widgets import (DEBUG_TAIL_LINES, BudgetBar, DebugPanel,
-                          StatusLine, TranscriptDedupe, TranscriptLog,
-                          budget_bar_status, budget_bar_text,
-                          debug_panel_lines, format_status)
+    from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
+                           DebugPanel, TranscriptDedupe, TranscriptLog,
+                           budget_bar_status, budget_bar_text,
+                           debug_panel_lines, format_status, gauge_line)
 
 
     class ApprovalScreen(ModalScreen):
@@ -606,10 +606,11 @@ if _HAS:
 
 
     class HarnessApp(App):
-        CSS = ("#transcript { height: 1fr; } #budget { height: 1; } "
-               "#status { height: 1; } #input { height: 3; } "
+        CSS = ("#transcript { height: 1fr; } #input { height: 3; } "
                "#debug { height: 8; display: none; } "
-               "#budget.warn { color: yellow; } #budget.over { color: red; }")
+               "#gauge { height: 1; } #budget { height: 1; } "
+               "#gauge.warn, #budget.warn { color: yellow; } "
+               "#gauge.over, #budget.over { color: red; }")
 
         BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail"),
                     ("ctrl+s", "open_sessions", "Sessions"),
@@ -671,10 +672,10 @@ if _HAS:
         def compose(self) -> "ComposeResult":
             yield Header(show_clock=False)
             with Vertical():
-                yield BudgetBar("", id="budget")
                 yield TranscriptLog(id="transcript")
                 yield DebugPanel(id="debug")
-                yield StatusLine("", id="status")
+                yield BudgetGauge(id="gauge")
+                yield BudgetBar("", id="budget")
                 yield Input(placeholder="Type a task, Enter to run.",
                             id="input")
             yield Footer()
@@ -751,15 +752,24 @@ if _HAS:
             self.push_screen(ApprovalScreen(info, box))
 
         def _set_status(self, text: str) -> None:
-            self.query_one("#status", StatusLine).update(text)
+            self.query_one("#gauge", BudgetGauge).set_status(text)
 
-        def _set_budget(self, text: str, status: str) -> None:
+        def _apply_request(self, data) -> None:
+            """Route one request event into the bottom instruments:
+            gauge gets blocks + pct + live status, detail line gets the
+            breakdown. Both tint warn/over."""
+            gauge = self.query_one("#gauge", BudgetGauge)
             bar = self.query_one("#budget", BudgetBar)
-            bar.update(text)
-            for cls in ("warn", "over"):
-                bar.remove_class(cls)
-            if status in ("warn", "over"):
-                bar.add_class(status)
+            text = budget_bar_text(data)
+            if text is not None:
+                bar.update(text)
+            gauge.set_request(data)
+            status = budget_bar_status(data)
+            for w in (gauge, bar):
+                for cls in ("warn", "over"):
+                    w.remove_class(cls)
+                if status in ("warn", "over"):
+                    w.add_class(status)
 
         def _tick_status(self) -> None:
             if self._turn_start is not None:
@@ -772,15 +782,13 @@ if _HAS:
             for kind, data, _line in entries:
                 if kind == "request" and isinstance(data, dict) \
                         and "tokens_est" in data:
-                    # The budget bar + status line own this info in the
-                    # TUI; logging the CLI meter line here would spam
-                    # the transcript on every model call. The CLI and
-                    # the debug log keep their [context ...] lines.
+                    # The gauge + detail line own this info in the TUI;
+                    # logging the CLI meter line here would spam the
+                    # transcript on every model call. The CLI and the
+                    # debug log keep their [context ...] lines.
                     self._turn_start = time.monotonic()
                     self._phase = data.get("phase") or "main"
-                    bar = budget_bar_text(data)
-                    if bar is not None:
-                        self._set_budget(bar, budget_bar_status(data))
+                    self._apply_request(data)
                     continue
                 if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here

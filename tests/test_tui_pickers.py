@@ -464,6 +464,11 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("80,168", str(bar.render()))
                 self.assertIn("385,656", str(bar.render()))
                 self.assertIn("warn", bar.classes)
+                gauge = app.query_one("#gauge")
+                gtext = str(gauge.render())
+                self.assertIn("80%", gtext)
+                self.assertIn("80,168/100,000", gtext)
+                self.assertIn("warn", gauge.classes)
                 joined = "\n".join(app._transcript_lines)
                 self.assertNotIn("[context", joined)
                 # Real transcript content still flows through.

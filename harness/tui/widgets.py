@@ -115,6 +115,32 @@ def budget_bar_text(data) -> str | None:
             f"tools {bd.get('tools', 0):,}{sess}")
 
 
+def gauge_blocks(tokens: int, hard: int, width: int = 20) -> str:
+    """Filled/empty block gauge string for tokens of hard."""
+    if hard <= 0:
+        return "░" * width
+    filled = max(0, min(width, round(width * tokens / hard)))
+    return "█" * filled + "░" * (width - filled)
+
+
+def gauge_line(data, status: str = "", width: int = 20) -> str:
+    """Gauge + pct + totals (+ status text) from a request event.
+
+    Before the first request (no tokens_est) just the status text, so
+    the bottom line behaves like the old status line until data lands.
+    """
+    data = data or {}
+    if "tokens_est" not in data:
+        return status or ""
+    toks, hard = data["tokens_est"], data.get("hard") or 0
+    pct = (100.0 * toks / hard) if hard else 0.0
+    blocks = gauge_blocks(toks, hard, width)
+    line = f"[{blocks}] {pct:3.0f}% {toks:,}/{hard:,}"
+    if status:
+        line = f"{line} · {status}"
+    return line
+
+
 def budget_bar_status(data) -> str:
     """warn/over colour state, honouring the loop's status when present."""
     data = data or {}
@@ -272,6 +298,30 @@ except ImportError:  # pragma: no cover - extra missing
     _HAS_TEXTUAL = False
 
 if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
+
+    class BudgetGauge(Static):
+        """Bottom-line context gauge: block bar + pct + live status.
+
+        The status text (thinking/pruning Ns) rides the same line so
+        the bottom of the screen reads as one instrument: gauge left,
+        activity right. Warn/over tint via CSS classes.
+        """
+
+        def __init__(self, *a, **k) -> None:
+            super().__init__("", *a, **k)
+            self._request = None
+            self._status = ""
+
+        def set_request(self, data) -> None:
+            self._request = data
+            self._refresh_line()
+
+        def set_status(self, text: str) -> None:
+            self._status = text or ""
+            self._refresh_line()
+
+        def _refresh_line(self) -> None:
+            self.update(gauge_line(self._request, self._status))
 
     class BudgetBar(Static):
         """One-line budget readout; warn/over tint via CSS classes."""
