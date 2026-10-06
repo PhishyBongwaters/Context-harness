@@ -1,3 +1,4 @@
+import glob
 import os
 import tempfile
 import unittest
@@ -215,6 +216,45 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(len(main.calls), 1)     # resumed normal chat
         self.assertEqual(janitor.calls[0]["tools"], ["write", "edit"])
 
+    def test_model_edit_backs_up_context(self):
+        # Mid-turn curation (model write/edit on context.md during a
+        # NORMAL turn) must snapshot too: every model edit reversible.
+        s = make_session()
+        s.context.save(render_user("keep me"))
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "e1", "name": "edit",
+                 "arguments": {"path": str(s.context.path),
+                               "old_text": "keep me",
+                               "new_text": "keep me (summarized)"}}]},
+            {"content": "curated"},
+        ]
+        loop = Loop(MockProvider(script), Budget(100000, 80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "curated")
+        baks = glob.glob(str(s.dir / "context.pre-edit-*.bak"))
+        self.assertEqual(len(baks), 1)
+        bak = open(baks[0], encoding="utf-8").read()
+        self.assertIn("keep me", bak)
+        # The backup is taken pre-edit; after the edit the file changes.
+        self.assertNotEqual(bak, s.context.load())
+        self.assertIn("(summarized)", s.context.load())
+
+    def test_noop_and_other_files_no_backup(self):
+        # Edits elsewhere never mint a .bak, and identical edit is no-op.
+        s = make_session()
+        s.context.save(render_user("stable"))
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "w2", "name": "write",
+                 "arguments": {"path": "elsewhere.txt",
+                               "content": "unrelated"}}]},
+            {"content": "done"},
+        ]
+        loop = Loop(MockProvider(script), Budget(100000, 80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertEqual(glob.glob(str(s.dir / "context.pre-*.bak")), [])
+        self.assertIn("stable", s.context.load())
+
     def test_prune_provider_defaults_to_main(self):
         main = MockProvider([])
         loop = Loop(main, Budget(100000, 80000))
@@ -240,7 +280,8 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(open(baks[0], encoding="utf-8").read(),
                          before + "\n" + render_user("hi"))
 
-    def test_prune_gate_uses_full_tool_measure(self):        # The transcript can be UNDER by the prune-tools measure while OVER
+    def test_prune_gate_uses_full_tool_measure(self):
+        # The transcript can be UNDER by the prune-tools measure while OVER
         # by the full-tools measure (3 extra schemas). The gate must use
         # the full measure, or prune_turn returns True instantly, the main
         # check stays over, and the loop burns all MAX_STEPS on OVER lines.

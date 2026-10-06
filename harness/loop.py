@@ -223,10 +223,35 @@ class Loop:
     def _policy(self, session: Session) -> Policy:
         return Policy(session.workdir, session.dir, session.context.path)
 
+    def _backup_context(self, session: Session, content: str,
+                        label: str):
+        """Snapshot pre-edit transcript content (best effort).
+
+        Prune turns label theirs `pre-prune` (historical name kept);
+        ordinary model curation labels `pre-edit`. Collision-safe:
+        same-second edits append a counter. Returns the path or None.
+        """
+        import datetime as _dt
+        try:
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            base = session.context.path.with_name(
+                f"context.pre-{label}-{stamp}.bak")
+            backup = base
+            n = 1
+            while backup.exists():
+                backup = base.with_name(f"{base.stem}-{n}.bak")
+                n += 1
+            backup.write_text(content, encoding="utf-8")
+            self._emit("backup", {"path": str(backup), "label": label})
+            return backup
+        except OSError:
+            return None  # best effort: never block a turn on a backup
+
     def _execute_tool(self, session: Session, tc: dict) -> str:
-        """Approval-gated tool run. If it edits the context file, emit a
-        mechanical diff of what changed (sections + tokens recovered).
-        Denied calls return a DENIED message the model must respect."""
+        """Approval-gated tool run. If it edits the context file, back
+        up the pre-edit content and emit a mechanical diff of what
+        changed (sections + tokens recovered). Denied calls return a
+        DENIED message the model must respect."""
         name, args = tc["name"], tc.get("arguments") or {}
         if self.approver is not None:
             ok, denial = self.approver.resolve(
@@ -245,6 +270,10 @@ class Loop:
         if before is not None:
             after = session.context.load()
             if after != before:
+                # The model curates its own transcript freely (the
+                # system prompt says prune early and often); the
+                # pre-edit snapshot makes every such edit reversible.
+                self._backup_context(session, before, "edit")
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
         return result
@@ -263,15 +292,7 @@ class Loop:
         """
         ctx_path = str(session.context.path)
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
-        try:
-            import datetime as _dt
-            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-            backup = session.context.path.with_name(
-                f"context.pre-prune-{stamp}.bak")
-            backup.write_text(session.context.load(), encoding="utf-8")
-            self._emit("backup", {"path": str(backup)})
-        except OSError:
-            pass  # best effort: never block the prune on a backup
+        self._backup_context(session, session.context.load(), "prune")
         # Deterministic stages first: free, instant, no model calls. The
         # agent turn fires only if these didn't reach target.
         det_before = session.context.load()

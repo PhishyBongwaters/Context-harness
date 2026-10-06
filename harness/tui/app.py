@@ -790,6 +790,11 @@ if _HAS:
                     self._phase = data.get("phase") or "main"
                     self._apply_request(data)
                     continue
+                if kind == "budget":
+                    # Warn/over is agent-facing instrumentation; the
+                    # gauge already colours the state, and prune
+                    # attempts stay visible below. Debug log keeps it.
+                    continue
                 if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here
                     self._set_status("")

@@ -12,8 +12,9 @@ special compact tool.
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
 Pruning fails repeatedly → loud error, never silent truncation. Every
-prune turn backs up `context.md` first (`context.pre-prune-<ts>.bak`),
-so all model curation is reversible. The prune
+prune turn and any model edit of `context.md` backs up the file first
+(`context.pre-prune-<ts>.bak` / `context.pre-edit-<ts>.bak`), so all
+model curation is reversible. The prune
 turn can run on a separate janitor model — cheaper/smaller, even local
 while the main model is cloud (see `prune_*` config).
 

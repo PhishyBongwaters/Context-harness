@@ -471,6 +471,16 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("warn", gauge.classes)
                 joined = "\n".join(app._transcript_lines)
                 self.assertNotIn("[context", joined)
+                # Budget warn/over is agent-facing; gauge owns the
+                # colour state, so the transcript stays clean of it.
+                app._bridge("budget", {"status": "warn", "tokens": 91630,
+                                       "breakdown": {"total": 91630}})
+                app._bridge("prune", {"attempt": 1, "tokens": 91630})
+                app._poll()
+                joined = "\n".join(app._transcript_lines)
+                self.assertNotIn("WARN budget", joined)
+                self.assertNotIn("[WARN", joined)
+                self.assertIn("[prune-only turn 1", joined)
                 # Real transcript content still flows through.
                 app._bridge("assistant", "hello from the model")
                 app._bridge("response", {"content": "hello from the model"})
