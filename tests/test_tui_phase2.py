@@ -273,8 +273,8 @@ class TestApprovalScreen(unittest.TestCase):
         keys = {b[0] for b in scr.BINDINGS}
         self.assertTrue({"a", "s", "d", "escape"} <= keys)
         self.assertEqual(scr._left, 120)
-        self.assertIsNone(normalize_answer(box["answer"] if
-                                           box["answer"] else None))
+        self.assertIsNone(box["answer"])  # modal untouched: no answer yet
+        self.assertEqual(normalize_answer(None), "deny")  # default-deny
 
 
 if __name__ == "__main__":

@@ -193,6 +193,25 @@ class TestSlashDispatch(unittest.TestCase):
         self.assertFalse(commands.needs_worker("usage"))
 
 
+class TestAppSource(unittest.TestCase):
+    def test_no_debug_path_shadowing(self):
+        """Regression: self._debug_path must stay a method (issue: ctrl+d
+        crashed with 'NoneType is not callable' because __init__ stored
+        the static path under the same name)."""
+        import ast
+        src = Path(__file__).parent.parent.joinpath(
+            "harness", "tui", "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        assigned = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(
+                    node.value, ast.Name) and node.value.id == "self" \
+                    and isinstance(node.ctx, ast.Store):
+                assigned.add(node.attr)
+        self.assertNotIn("_debug_path", assigned)
+        self.assertIn("_debug_path_static", assigned)
+
+
 @unittest.skipUnless(has_tui(), "textual extra missing")
 class TestAppPhase3(unittest.TestCase):
     def test_bindings_and_handlers(self):

@@ -113,7 +113,7 @@ if _HAS:
             self._initial = initial
             self._cfg = cfg
             self._control = control
-            self._debug_path = debug_path
+            self._debug_path_static = debug_path
             self._debug_path_getter = debug_path_getter
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
@@ -308,7 +308,7 @@ if _HAS:
                     return self._debug_path_getter()
             except Exception:
                 pass
-            return self._debug_path
+            return self._debug_path_static
 
         def _refresh_debug(self) -> None:
             try:
