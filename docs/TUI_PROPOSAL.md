@@ -170,6 +170,9 @@ Bindings: `ctrl+s` opens the session picker, `ctrl+o` opens the
 provider picker (`ctrl+p` is Textual's built-in command palette and
 wins over app bindings, so the picker does not claim it).
 `/open`/`/list` keep working as before.
+Step 1 always lists registry entries AND legacy kinds
+(openai/anthropic/nvidia) plus `+ add provider` -- kinds never
+vanish when entries exist.
 
 - Session picker lists `sessions_info(cfg)` rows newest-first:
   `*` = current, `[project]` tag, `N tokens` best-effort (never

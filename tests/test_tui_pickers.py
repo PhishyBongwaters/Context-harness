@@ -252,6 +252,78 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertNotIsInstance(app.screen, ProviderAddScreen)
 
+    async def test_provider_kinds_listed_with_entries(self):
+        # Regression: legacy kinds (nvidia included) must stay visible
+        # even when the registry is non-empty.
+        from harness.tui.app import ProviderScreen
+        scr = ProviderScreen(
+            current="llama",
+            entries=[{"name": "llama", "kind": "openai",
+                      "model": "Qwen",
+                      "base_url": "http://127.0.0.1:8080/v1",
+                      "dot": True}])
+        ids = [o.id for o in scr._row_options()]
+        self.assertIn("llama", ids)
+        self.assertIn("nvidia", ids)
+
+    async def test_add_screen_esc_closes_from_input(self):
+        from harness.tui.app import ProviderAddScreen
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test() as pilot:
+                app.push_screen(ProviderAddScreen(prefill="llama.cpp"))
+                await pilot.pause()
+                self.assertIsInstance(app.screen, ProviderAddScreen)
+                app.screen.query_one("#add-name").focus()
+                await pilot.pause()
+                await pilot.press("escape")
+                await pilot.pause()
+                self.assertNotIsInstance(app.screen, ProviderAddScreen)
+
+    async def test_add_screen_save_flow(self):
+        import json
+        from unittest import mock
+        from harness.tui.app import ProviderAddScreen
+        from textual.widgets import Input
+        calls = {}
+
+        def do_retarget(provider, model):
+            calls["retarget"] = (provider, model)
+            return [f"{provider}/{model}"]
+
+        def sync():
+            calls["sync"] = calls.get("sync", 0) + 1
+            return (control.loop, control.sess)
+
+        control = SimpleNamespace(
+            do_retarget=do_retarget, sync_state=sync,
+            get_provider_model=lambda: calls.get(
+                "retarget", ("t1", "m")),
+            providers={}, loop=SimpleNamespace(approver=None),
+            sess=None)
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "config.json"
+            target.write_text(json.dumps({"provider": "openai"}))
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test() as pilot:
+                app.push_screen(ProviderAddScreen(prefill="llama.cpp"))
+                await pilot.pause()
+                scr = app.screen
+                self.assertIsInstance(scr, ProviderAddScreen)
+                scr.query_one("#add-name", Input).value = "t1"
+                scr.query_one("#add-model", Input).value = "m"
+                with mock.patch("harness.config.config_path",
+                               return_value=target):
+                    scr._submit()
+                await pilot.pause()
+                raw = json.loads(target.read_text(encoding="utf-8"))
+                self.assertIn("t1", raw.get("providers", {}))
+                self.assertEqual(raw.get("provider"), "t1")
+                self.assertEqual(calls.get("retarget"), ("t1", "m"))
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 

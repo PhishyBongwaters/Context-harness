@@ -280,16 +280,17 @@ if _HAS:
                 yield OptionList(id="providers")
 
         def _row_options(self):
-            if self._entries is None:
-                return [Option(format_provider_row(p, self._current),
-                                id=p) for p in PICKER_PROVIDERS]
+            # Registry entries AND legacy kinds are always listed: kinds
+            # are connection targets too (nvidia must never vanish just
+            # because an entry exists). An entry named exactly like a
+            # kind takes that row (registry wins on choose).
+            entries = self._entries or []
             opts = [Option(format_registry_row(e, self._current),
-                           id=e["name"]) for e in self._entries]
+                           id=e["name"]) for e in entries]
+            have = {e["name"] for e in entries}
+            opts += [Option(format_provider_row(p, self._current), id=p)
+                     for p in PICKER_PROVIDERS if p not in have]
             opts.append(Option("+ add provider", id=ADD_PROVIDER_ID))
-            if not self._entries:
-                legacy = [Option(format_provider_row(p, self._current),
-                                 id=p) for p in PICKER_PROVIDERS]
-                opts = legacy + opts
             return opts
 
         def on_mount(self) -> None:
