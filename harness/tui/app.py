@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 
 try:
     from textual.app import App, ComposeResult
@@ -355,17 +356,30 @@ if _HAS:
                 on_done=lambda _r: self.call_from_thread(
                     self._turn_done),
                 on_error=lambda e: self.call_from_thread(
-                    self._turn_failed, str(e)),
+                    self._turn_failed, f"{type(e).__name__}: {e}",
+                    "".join(traceback.format_exception(e))),
             )
 
         def _turn_done(self) -> None:
             self._turn_start = None
             self._set_status("")
 
-        def _turn_failed(self, msg: str) -> None:
+        def _turn_failed(self, msg: str, detail: str = "") -> None:
             self._turn_start = None
             self._set_status("")
             self._log(f"[error: {msg}]")
+            self._log(f"[error details: {self._write_error_log(msg, detail)}]")
+
+        def _write_error_log(self, msg: str, detail: str = "") -> str:
+            """Best-effort copyable record (transcript pane can't copy)."""
+            try:
+                path = self._session.dir / "tui-errors.log"
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                            f"{msg}\n{(detail or '').rstrip()}\n\n")
+                return str(path)
+            except Exception:
+                return "<could not write tui-errors.log>"
 
     def run_app(loop, session, bridge, **kw) -> int:
         HarnessApp(loop, session, bridge, **kw).run()
