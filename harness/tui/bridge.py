@@ -133,3 +133,141 @@ def run_turn_in_thread(loop, session, text: str,
     t = threading.Thread(target=_work, daemon=True, name="tui-turn")
     t.start()
     return t
+
+
+def budget_bar_text(data) -> str | None:
+    """Compact budget bar from a request event.
+
+    Same ledger as the CLI [context ...] line (see format_event):
+    sys/chat/tools from breakdown, sess in/out from usage_total.
+    None when the event carries no estimate.
+    """
+    data = data or {}
+    if "tokens_est" not in data:
+        return None
+    toks, hard = data["tokens_est"], data.get("hard") or 0
+    pct = 100.0 * toks / hard if hard else 0
+    bd = data.get("breakdown") or {}
+    ut = data.get("usage_total") or {}
+    sess = (f" | sess in {ut.get('input', 0):,} "
+            f"out {ut.get('output', 0):,}") if ut else ""
+    return (f"ctx {toks:,} / {hard:,} ({pct:.0f}%) "
+            f"sys {bd.get('system', 0):,} "
+            f"chat {bd.get('transcript', 0):,} "
+            f"tools {bd.get('tools', 0):,}{sess}")
+
+
+def budget_bar_status(data) -> str:
+    """warn/over colour state, honouring the loop's status when present."""
+    data = data or {}
+    status = data.get("status")
+    if status in ("ok", "warn", "over"):
+        return status
+    if "tokens_est" not in data:
+        return "ok"
+    toks = data["tokens_est"]
+    hard, soft = data.get("hard") or 0, data.get("soft") or 0
+    if hard and toks >= hard:
+        return "over"
+    if soft and toks >= soft:
+        return "warn"
+    return "ok"
+
+
+def format_status(phase: str | None, elapsed_s: float) -> str:
+    """thinking/pruning Ns elapsed; replaces Spinner in TUI mode."""
+    label = "pruning" if phase == "prune" else "thinking"
+    return f"{label} {max(0, int(elapsed_s))}s"
+
+
+# Events that render no transcript line and never break a response/
+# assistant pair (usage sits between them in run_turn).
+_QUIET_KINDS = ("usage", "backup", "prune-deterministic")
+
+
+def _same_text(a, b) -> bool:
+    return (a or "").strip() == (b or "").strip()
+
+
+def _tool_calls_note(data) -> str | None:
+    calls = (data.get("tool_calls") or []) if isinstance(data, dict) else []
+    if not calls:
+        return None
+    names = ", ".join(c.get("name", "?") for c in calls)
+    return f"[tool calls: {names}]"
+
+
+def dedupe_entries(entries: list) -> list:
+    """One-shot filter: drop a main-phase bare response when an assistant
+    echo of the same text follows (quiet events skipped over).
+
+    Prune-phase responses have no assistant event and are always kept;
+    context-diff/budget/prune/tool lines pass through untouched.
+    """
+    out: list = []
+    i, n = 0, len(entries)
+    while i < n:
+        kind, data, line = entries[i]
+        if (kind == "response" and isinstance(data, dict)
+                and data.get("content")
+                and data.get("phase", "main") == "main" and line):
+            j = i + 1
+            while j < n and entries[j][0] in _QUIET_KINDS:
+                j += 1
+            if (j < n and entries[j][0] == "assistant"
+                    and _same_text(entries[j][2], line)):
+                note = _tool_calls_note(data)
+                if note:
+                    out.append((kind, data, note))
+                i += 1
+                continue
+        out.append(entries[i])
+        i += 1
+    return out
+
+
+class TranscriptDedupe:
+    """Stateful version of dedupe_entries for poll-by-poll draining.
+
+    A bare main-phase response is buffered until the next visible event
+    resolves dupe-or-not, so pairs split across polls still collapse.
+    feed() returns display lines; flush() emits any held line.
+    """
+
+    def __init__(self) -> None:
+        self._pending = None  # buffered (kind, data, line)
+
+    def feed(self, entries: list) -> list[str]:
+        lines: list[str] = []
+        for kind, data, line in entries:
+            if self._pending is not None:
+                if kind in _QUIET_KINDS:
+                    continue  # keep waiting; quiet events show nothing
+                pk, pd, pl = self._pending
+                self._pending = None
+                if kind == "assistant" and _same_text(line, pl):
+                    note = (_tool_calls_note(pd)
+                            if isinstance(pd, dict) else None)
+                    if note:
+                        lines.append(note)
+                    if line:
+                        lines.append(line)
+                    continue
+                if pl:
+                    lines.append(pl)  # no dupe: flush buffered first
+                # fall through to handle the current entry below
+            if (kind == "response" and isinstance(data, dict)
+                    and data.get("content")
+                    and data.get("phase", "main") == "main" and line):
+                self._pending = (kind, data, line)
+                continue
+            if line:
+                lines.append(line)
+        return lines
+
+    def flush(self) -> list[str]:
+        if self._pending is not None:
+            _, _, pl = self._pending
+            self._pending = None
+            return [pl] if pl else []
+        return []

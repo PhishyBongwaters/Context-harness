@@ -132,4 +132,32 @@ Loop._execute_tool → Approver.resolve → ASK + no remembered key
 3. Package as `requirements-tui.txt` now, or move to `pyproject` extras immediately?
 
 ---
-*Next action: agree §3–§4, then scaffold `harness/tui/` behind `--tui` on this branch.*
+
+## 12. Phase-2 manual checklist (run with `pip install -r requirements-tui.txt`)
+
+All green in CI-equivalent: `python -m unittest discover -s tests`
+(157 tests, 1 skipped without the extra).
+
+- [ ] Local task: `python -m harness --tui "summarize context.md"`
+  (llama.cpp/LM Studio long prefill) → status shows `thinking Ns`
+  ticking, then clears; transcript shows assistant text exactly once.
+- [ ] Cloud task: same on an OpenAI-compatible cloud model → same.
+- [ ] Mutating exec (e.g. ask model to `git push` or write outside the
+  transcript) → modal shows tool + brief + reason + `default deny in Ns`.
+  `a` approves the turn (model proceeds), `s` approves + writes
+  `approvals.json` (no re-prompt this session), `d`/esc denies
+  (tool line shows `[denied]`, model gets DENIED).
+- [ ] Modal timeout: leave the modal open past `approval_timeout`
+  (try `--approval-timeout 10`) → denies by itself, modal closes.
+- [ ] Budget bar vs CLI: run the same session in CLI and TUI; the TUI
+  budget line numbers (`ctx / hard (%)`, `sys/chat/tools`, `sess in/out`)
+  match the CLI `[context ...]` line; `warn` = yellow, `over` = red.
+- [ ] `--yes` parity: `python -m harness --tui --yes "task"` never opens
+  the modal (auto-approves askable tools); denylist (e.g. `rm -rf /`)
+  is still denied.
+- [ ] Ctrl-C mid-call: record observed behaviour (expected: TUI exits,
+  daemon worker dies, session file persists; resume with same session).
+  Observed: _______________________________________________.
+
+*Next action: Phase 3 (session/project switching, /usage pane,
+config/providers/models views, debug tail toggle).*
