@@ -22,18 +22,34 @@ except Exception:  # pragma: no cover
 # --- transcript formatting (moved from bridge.py, verbatim) ---
 
 
+def _ansi(text: str, *codes: int) -> str:
+    if not _RICH_AVAILABLE:
+        return text
+    # Rich Console can render markup to ANSI; use simple prefix for speed
+    # Fallback to plain text if Rich not available
+    try:
+        from rich.console import Console
+        # Build a simple ANSI sequence
+        seq = "".join(f"\x1b[{c}m" for c in codes)
+        return f"{seq}{text}\x1b[0m"
+    except Exception:
+        return text
+
 def format_event(kind: str, data) -> str | None:
     """Render one loop event as a transcript line. None = not shown."""
     if kind == "assistant":
         txt = data if isinstance(data, str) else str(data)
-        return f"[bold green]assistant[/]\n{txt}" if txt else None
+        if txt:
+            # green bold assistant label
+            return f"{_ansi('assistant',1,32)}\n{txt}"
+        return None
     if kind == "tool":
         data = data or {}
         name = data.get("name", "?")
         args = data.get("args") or {}
         brief = args.get("command") or args.get("path") or ""
         denied = " [denied]" if data.get("denied") else ""
-        header = f"[dim]$ {name} {brief}{denied}[/]".rstrip()
+        header = f"{_ansi('$ '+name+' '+brief+denied,2)}".rstrip()
         # Inline syntax-highlighted view for write/edit of source files
         if _RICH_AVAILABLE and name in ("write", "edit"):
             path = args.get("path")
@@ -60,7 +76,7 @@ def format_event(kind: str, data) -> str | None:
                             except Exception:
                                 code_blob = text
                             if code_blob:
-                                return f"{header}\n[bold]file[/] {p}\n{code_blob}"
+                                return f"{header}\n{_ansi('file',1)} {p}\n{code_blob}"
                 except Exception:
                     pass
         return header
