@@ -211,6 +211,24 @@ class TestAppSource(unittest.TestCase):
         self.assertNotIn("_debug_path", assigned)
         self.assertIn("_debug_path_static", assigned)
 
+    def test_no_textual_reserved_attrs(self):
+        """Regression: HarnessApp must not assign Textual App internals.
+        self._loop is the asyncio loop slot (App sets it on startup),
+        which once clobbered the agent loop and broke every turn with
+        'ProactorEventLoop has no attribute run_turn'."""
+        import ast
+        src = Path(__file__).parent.parent.joinpath(
+            "harness", "tui", "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        assigned = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(
+                    node.value, ast.Name) and node.value.id == "self" \
+                    and isinstance(node.ctx, ast.Store):
+                assigned.add(node.attr)
+        for reserved in ("_loop",):
+            self.assertNotIn(reserved, assigned)
+
 
 @unittest.skipUnless(has_tui(), "textual extra missing")
 class TestAppPhase3(unittest.TestCase):

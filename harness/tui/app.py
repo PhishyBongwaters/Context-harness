@@ -106,7 +106,7 @@ if _HAS:
                      initial: str | None = None, cfg=None, control=None,
                      debug_path=None, debug_path_getter=None):
             super().__init__()
-            self._loop = loop
+            self._agent_loop = loop
             self._session = session
             self._bridge = bridge
             self._provider_name = provider_name
@@ -142,7 +142,7 @@ if _HAS:
                 self._submit(self._initial)
 
         def _wire_approver(self) -> None:
-            approver = getattr(self._loop, "approver", None)
+            approver = getattr(self._agent_loop, "approver", None)
             if (isinstance(approver, TUIApprover)
                     and approver.decide is None
                     and not approver.auto_approve):
@@ -222,7 +222,7 @@ if _HAS:
             if not callable(sync):
                 return
             try:
-                self._loop, self._session = sync()
+                self._agent_loop, self._session = sync()
             except Exception as e:  # never break the turn loop
                 self._log(f"[error: session switch failed: {e}]")
                 return
@@ -352,7 +352,7 @@ if _HAS:
             self._phase = "main"
             self._tick_status()
             run_turn_in_thread(
-                self._loop, self._session, text,
+                self._agent_loop, self._session, text,
                 on_done=lambda _r: self.call_from_thread(
                     self._turn_done),
                 on_error=lambda e: self.call_from_thread(
