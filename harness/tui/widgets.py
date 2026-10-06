@@ -17,7 +17,45 @@ try:
     from rich.console import Console
     _RICH_AVAILABLE = True
 except Exception:  # pragma: no cover
+    Syntax = None  # kept as names so tests can patch them
+    Console = None
     _RICH_AVAILABLE = False
+
+import re as _re
+
+_ANSI_RE = _re.compile(r"\x1b\[[0-9;]*m")
+_FENCE_RE = _re.compile(r"```(\w*)\n(.*?)```", _re.S)
+
+
+def strip_ansi(text: str | None) -> str:
+    """Remove SGR escape sequences (keeps exported transcripts readable)."""
+    return _ANSI_RE.sub("", text or "")
+
+
+def highlight_fenced_code(text: str) -> str:
+    """Render ```lang fenced blocks through Rich Syntax, like a code editor.
+
+    Falls back to the raw text when Rich is missing or a lexer blows up.
+    """
+    if not _RICH_AVAILABLE or "```" not in (text or ""):
+        return text
+
+    def _one(m) -> str:
+        lang = (m.group(1) or "").strip()
+        code = m.group(2)
+        try:
+            console = Console(record=True, color_system="standard",
+                              force_terminal=True)
+            console.print(Syntax(code, lang or "text", theme="monokai",
+                                 line_numbers=False))
+            return console.export_text(styles=True).rstrip("\n")
+        except Exception:
+            return m.group(0)
+
+    try:
+        return _FENCE_RE.sub(_one, text)
+    except Exception:
+        return text
 
 # --- transcript formatting (moved from bridge.py, verbatim) ---
 
@@ -40,8 +78,8 @@ def format_event(kind: str, data) -> str | None:
     if kind == "assistant":
         txt = data if isinstance(data, str) else str(data)
         if txt:
-            # green bold assistant label
-            return f"{_ansi('assistant',1,32)}\n{txt}"
+            # green bold assistant label; fenced code blocks highlighted
+            return f"{_ansi('assistant',1,32)}\n{highlight_fenced_code(txt)}"
         return None
     if kind == "tool":
         data = data or {}
@@ -122,7 +160,8 @@ def format_event(kind: str, data) -> str | None:
         data = data or {}
         content = data.get("content")
         if content:
-            return content if isinstance(content, str) else str(content)
+            text = content if isinstance(content, str) else str(content)
+            return highlight_fenced_code(text)
         calls = data.get("tool_calls") or []
         if calls:
             names = ", ".join(c.get("name", "?") for c in calls)

@@ -12,11 +12,13 @@ import threading
 # textual extra); re-exported here so existing `bridge` imports keep
 # working with identical objects.
 from .widgets import (TranscriptDedupe, budget_bar_status, budget_bar_text,
-                       dedupe_entries, format_event, format_status)
+                       dedupe_entries, format_event, format_status,
+                       highlight_fenced_code, strip_ansi)
 
 __all__ = ["TuiBridge", "TranscriptDedupe", "budget_bar_status",
            "budget_bar_text", "dedupe_entries", "format_event",
-           "format_status", "run_turn_in_thread"]
+           "format_status", "highlight_fenced_code", "strip_ansi",
+           "run_turn_in_thread"]
 
 
 class TuiBridge:

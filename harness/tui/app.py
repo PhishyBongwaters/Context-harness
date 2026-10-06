@@ -15,7 +15,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import (Button, Footer, Header, Input, Label,
+    from textual.widgets import (Button, Input, Label,
                                    Log, OptionList, Static)
     from textual.widgets.option_list import Option
 
@@ -130,10 +130,12 @@ if _HAS:
     from .approvals import TUIApprover, approval_brief
     from .bridge import run_turn_in_thread
     from . import commands
+    from .lcars import LcarsFooter, LcarsHeader, _binding_pills
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
                            DebugPanel, TranscriptDedupe, TranscriptLog,
                            budget_bar_status, budget_bar_text,
-                           debug_panel_lines, format_status, gauge_line)
+                           debug_panel_lines, format_status, gauge_line,
+                           strip_ansi)
 
 
     class ApprovalScreen(ModalScreen):
@@ -609,6 +611,7 @@ if _HAS:
         CSS = ("#transcript { height: 1fr; } #input { height: 3; } "
                "#debug { height: 8; display: none; } "
                "#gauge { height: 1; } #budget { height: 1; } "
+               "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#gauge.warn, #budget.warn { color: yellow; } "
                "#gauge.over, #budget.over { color: red; }")
 
@@ -670,7 +673,8 @@ if _HAS:
             self._debug_visible = False
 
         def compose(self) -> "ComposeResult":
-            yield Header(show_clock=False)
+            yield LcarsHeader(title=self._title or "harness",
+                              id="lcars-header")
             with Vertical():
                 yield TranscriptLog(id="transcript")
                 yield DebugPanel(id="debug")
@@ -678,7 +682,8 @@ if _HAS:
                 yield BudgetBar("", id="budget")
                 yield Input(placeholder="Type a task, Enter to run.",
                             id="input")
-            yield Footer()
+            yield LcarsFooter(pills=_binding_pills(self.BINDINGS),
+                              id="lcars-footer")
 
         def on_mount(self) -> None:
             self.title = self._title or "harness"
@@ -726,8 +731,9 @@ if _HAS:
                 lines = list(getattr(self, "_transcript_lines", []) or [])
                 stamp = time.strftime("%Y%m%d-%H%M%S")
                 path = self._session.dir / f"transcript-{stamp}.log"
-                path.write_text("\n".join(lines) + "\n",
-                                encoding="utf-8")
+                # Strip ANSI: the export is opened in plain editors.
+                path.write_text("\n".join(strip_ansi(l) for l in lines)
+                                + "\n", encoding="utf-8")
                 self._log(f"[transcript exported: {path}]")
             except Exception as e:  # noqa: BLE001 - show, don't crash
                 self._log(f"[export failed: {e}]")
@@ -847,6 +853,11 @@ if _HAS:
             self._title = (f"{self._session.id} "
                            f"{self._provider_name}/{self._model}").strip()
             self.title = self._title or "harness"
+            try:
+                self.query_one("#lcars-header",
+                               LcarsHeader).set_title(self._title)
+            except Exception:
+                pass
 
         def _handle_slash(self, text: str) -> bool:
             """Run a /command. True when text was a slash command."""
