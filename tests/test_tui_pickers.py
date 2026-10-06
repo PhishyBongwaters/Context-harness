@@ -324,6 +324,17 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raw.get("provider"), "t1")
                 self.assertEqual(calls.get("retarget"), ("t1", "m"))
 
+    async def test_help_lists_tui_keys(self):
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test():
+                self.assertTrue(app._handle_slash("/help"))
+                text = "\n".join(app._transcript_lines)
+                self.assertIn("[tui keys]", text)
+                self.assertIn("ctrl+c", text)
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 

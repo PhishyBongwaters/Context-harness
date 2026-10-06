@@ -34,6 +34,15 @@ def format_session_row(row: dict) -> str:
     return f"{mark} {row.get('id', '?')}{proj}{tk}"
 
 
+TUI_KEYS_HELP = [
+    "[tui keys]",
+    "  ctrl+s sessions   ctrl+o provider/model   ctrl+d debug tail",
+    "  ctrl+e export transcript to a file (copy from there)",
+    "  drag with the mouse to select transcript text, ctrl+c copies",
+    "  a/s/d/esc in approval + picker dialogs",
+]
+
+
 def parse_model_ids(lines) -> list[str]:
     """Model ids from models_lines output (skip headers/errors)."""
     ids: list[str] = []
@@ -811,6 +820,14 @@ if _HAS:
                 return True
             if cmd == "models":
                 self._fetch_models()
+                return True
+            if cmd == "help":
+                self._log_lines(commands.local_lines(
+                    cmd, rest, cfg=self._cfg, tracker=self._tracker(),
+                    list_lines=(getattr(self._control, "list_lines",
+                                        None)
+                                if self._control is not None else None)))
+                self._log_lines(TUI_KEYS_HELP)
                 return True
             if cmd == "providers" and rest.startswith("save-current"):
                 fn = (getattr(self._control, "save_current_lines", None)
