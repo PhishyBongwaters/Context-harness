@@ -1,4 +1,5 @@
-"""Textual app (Phase 2): transcript + budget bar + status + modal.
+"""Textual app (Phase 3): transcript + budget bar + status + modal,
+slash parity with the CLI REPL, read-only views, debug tail toggle.
 
 Worker threads run loop.run_turn; UI updates only via call_from_thread.
 Never touches StdinPump. Without textual installed, degrades to a hint.
@@ -20,8 +21,11 @@ except ImportError:  # textual extra missing
 
 if _HAS:
     from .approvals import TUIApprover, approval_brief
-    from .bridge import (TranscriptDedupe, budget_bar_status,
-                         budget_bar_text, format_status, run_turn_in_thread)
+    from .bridge import run_turn_in_thread
+    from . import commands
+    from .widgets import (DEBUG_TAIL_LINES, BudgetBar, DebugPanel,
+                          StatusLine, TranscriptDedupe, budget_bar_status,
+                          budget_bar_text, debug_panel_lines, format_status)
 
 
     class ApprovalScreen(ModalScreen):
@@ -90,46 +94,65 @@ if _HAS:
     class HarnessApp(App):
         CSS = ("#transcript { height: 1fr; } #budget { height: 1; } "
                "#status { height: 1; } #input { height: 3; } "
+               "#debug { height: 8; display: none; } "
                "#budget.warn { color: yellow; } #budget.over { color: red; } "
                "#approval-box { padding: 1 2; }")
 
+        BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail")]
+
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
-                     initial: str | None = None):
+                     initial: str | None = None, cfg=None, control=None,
+                     debug_path=None, debug_path_getter=None):
             super().__init__()
             self._loop = loop
             self._session = session
             self._bridge = bridge
+            self._provider_name = provider_name
+            self._model = model
+            self._initial = initial
+            self._cfg = cfg
+            self._control = control
+            self._debug_path = debug_path
+            self._debug_path_getter = debug_path_getter
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
-            self._initial = initial
             self._dedupe = TranscriptDedupe()
             self._turn_start: float | None = None
             self._phase = "main"
+            self._debug_visible = False
 
         def compose(self) -> "ComposeResult":
             yield Header(show_clock=False)
             with Vertical():
-                yield Static("", id="budget")
+                yield BudgetBar("", id="budget")
                 yield RichLog(id="transcript", wrap=True)
-                yield Static("", id="status")
+                yield DebugPanel(id="debug", wrap=True)
+                yield StatusLine("", id="status")
                 yield Input(placeholder="Type a task, Enter to run.",
                             id="input")
             yield Footer()
 
         def on_mount(self) -> None:
             self.title = self._title or "harness"
+            self._wire_approver()
+            self.set_interval(0.1, self._poll)
+            if self._initial:
+                self._submit(self._initial)
+
+        def _wire_approver(self) -> None:
             approver = getattr(self._loop, "approver", None)
             if (isinstance(approver, TUIApprover)
                     and approver.decide is None
                     and not approver.auto_approve):
                 approver.decide = self._modal_decide
-            self.set_interval(0.1, self._poll)
-            if self._initial:
-                self._submit(self._initial)
 
         def _log(self, text: str) -> None:
             self.query_one("#transcript", RichLog).write(text)
+
+        def _log_lines(self, lines) -> None:
+            for line in lines or []:
+                self._log(line)
 
         # Approval modal hook: runs on the Loop worker thread, shows the
         # modal on the UI thread, waits up to timeout. None -> deny.
@@ -144,10 +167,10 @@ if _HAS:
             self.push_screen(ApprovalScreen(info, box))
 
         def _set_status(self, text: str) -> None:
-            self.query_one("#status", Static).update(text)
+            self.query_one("#status", StatusLine).update(text)
 
         def _set_budget(self, text: str, status: str) -> None:
-            bar = self.query_one("#budget", Static)
+            bar = self.query_one("#budget", BudgetBar)
             bar.update(text)
             for cls in ("warn", "over"):
                 bar.remove_class(cls)
@@ -175,6 +198,144 @@ if _HAS:
             for line in self._dedupe.feed(entries):
                 self._log(line)
             self._tick_status()
+            if self._debug_visible:
+                self._refresh_debug()
+
+        # --- slash parity with the CLI REPL ---
+
+        def _tracker(self):
+            if self._control is not None:
+                get = getattr(self._control, "get_tracker", None)
+                if callable(get):
+                    try:
+                        return get()
+                    except Exception:
+                        return None
+            return None
+
+        def _sync_state(self) -> None:
+            """Re-attach loop/session after a switch (like CLI attach)."""
+            if self._control is None:
+                return
+            sync = getattr(self._control, "sync_state", None)
+            if not callable(sync):
+                return
+            try:
+                self._loop, self._session = sync()
+            except Exception as e:  # never break the turn loop
+                self._log(f"[error: session switch failed: {e}]")
+                return
+            self._dedupe = TranscriptDedupe()  # don't leak pending lines
+            self._wire_approver()  # attach() built a fresh approver
+            self._title = (f"{self._session.id} "
+                           f"{self._provider_name}/{self._model}").strip()
+            self.title = self._title or "harness"
+
+        def _handle_slash(self, text: str) -> bool:
+            """Run a /command. True when text was a slash command."""
+            parsed = commands.parse_slash(text)
+            if parsed is None:
+                return False
+            cmd, rest = parsed
+            if commands.is_quit(cmd):
+                self.exit()
+                return True
+            if cmd in ("open", "session"):
+                if not rest:
+                    self._log("usage: /open <id>  (/list to see ids)")
+                elif self._control is not None:
+                    self._log_lines(self._control.do_open(rest))
+                    self._sync_state()
+                else:
+                    self._log("usage: /open <id>  (/list to see ids)")
+                return True
+            if cmd == "new":
+                if self._control is not None:
+                    self._log_lines(self._control.do_new(rest))
+                    self._sync_state()
+                    if rest:
+                        self._submit(rest)
+                return True
+            if cmd == "project":
+                if self._control is not None:
+                    self._log_lines(self._control.do_project(rest))
+                    self._sync_state()
+                return True
+            if cmd == "models":
+                self._fetch_models()
+                return True
+            lines = commands.local_lines(
+                cmd, rest, cfg=self._cfg, tracker=self._tracker(),
+                list_lines=(getattr(self._control, "list_lines", None)
+                            if self._control is not None else None))
+            if lines is not None:
+                self._log_lines(lines)
+                return True
+            # State/worker commands without a control: explain, don't hang.
+            self._log(commands.unknown_hint(cmd))
+            return True
+
+        def _fetch_models(self) -> None:
+            """Network-backed /models view; never blocks the UI thread."""
+            self._set_status("fetching models...")
+            self._log("[models] fetching...")
+
+            def _work():
+                try:
+                    if self._control is not None:
+                        lines = self._control.models_lines()
+                    elif self._cfg is not None:
+                        from ..__main__ import models_lines
+                        lines = models_lines(self._cfg)
+                    else:
+                        lines = ["[models] unavailable"]
+                except Exception as e:  # noqa: BLE001 - show, don't crash
+                    lines = [f"[models] error fetching models: {e}"]
+                self.call_from_thread(self._models_done, lines)
+
+            threading.Thread(target=_work, daemon=True,
+                             name="tui-models").start()
+
+        def _models_done(self, lines) -> None:
+            self._set_status("")
+            self._log_lines(lines)
+
+        # --- debug tail toggle (best-effort, never breaks the turn) ---
+
+        def _debug_path(self):
+            try:
+                if self._debug_path_getter is not None:
+                    return self._debug_path_getter()
+            except Exception:
+                pass
+            return self._debug_path
+
+        def _refresh_debug(self) -> None:
+            try:
+                panel = self.query_one("#debug", DebugPanel)
+                panel.refresh_from(self._debug_path(),
+                                   DEBUG_TAIL_LINES)
+            except Exception:
+                pass  # missing widget/file must never break the turn
+
+        def action_toggle_debug(self) -> None:
+            self._debug_visible = not self._debug_visible
+            try:
+                panel = self.query_one("#debug", DebugPanel)
+                panel.styles.display = ("block" if self._debug_visible
+                                        else "none")
+            except Exception:
+                pass
+            if self._debug_visible:
+                if self._debug_path() is None:
+                    self._log("[debug] no debug log (run with --debug)")
+                else:
+                    for line in debug_panel_lines(self._debug_path(),
+                                                  DEBUG_TAIL_LINES):
+                        if line.startswith("[debug]"):
+                            self._log(line)
+                            break
+                self._refresh_debug()
 
         def on_input_submitted(self, event: "Input.Submitted") -> None:
             text = event.value.strip()
@@ -184,6 +345,8 @@ if _HAS:
 
         def _submit(self, text: str) -> None:
             self._log(f"> {text}")
+            if self._handle_slash(text):
+                return
             self._turn_start = time.monotonic()
             self._phase = "main"
             self._tick_status()

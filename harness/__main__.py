@@ -145,12 +145,18 @@ def parse_repl_command(text: str) -> tuple[str, str] | None:
     return parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
 
 
-def _list_sessions(cfg) -> None:
+def sessions_lines(cfg) -> list[str]:
+    """Session ids for /list, current marked. Pure (no printing)."""
     sessions = _sessions(cfg)
     cur = _current_id(sessions)
-    for d in sorted(p.name for p in sessions.iterdir() if p.is_dir()):
-        mark = " *" if d == cur else ""
-        print(f"{d}{mark}")
+    return [f"{d}{' *' if d == cur else ''}"
+            for d in sorted(p.name for p in sessions.iterdir()
+                            if p.is_dir())]
+
+
+def _list_sessions(cfg) -> None:
+    for line in sessions_lines(cfg):
+        print(line)
 
 
 def _match_session(cfg, ident: str) -> str | None:
@@ -163,8 +169,9 @@ def _match_session(cfg, ident: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _show_session(cfg, session: Session, totals=None,
-                  project: str | None = None) -> None:
+def session_header_line(cfg, session: Session, totals=None,
+                          project: str | None = None) -> str:
+    """One-line session header. Pure (no printing)."""
     try:
         toks = session.context.tokens()
     except Exception:
@@ -175,10 +182,15 @@ def _show_session(cfg, session: Session, totals=None,
         life = (f" | lifetime in {totals['input']:,} "
                 f"out {totals['output']:,}")
     proj = f" project={project}" if project else ""
-    print(f"[session {session.id}{proj}] provider={cfg.provider} "
-          f"model={cfg.model} "
-          f"budget={cfg.budget_hard:,}{using}{life} "
-          f"ctx={session.context.path}")
+    return (f"[session {session.id}{proj}] provider={cfg.provider} "
+            f"model={cfg.model} "
+            f"budget={cfg.budget_hard:,}{using}{life} "
+            f"ctx={session.context.path}")
+
+
+def _show_session(cfg, session: Session, totals=None,
+                  project: str | None = None) -> None:
+    print(session_header_line(cfg, session, totals, project))
 
 
 def _workdir(args) -> str:
@@ -207,8 +219,8 @@ REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/quit        leave (empty line also quits)")
 
 
-def _show_config(cfg) -> None:
-    import json
+def config_lines(cfg) -> list[str]:
+    """Effective config, redacted (no api_key). Pure (no printing)."""
     data = {
         "provider": cfg.provider,
         "model": cfg.model,
@@ -226,28 +238,42 @@ def _show_config(cfg) -> None:
         "sessions_dir": cfg.sessions_dir,
         "config_file": str(config_path()),
     }
-    print("[config]")
-    for k, v in data.items():
-        print(f"  {k}: {v}")
+    return ["[config]"] + [f"  {k}: {v}" for k, v in data.items()]
+
+
+def _show_config(cfg) -> None:
+    for line in config_lines(cfg):
+        print(line)
+
+
+def providers_lines() -> list[str]:
+    """Known providers. Pure (no printing)."""
+    from .config import PROVIDER_DEFAULTS
+    return (["[providers]"]
+            + [f"  {name}: base_url={meta.get('base_url')} "
+               f"api_key_env={meta.get('api_key_env')}"
+               for name, meta in sorted(PROVIDER_DEFAULTS.items())])
 
 
 def _show_providers() -> None:
-    from .config import PROVIDER_DEFAULTS
-    print("[providers]")
-    for name, meta in sorted(PROVIDER_DEFAULTS.items()):
-        print(f"  {name}: base_url={meta.get('base_url')} api_key_env={meta.get('api_key_env')}")
+    for line in providers_lines():
+        print(line)
 
 
-def _show_models(cfg) -> None:
-    import urllib.request, json
+def models_lines(cfg) -> list[str]:
+    """Models from the current OpenAI-compatible provider.
+
+    Pure except the network fetch (TUI runs it in a worker thread).
+    """
+    import urllib.request
+    import json
     # Only OpenAI-compatible providers support /v1/models
     if cfg.provider not in ("openai", "nvidia"):
-        print(f"[models] provider {cfg.provider} does not support /v1/models listing")
-        return
+        return [f"[models] provider {cfg.provider} does not support "
+                "/v1/models listing"]
     base = (cfg.base_url or "").rstrip("/")
     if not base:
-        print("[models] no base_url configured")
-        return
+        return ["[models] no base_url configured"]
     url = f"{base}/models"
     headers = {}
     if cfg.api_key:
@@ -257,33 +283,52 @@ def _show_models(cfg) -> None:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         models = data.get("data", [])
-        print(f"[models] {len(models)} models from {cfg.provider}")
-        for m in models[:100]:
-            print(f"  {m.get('id')}")
+        lines = [f"[models] {len(models)} models from {cfg.provider}"]
+        lines += [f"  {m.get('id')}" for m in models[:100]]
         if len(models) > 100:
-            print(f"  ... +{len(models)-100} more")
+            lines.append(f"  ... +{len(models)-100} more")
+        return lines
     except Exception as e:
-        print(f"[models] error fetching models: {e}")
+        return [f"[models] error fetching models: {e}"]
 
 
-def _show_usage(tracker, rest: str) -> None:
+def _show_models(cfg) -> None:
+    for line in models_lines(cfg):
+        print(line)
+
+
+def usage_lines(tracker, rest: str) -> list[str]:
+    """Ledger totals + last N calls. Pure (no printing)."""
     if tracker is None or not tracker.turns:
-        print("No usage recorded yet.")
-        return
+        return ["No usage recorded yet."]
     t = tracker.totals
-    print(f"[usage] session in {t['input']:,} out {t['output']:,} "
-          f"est {t['estimated']:,} over {len(tracker.turns)} calls")
+    lines = [f"[usage] session in {t['input']:,} out {t['output']:,} "
+             f"est {t['estimated']:,} over {len(tracker.turns)} calls"]
     try:
         n = int((rest.split() or ["5"])[0])
     except ValueError:
         n = 5
     for turn in tracker.turns[-max(1, n):]:
         bd, sv = turn["breakdown"], turn["server"]
-        print(f"  turn {turn['turn']} {turn['phase']}/{turn['step']}: "
-              f"est {bd['total']:,} (sys {bd['system']:,} "
-              f"chat {bd['transcript']:,} tools {bd['tools']:,}) "
-              f"server in {sv['input']:,} out {sv['output']:,}")
+        lines.append(
+            f"  turn {turn['turn']} {turn['phase']}/{turn['step']}: "
+            f"est {bd['total']:,} (sys {bd['system']:,} "
+            f"chat {bd['transcript']:,} tools {bd['tools']:,}) "
+            f"server in {sv['input']:,} out {sv['output']:,}")
+    return lines
 
+
+def _show_usage(tracker, rest: str) -> None:
+    for line in usage_lines(tracker, rest):
+        print(line)
+
+
+def project_status_lines(current: str | None,
+                         known: list[str]) -> list[str]:
+    """Current project + known names. Pure (no printing)."""
+    cur = current or "(none)"
+    suffix = f"  (known: {', '.join(known)})" if known else ""
+    return [f"project: {cur}{suffix}"]
 
 def _approver(cfg, args, session, on_event):
     from .approvals import Approver
@@ -456,17 +501,21 @@ def main(argv: list[str] | None = None) -> int:
         from .tui.bridge import TuiBridge
         box["bridge"] = TuiBridge()
 
-    def attach() -> None:
-        sess = box["session"]
-        tracker = UsageTracker(sess.dir)
-        box["tracker"] = tracker
-        # Apply CLI overrides for display before showing session header
+    def _disp_cfg():
+        # CLI overrides applied for display (header parity with attach).
         cfg_disp = Config(**cfg.__dict__)
         if args.provider:
             cfg_disp.provider = args.provider
         if args.model:
             cfg_disp.model = args.model
-        _show_session(cfg_disp, sess, tracker.totals, box["project"])
+        return cfg_disp
+
+    def attach() -> None:
+        sess = box["session"]
+        tracker = UsageTracker(sess.dir)
+        box["tracker"] = tracker
+        # Apply CLI overrides for display before showing session header
+        _show_session(_disp_cfg(), sess, tracker.totals, box["project"])
         dbg = None
         if args.debug_file:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
@@ -536,10 +585,62 @@ def main(argv: list[str] | None = None) -> int:
         attach()
 
     if is_tui:
+        from types import SimpleNamespace
+
         from .tui.app import run_app
+
+        def _tui_header() -> str:
+            return session_header_line(
+                _disp_cfg(), box["session"],
+                box.get("tracker").totals if box.get("tracker") else None,
+                box["project"])
+
+        def _tui_new(rest: str) -> list[str]:
+            box["session"] = _new_session(cfg, _workdir(args))
+            stamp(box["session"])
+            attach()
+            return [_tui_header()]
+
+        def _tui_open(ident: str) -> list[str]:
+            sid = _match_session(cfg, ident.split()[0])
+            if sid is None:
+                return [f"No unique session matches '{ident}'. (/list)"]
+            switch_session(sid)
+            return [_tui_header()]
+
+        def _tui_project(rest: str) -> list[str]:
+            if not rest:
+                from .project import load_registry
+                return project_status_lines(
+                    box["project"], sorted(load_registry()))
+            switch_project(rest.split()[0])
+            return [_tui_header()]
+
+        def _tui_debug_path():
+            if args.debug_file:
+                return Path(args.debug_file)
+            if args.debug:
+                return box["session"].dir / "debug.jsonl"
+            return None
+
+        control = SimpleNamespace(
+            do_new=_tui_new,
+            do_open=_tui_open,
+            do_project=_tui_project,
+            list_lines=lambda: sessions_lines(cfg),
+            usage_lines=lambda rest: usage_lines(box.get("tracker"), rest),
+            config_lines=lambda: config_lines(cfg),
+            providers_lines=providers_lines,
+            models_lines=lambda: models_lines(cfg),
+            get_tracker=lambda: box.get("tracker"),
+            sync_state=lambda: (box["loop"], box["session"]),
+            debug_path=_tui_debug_path,
+        )
         return run_app(box["loop"], box["session"], box["bridge"],
                        provider_name=cfg.provider, model=cfg.model,
-                       initial=" ".join(args.task) or None)
+                       initial=" ".join(args.task) or None,
+                       cfg=cfg, control=control,
+                       debug_path_getter=_tui_debug_path)
 
     if args.task:
         return do_turn(" ".join(args.task))
@@ -584,10 +685,9 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "project":
             if not rest:
                 from .project import load_registry
-                cur = box["project"] or "(none)"
-                names = sorted(load_registry())
-                print(f"project: {cur}" +
-                      (f"  (known: {', '.join(names)})" if names else ""))
+                for line in project_status_lines(
+                        box["project"], sorted(load_registry())):
+                    print(line)
             else:
                 switch_project(rest.split()[0])
         elif cmd in ("open", "session"):
