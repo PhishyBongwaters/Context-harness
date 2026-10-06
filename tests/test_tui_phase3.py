@@ -234,10 +234,15 @@ class TestAppSource(unittest.TestCase):
 class TestAppPhase3(unittest.TestCase):
     def test_bindings_and_handlers(self):
         from harness.tui.app import HarnessApp
-        keys = {b[0] for b in HarnessApp.BINDINGS}
+        def _key(b):
+            return b[0] if isinstance(b, (tuple, list)) else b.key
+        keys = {_key(b) for b in HarnessApp.BINDINGS}
         self.assertIn("ctrl+d", keys)
         self.assertIn("ctrl+s", keys)
         self.assertIn("ctrl+o", keys)
+        self.assertIn("ctrl+e", keys)
+        # ctrl+c must copy (priority binding), never quit.
+        self.assertIn("ctrl+c", keys)
         # ctrl+p is Textual's built-in command palette and wins over
         # app bindings, so the provider picker must not claim it.
         self.assertNotIn("ctrl+p", keys)

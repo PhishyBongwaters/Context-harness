@@ -12,10 +12,11 @@ import traceback
 
 try:
     from textual.app import App, ComposeResult
+    from textual.binding import Binding
     from textual.containers import Vertical
     from textual.screen import ModalScreen
     from textual.widgets import (Button, Footer, Header, Input, Label,
-                                   OptionList, RichLog, Static)
+                                   Log, OptionList, Static)
     from textual.widgets.option_list import Option
 
     _HAS = True
@@ -130,8 +131,9 @@ if _HAS:
     from .bridge import run_turn_in_thread
     from . import commands
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, DebugPanel,
-                          StatusLine, TranscriptDedupe, budget_bar_status,
-                          budget_bar_text, debug_panel_lines, format_status)
+                          StatusLine, TranscriptDedupe, TranscriptLog,
+                          budget_bar_status, budget_bar_text,
+                          debug_panel_lines, format_status)
 
 
     class ApprovalScreen(ModalScreen):
@@ -614,7 +616,29 @@ if _HAS:
                     # ctrl+p is Textual's command palette (built-in wins),
                     # so the provider/model picker lives on ctrl+o.
                     ("ctrl+o", "pick_provider", "Provider/model"),
-                    ("ctrl+e", "export_transcript", "Export log")]
+                    ("ctrl+e", "export_transcript", "Export log"),
+                    # Textual binds ctrl+c to a quit nudge and Input
+                    # swallows it as copy-my-own-selection; a transcript
+                    # drag selection then never reaches the clipboard.
+                    # Priority binding: screen selection first, else the
+                    # focused widget's own copy. Never quits.
+                    Binding("ctrl+c", "copy_selection",
+                            "Copy selection", show=False, priority=True)]
+
+        def action_copy_selection(self) -> None:
+            """ctrl+c: copy the screen text selection, else the focused
+            widget's own selection (e.g. text inside the input box)."""
+            try:
+                sel = self.screen.get_selected_text()
+            except Exception:
+                sel = None
+            if sel:
+                self.copy_to_clipboard(sel)
+                return
+            focused = getattr(self.screen, "focused", None)
+            act = getattr(focused, "action_copy", None)
+            if callable(act):
+                act()
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -647,8 +671,8 @@ if _HAS:
             yield Header(show_clock=False)
             with Vertical():
                 yield BudgetBar("", id="budget")
-                yield RichLog(id="transcript", wrap=True)
-                yield DebugPanel(id="debug", wrap=True)
+                yield TranscriptLog(id="transcript")
+                yield DebugPanel(id="debug")
                 yield StatusLine("", id="status")
                 yield Input(placeholder="Type a task, Enter to run.",
                             id="input")
@@ -691,30 +715,23 @@ if _HAS:
                 self._transcript_lines.append(text)
             except AttributeError:
                 self._transcript_lines = [text]
-            self.query_one("#transcript", RichLog).write(text)
+            self.query_one("#transcript", TranscriptLog).write(text)
 
         def _export_transcript(self) -> None:
             """Copyable record: dump transcript lines to a session file.
 
-            RichLog has no text selection, so export is the copy path:
-            open the logged file in any editor to select/copy.
-            """
+            Drag-select works in the transcript now (Log widget), but
+            export remains the bulk copy path: open the file in any
+            editor. """
             try:
                 lines = list(getattr(self, "_transcript_lines", []) or [])
                 stamp = time.strftime("%Y%m%d-%H%M%S")
                 path = self._session.dir / f"transcript-{stamp}.log"
                 path.write_text("\n".join(lines) + "\n",
                                 encoding="utf-8")
-                self.query_one("#transcript", RichLog).write(
-                    f"[transcript exported: {path}]")
-                self._transcript_lines.append(
-                    f"[transcript exported: {path}]")
+                self._log(f"[transcript exported: {path}]")
             except Exception as e:  # noqa: BLE001 - show, don't crash
-                try:
-                    self.query_one("#transcript", RichLog).write(
-                        f"[export failed: {e}]")
-                except Exception:
-                    pass
+                self._log(f"[export failed: {e}]")
 
         def action_export_transcript(self) -> None:
             self._export_transcript()

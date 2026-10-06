@@ -265,7 +265,7 @@ def debug_panel_lines(path: str | Path | None,
 # --- thin Textual widgets (only with the extra installed) ---
 
 try:
-    from textual.widgets import RichLog, Static
+    from textual.widgets import Log, Static
 
     _HAS_TEXTUAL = True
 except ImportError:  # pragma: no cover - extra missing
@@ -297,8 +297,15 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         def clear(self) -> None:
             self.update("")
 
-    class TranscriptLog(RichLog):
-        """Transcript with a deduping write helper."""
+    class TranscriptLog(Log):
+        """Transcript with a deduping write helper.
+
+        Log (not RichLog): RichLog is a scroll *container*, which
+        Textual's text-selection machinery never targets -- Log is a
+        plain leaf widget with drag-select support built in (plus
+        get_selection for ctrl+c copy). No wrap kwarg; long lines
+        scroll horizontally instead of reflowing.
+        """
 
         def __init__(self, *a, **k) -> None:
             super().__init__(*a, **k)
@@ -308,7 +315,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             for line in self._dedupe.feed(entries):
                 self.write(line)
 
-    class DebugPanel(RichLog):
+    class DebugPanel(Log):
         """Live tail of the session debug.jsonl (best-effort)."""
 
         def refresh_from(self, path: str | Path | None,

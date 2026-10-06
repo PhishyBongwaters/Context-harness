@@ -363,6 +363,53 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                                          SessionPickerScreen)
                 self.assertIsInstance(app.screen.focused, Input)
 
+    async def test_transcript_selection_and_copy(self):
+        # Log (not RichLog) = drag-select works; RichLog is a scroll
+        # container that Textual's selection never targets. Verify the
+        # chain: mousedown starts selection, the widget extracts text,
+        # ctrl+c puts it on the clipboard. (The pilot cannot synthesize
+        # a full drag -- its MouseMove never reaches _select_end -- so
+        # the selection is set the way the screen's own drag code does.)
+        from textual.geometry import Offset
+        from textual.selection import Selection
+        from textual.widgets import Log
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test(size=(80, 30)) as pilot:
+                tl = app.query_one("#transcript")
+                self.assertIsInstance(tl, Log)  # selectable leaf, not RichLog
+                app._log("draggable alpha line")
+                app._log("draggable beta line")
+                await pilot.pause()
+                await pilot.mouse_down("#transcript", offset=(0, 0))
+                await pilot.pause()
+                self.assertTrue(app.screen._selecting,
+                                "mousedown must start selection")
+                await pilot.mouse_up("#transcript", offset=(0, 0))
+                await pilot.pause()
+                # The screen's drag handler stores selections exactly
+                # like this (widget -> Selection of content offsets).
+                app.screen.selections = {
+                    tl: Selection(Offset(0, 0), Offset(8, 1))}
+                text, _end = tl.get_selection(
+                    Selection(Offset(0, 0), Offset(8, 1)))
+                # 8 chars from the transcript's first text line
+                # (Log seeds an empty line 0, hence the col-8 window).
+                self.assertEqual(text.strip(), "draggabl")
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                # Screen selection wins even with focus in the Input.
+                self.assertIn("draggabl", app._clipboard or "")
+                app.screen.clear_selection()
+                app._clipboard = ""
+                # Without a screen selection, ctrl+c falls back to the
+                # focused widget (Input copies its own selection).
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                self.assertFalse(app.screen._selecting)
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 
