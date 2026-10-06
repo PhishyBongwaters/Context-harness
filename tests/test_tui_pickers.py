@@ -216,6 +216,42 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(calls.get("open"), "b")
                 self.assertGreaterEqual(calls.get("sync", 0), 1)
 
+    async def test_export_transcript_writes_file(self):
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test() as pilot:
+                app._log("hello-copy")
+                app._log("world-copy")
+                app._export_transcript()
+                await pilot.pause()
+                files = sorted(app._session.dir.glob("transcript-*.log"))
+                self.assertTrue(files, "no transcript export written")
+                text = files[-1].read_text(encoding="utf-8")
+                self.assertIn("hello-copy", text)
+                self.assertIn("world-copy", text)
+
+    async def test_add_screen_has_save_and_back(self):
+        from harness.tui.app import ProviderAddScreen
+        from textual.widgets import Button
+        control = SimpleNamespace()
+        with tempfile.TemporaryDirectory() as d:
+            app = await self._app(d, control)
+            control.sess = app._session
+            async with app.run_test() as pilot:
+                app.push_screen(ProviderAddScreen(prefill="llama.cpp"))
+                await pilot.pause()
+                self.assertIsInstance(app.screen, ProviderAddScreen)
+                self.assertIsInstance(
+                    app.screen.query_one("#add-save", Button), Button)
+                self.assertIsInstance(
+                    app.screen.query_one("#add-back", Button), Button)
+                # Back closes without touching disk.
+                app.screen.action_close()
+                await pilot.pause()
+                self.assertNotIsInstance(app.screen, ProviderAddScreen)
+
     async def test_provider_confirm_calls_retarget(self):
         calls = {}
 

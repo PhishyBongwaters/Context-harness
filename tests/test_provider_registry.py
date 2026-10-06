@@ -311,6 +311,99 @@ class TestProviderOverride(unittest.TestCase):
                                                 path=target)[0])
 
 
+class TestCandidateFetch(unittest.TestCase):
+    def setUp(self):
+        self._saved = dict(os.environ)
+        os.environ["NVIDIA_API_KEY"] = "k-nvidia"
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _fake_models(self, ids):
+        import json as _json
+        fake_resp = mock.MagicMock()
+        fake_resp.__enter__.return_value = fake_resp
+        fake_resp.read.return_value = _json.dumps(
+            {"data": [{"id": i} for i in ids]}).encode()
+        return fake_resp
+
+    def test_models_lines_candidate_override(self):
+        cfg = make_cfg(base_url="http://live:1/v1")
+        with mock.patch("urllib.request.urlopen",
+                        return_value=self._fake_models(
+                            ["cand-model"])) as uo:
+            lines = cli.models_lines(
+                cfg, base_url="http://cand:9999/v1", api_key=None,
+                kind="openai")
+        url = uo.call_args[0][0]
+        self.assertEqual(url.full_url, "http://cand:9999/v1/models")
+        self.assertNotIn("Authorization",
+                         dict(url.header_items()).keys())
+        self.assertIn("  cand-model", lines)
+        # Live default still hits the live endpoint.
+        with mock.patch("urllib.request.urlopen",
+                        return_value=self._fake_models(
+                            ["live-model"])) as uo2:
+            lines2 = cli.models_lines(cfg)
+        self.assertEqual(uo2.call_args[0][0].full_url,
+                         "http://live:1/v1/models")
+        self.assertIn("  live-model", lines2)
+
+    def test_candidate_for_registry_and_legacy(self):
+        cfg = make_cfg(provider="llama", model="Qwen", providers={
+            "llama": dict(LOCAL),
+            "nv": {"kind": "nvidia",
+                   "base_url": "https://integrate.api.nvidia.com/v1",
+                   "model": "glimmer", "api_key_env": "NVIDIA_API_KEY"}})
+        c = cli._candidate_for(cfg, "nv")
+        self.assertEqual((c.kind, c.model), ("nvidia", "glimmer"))
+        self.assertEqual(c.base_url,
+                         "https://integrate.api.nvidia.com/v1")
+        self.assertEqual(c.api_key, "k-nvidia")
+        # Legacy kind: kind defaults, no stale model prefill.
+        n = cli._candidate_for(cfg, "nvidia")
+        self.assertEqual(n.kind, "nvidia")
+        self.assertEqual(n.base_url,
+                         PROVIDER_DEFAULTS["nvidia"]["base_url"])
+        self.assertEqual(n.model, "")
+        # Same-name keeps the running model as prefill.
+        cfg2 = make_cfg(provider="nvidia", model="nv-run")
+        self.assertEqual(
+            cli._candidate_for(cfg2, "nvidia").model, "nv-run")
+        # Unknown names pass through so models_lines reports them.
+        u = cli._candidate_for(cfg, "bogus")
+        self.assertEqual(u.kind, "bogus")
+        self.assertIn("does not support",
+                      cli.models_lines(cfg, base_url="http://x/v1",
+                                       api_key=None, kind=u.kind)[0])
+
+    def test_retarget_persists_legacy_kind(self):
+        # The file must match live state after every retarget, or the
+        # next launch resurrects the old endpoint ("stuck").
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "config.json"
+            target.write_text(json.dumps(
+                {"provider": "fast",
+                 "providers": {"fast": {
+                     "kind": "openai", "base_url": "http://x/v1",
+                     "model": "m1", "api_key_env": None}}}))
+            cfg = load_config(path=target)
+            from harness.providers import OpenAIProvider
+            box = {"loop": SimpleNamespace(
+                provider=OpenAIProvider(api_key=None, model="m1",
+                                        base_url="http://x/v1"),
+                prune_provider=OpenAIProvider(api_key=None, model="m1",
+                                              base_url="http://x/v1"))}
+            with mock.patch.object(cli, "config_path",
+                                   return_value=target):
+                cli.retarget_loop(box, cfg, make_args(), "nvidia",
+                                  "nv-model")
+            raw = json.loads(target.read_text())
+            self.assertEqual(raw["provider"], "nvidia")
+            self.assertIn("fast", raw["providers"])  # entries kept
+
+
 class TestRegistryPickerHelpers(unittest.TestCase):
     def test_format_and_rows(self):
         from harness.tui.app import (format_provider_row,

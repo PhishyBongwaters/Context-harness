@@ -18,7 +18,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
-                     probe_provider, resolve_provider, save_current_provider,
+                     probe_provider, resolve_provider,
+                     save_current_provider, set_active_provider,
                      write_example_config)
 from .context import Budget
 from .loop import BudgetExceeded, Loop, Session
@@ -312,26 +313,38 @@ def _show_providers(cfg=None) -> None:
         print(line)
 
 
-def models_lines(cfg) -> list[str]:
-    """Models from the current OpenAI-compatible provider.
+_USE_CFG = object()  # models_lines override sentinel (None is valid)
+
+
+def models_lines(cfg, *, base_url=_USE_CFG, api_key=_USE_CFG,
+                 kind=None) -> list[str]:
+    """Models from an OpenAI-compatible provider.
 
     Pure except the network fetch (TUI runs it in a worker thread).
+    Overrides fetch from a CANDIDATE endpoint (picker model step) instead
+    of the live cfg: base_url/api_key None reaches a keyless local
+    server, kind skips registry resolution. Defaults preserve the old
+    live-cfg behavior exactly.
     """
     import urllib.request
     import json
     # Only OpenAI-compatible kinds support /v1/models (registry names
     # resolve to their kind first).
-    kind = resolve_provider(cfg).kind
+    kind = kind if kind is not None else resolve_provider(cfg).kind
     if kind not in ("openai", "nvidia"):
         return [f"[models] provider {kind} does not support "
                 "/v1/models listing"]
-    base = (cfg.base_url or "").rstrip("/")
+    if base_url is _USE_CFG:
+        base_url = cfg.base_url
+    if api_key is _USE_CFG:
+        api_key = cfg.api_key
+    base = (base_url or "").rstrip("/")
     if not base:
         return ["[models] no base_url configured"]
     url = f"{base}/models"
     headers = {}
-    if cfg.api_key:
-        headers["Authorization"] = f"Bearer {cfg.api_key}"
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -518,6 +531,39 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 prune_section_cap=cfg.prune_section_cap)
 
 
+def _candidate_for(cfg, name: str) -> SimpleNamespace:
+    """Connection preview for the picker model step (never live state).
+
+    The model list must come from the endpoint about to be selected,
+    not the currently active one -- fetching from live cfg is how a
+    llama.cpp model id ends up confirmed against nvidia. Registry hit
+    resolves entry fields; legacy kind resolves kind defaults with the
+    key reloaded from the environment (None = keyless local probe).
+    Unknown names pass through so models_lines reports them.
+    """
+    providers = getattr(cfg, "providers", None) or {}
+    if isinstance(providers, dict) and name in providers:
+        tmp = SimpleNamespace(provider=name, model=None, base_url=None,
+                              api_key_env=None, api_key=None,
+                              providers=providers)
+        res = resolve_provider(tmp)
+        return SimpleNamespace(name=name, kind=res.kind,
+                               base_url=res.base_url, api_key=res.api_key,
+                               model=res.model or "")
+    pdefs = PROVIDER_DEFAULTS.get(name)
+    if pdefs is None:
+        return SimpleNamespace(name=name, kind=name,
+                               base_url=getattr(cfg, "base_url", None),
+                               api_key=getattr(cfg, "api_key", None),
+                               model="")
+    key_env = pdefs.get("api_key_env")
+    return SimpleNamespace(
+        name=name, kind=name, base_url=pdefs.get("base_url"),
+        api_key=(os.environ.get(key_env) if key_env else None),
+        model=(getattr(cfg, "model", "")
+               if getattr(cfg, "provider", None) == name else ""))
+
+
 def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     """Retarget the live loop to provider/model without rebuilding.
 
@@ -590,6 +636,13 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     loop = box["loop"]
     loop.provider = new_main
     loop.prune_provider = prune
+    # Persist the selection (name or kind) so the file matches live
+    # state -- otherwise the next launch resurrects the old endpoint
+    # and the switch looks "stuck". Best-effort, never fails the turn.
+    try:
+        set_active_provider(config_path(), provider)
+    except (OSError, ValueError):
+        pass
     return loop
 
 
@@ -833,6 +886,10 @@ def main(argv: list[str] | None = None) -> int:
             save_current_lines=lambda name: save_current_provider(cfg,
                                                                   name),
             models_lines=lambda: models_lines(cfg),
+            candidate_for=lambda name: _candidate_for(cfg, name),
+            models_lines_for=lambda cand: models_lines(
+                cfg, base_url=cand.base_url, api_key=cand.api_key,
+                kind=cand.kind),
             get_tracker=lambda: box.get("tracker"),
             get_provider_model=lambda: (cfg.provider, cfg.model),
             sync_state=lambda: (box["loop"], box["session"]),

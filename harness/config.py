@@ -408,6 +408,28 @@ def save_provider_entry(path: str | Path, name: str, entry: dict,
     return target
 
 
+def set_active_provider(path: str | Path, name: str) -> Path:
+    """Point top-level provider at name, preserving all other keys.
+
+    Used after an explicit switch (e.g. TUI retarget) so the file always
+    matches live state -- a stale name here resurrects the old endpoint
+    on the next launch and looks "stuck". Best-effort companion to
+    save_provider_entry (which handles entry upserts).
+    """
+    target = Path(path)
+    raw: dict = {}
+    if target.exists():
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raw = {}
+    clean = (name or "").strip()
+    if clean:
+        raw["provider"] = clean
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
 def snapshot_current(cfg) -> dict:
     """Registry entry snapshotting the live resolved connection."""
     res = resolve_provider(cfg)

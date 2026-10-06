@@ -14,8 +14,8 @@ try:
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import (Footer, Header, Input, Label, OptionList,
-                                 RichLog, Static)
+    from textual.widgets import (Button, Footer, Header, Input, Label,
+                                   OptionList, RichLog, Static)
     from textual.widgets.option_list import Option
 
     _HAS = True
@@ -390,7 +390,8 @@ if _HAS:
 
         CSS = ("ProviderAddScreen { align: center middle; } "
                "#add-box { width: 72; height: auto; "
-               "border: thick $primary; background: $surface; padding: 1 2; }")
+               "border: thick $primary; background: $surface; padding: 1 2; } "
+               "#add-error { color: $error; text-style: bold; }")
 
         def __init__(self, prefill=None):
             super().__init__()
@@ -418,8 +419,12 @@ if _HAS:
                             id="add-key-lbl")
                 yield Input(value=p.get("api_key_env", ""), id="add-key")
                 yield Label("", id="add-error")
-                yield Label("tab=next field, enter in any field saves",
+                yield Label("tab=next field, enter in any field saves, "
+                            "esc=back without saving",
                             id="add-hint")
+                with Vertical(id="add-btns"):
+                    yield Button("Save", id="add-save", variant="primary")
+                    yield Button("Back", id="add-back")
 
         def on_mount(self) -> None:
             try:
@@ -449,6 +454,12 @@ if _HAS:
             # On success the app pops this screen (plus template +
             # provider screens) after retargeting.
 
+        def on_button_pressed(self, event: "Button.Pressed") -> None:
+            if event.button.id == "add-save":
+                self._submit()
+            else:
+                self.action_close()
+
         def on_input_submitted(
                 self, event: "Input.Submitted") -> None:
             self._submit()
@@ -467,17 +478,23 @@ if _HAS:
                "border: thick $primary; background: $surface; padding: 1 2; }")
 
         def __init__(self, provider: str, current_model: str = "",
-                     control=None, cfg=None):
+                     control=None, cfg=None, candidate=None):
             super().__init__()
             self._provider = provider
             self._current_model = current_model or ""
             self._control = control
             self._cfg = cfg
+            # Candidate endpoint: the model list must come from the
+            # endpoint about to be selected, never the live cfg.
+            self._candidate = candidate
 
         def compose(self) -> "ComposeResult":
+            base = (getattr(self._candidate, "base_url", None)
+                    if self._candidate is not None else None)
+            title = (f"[models: {self._provider} @ {base}]" if base
+                     else f"[models: {self._provider}]")
             with Vertical(id="model-box"):
-                yield Label(f"[models: {self._provider}]",
-                            id="model-title")
+                yield Label(title, id="model-title")
                 yield Label("fetching models...", id="model-status")
                 yield OptionList(id="models")
                 yield Input(value=self._current_model,
@@ -492,6 +509,16 @@ if _HAS:
                              name="tui-models-picker").start()
 
         def _fetch_lines(self):
+            # Candidate endpoint first: the list must describe the
+            # provider being switched TO. Live cfg is the fallback
+            # (older controls without the hook, or no candidate).
+            if self._candidate is not None and self._control is not None:
+                fn = getattr(self._control, "models_lines_for", None)
+                if callable(fn):
+                    try:
+                        return list(fn(self._candidate))
+                    except Exception as e:  # noqa: BLE001 - shown
+                        return [f"[models] error fetching models: {e}"]
             try:
                 if self._control is not None and hasattr(
                         self._control, "models_lines"):
@@ -575,7 +602,8 @@ if _HAS:
                     ("ctrl+s", "open_sessions", "Sessions"),
                     # ctrl+p is Textual's command palette (built-in wins),
                     # so the provider/model picker lives on ctrl+o.
-                    ("ctrl+o", "pick_provider", "Provider/model")]
+                    ("ctrl+o", "pick_provider", "Provider/model"),
+                    ("ctrl+e", "export_transcript", "Export log")]
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -625,7 +653,37 @@ if _HAS:
                 approver.decide = self._modal_decide
 
         def _log(self, text: str) -> None:
+            try:
+                self._transcript_lines.append(text)
+            except AttributeError:
+                self._transcript_lines = [text]
             self.query_one("#transcript", RichLog).write(text)
+
+        def _export_transcript(self) -> None:
+            """Copyable record: dump transcript lines to a session file.
+
+            RichLog has no text selection, so export is the copy path:
+            open the logged file in any editor to select/copy.
+            """
+            try:
+                lines = list(getattr(self, "_transcript_lines", []) or [])
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                path = self._session.dir / f"transcript-{stamp}.log"
+                path.write_text("\n".join(lines) + "\n",
+                                encoding="utf-8")
+                self.query_one("#transcript", RichLog).write(
+                    f"[transcript exported: {path}]")
+                self._transcript_lines.append(
+                    f"[transcript exported: {path}]")
+            except Exception as e:  # noqa: BLE001 - show, don't crash
+                try:
+                    self.query_one("#transcript", RichLog).write(
+                        f"[export failed: {e}]")
+                except Exception:
+                    pass
+
+        def action_export_transcript(self) -> None:
+            self._export_transcript()
 
         def _log_lines(self, lines) -> None:
             for line in lines or []:
@@ -833,15 +891,27 @@ if _HAS:
                 if self._cfg is not None else []))
 
         def _provider_chosen(self, provider: str) -> None:
-            providers = (getattr(self._cfg, "providers", None)
-                         if self._cfg is not None else None) or {}
-            entry = providers.get(provider) if isinstance(
-                providers, dict) else None
-            current_model = ((entry or {}).get("model")
-                             if isinstance(entry, dict) else None)
+            cand = None
+            fn = (getattr(self._control, "candidate_for", None)
+                  if self._control is not None else None)
+            if callable(fn):
+                try:
+                    cand = fn(provider)
+                except Exception:
+                    cand = None
+            if cand is not None:
+                current_model = getattr(cand, "model", "") or ""
+            else:
+                providers = (getattr(self._cfg, "providers", None)
+                             if self._cfg is not None else None) or {}
+                entry = providers.get(provider) if isinstance(
+                    providers, dict) else None
+                current_model = ((entry or {}).get("model")
+                                 if isinstance(entry, dict) else None)
+                current_model = current_model or self._model
             self.push_screen(ModelScreen(
-                provider, current_model or self._model,
-                control=self._control, cfg=self._cfg))
+                provider, current_model,
+                control=self._control, cfg=self._cfg, candidate=cand))
 
         def _provider_add(self) -> None:
             self.push_screen(ProviderTemplateScreen())
