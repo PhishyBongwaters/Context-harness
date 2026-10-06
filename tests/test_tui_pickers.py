@@ -336,7 +336,7 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("ctrl+c", text)
 
     async def test_focus_returns_to_input_after_dialog(self):
-        from textual.widgets import Input
+        from harness.tui.widgets import TaskInput
         from harness.tui.app import SessionPickerScreen
         control = SimpleNamespace(
             do_open=lambda sid: [f"opened {sid}"],
@@ -352,7 +352,7 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
             control.sess = app._session
             async with app.run_test() as pilot:
                 await pilot.pause()
-                self.assertIsInstance(app.screen.focused, Input)
+                self.assertIsInstance(app.screen.focused, TaskInput)
                 app._open_session_picker()
                 await pilot.pause()
                 self.assertIsInstance(app.screen, SessionPickerScreen)
@@ -361,7 +361,7 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertNotIsInstance(app.screen,
                                          SessionPickerScreen)
-                self.assertIsInstance(app.screen.focused, Input)
+                self.assertIsInstance(app.screen.focused, TaskInput)
 
     async def test_transcript_selection_and_copy(self):
         # Log (not RichLog) = drag-select works; RichLog is a scroll

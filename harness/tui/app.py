@@ -39,6 +39,8 @@ TUI_KEYS_HELP = [
     "[tui keys]",
     "  ctrl+s sessions   ctrl+o provider/model   ctrl+d debug tail",
     "  ctrl+e export transcript to a file (copy from there)",
+    "  esc interrupt the running turn",
+    "  input: ctrl+enter send (multi-line), up/down history",
     "  drag with the mouse to select transcript text, ctrl+c copies",
     "  (no mouse? restart with --no-mouse for terminal selection)",
     "  a/s/d/esc in approval + picker dialogs",
@@ -132,7 +134,8 @@ if _HAS:
     from . import commands
     from .lcars import LcarsFooter, LcarsHeader, _binding_pills
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
-                           DebugPanel, TranscriptDedupe, TranscriptLog,
+                           DebugPanel, InputHistory, TaskInput,
+                           TranscriptDedupe, TranscriptLog,
                            budget_bar_status, budget_bar_text,
                            debug_panel_lines, format_status, gauge_line,
                            strip_ansi)
@@ -608,7 +611,7 @@ if _HAS:
 
 
     class HarnessApp(App):
-        CSS = ("#transcript { height: 1fr; } #input { height: 3; } "
+        CSS = ("#transcript { height: 1fr; } #input { height: 5; } "
                "#debug { height: 8; display: none; } "
                "#gauge { height: 1; } #budget { height: 1; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
@@ -621,6 +624,9 @@ if _HAS:
                     # so the provider/model picker lives on ctrl+o.
                     ("ctrl+o", "pick_provider", "Provider/model"),
                     ("ctrl+e", "export_transcript", "Export log"),
+                    # Escape interrupts a running turn (modals keep their
+                    # own escape: close/deny wins while one is open).
+                    ("escape", "interrupt_turn", "Interrupt"),
                     # Textual binds ctrl+c to a quit nudge and Input
                     # swallows it as copy-my-own-selection; a transcript
                     # drag selection then never reaches the clipboard.
@@ -680,8 +686,7 @@ if _HAS:
                 yield DebugPanel(id="debug")
                 yield BudgetGauge(id="gauge")
                 yield BudgetBar("", id="budget")
-                yield Input(placeholder="Type a task, Enter to run.",
-                            id="input")
+                yield TaskInput(id="input", on_submit=self._submit_task)
             yield LcarsFooter(pills=_binding_pills(self.BINDINGS),
                               id="lcars-footer")
 
@@ -696,7 +701,7 @@ if _HAS:
         def _focus_input(self) -> None:
             """Pin focus to the input box (main screen only).
 
-            Input is the sole focusable widget on the main screen, so
+            TaskInput is the sole focusable widget on the main screen, so
             any other focus there means keystrokes vanish -- typically
             after a dialog closes. Modal screens manage their own
             focus and are left alone.
@@ -704,7 +709,7 @@ if _HAS:
             try:
                 if isinstance(self.screen, ModalScreen):
                     return
-                box = self.query_one("#input", Input)
+                box = self.query_one("#input", TaskInput)
                 if self.screen.focused is not box:
                     box.focus()
             except Exception:
@@ -1112,11 +1117,20 @@ if _HAS:
                             break
                 self._refresh_debug()
 
-        def on_input_submitted(self, event: "Input.Submitted") -> None:
-            text = event.value.strip()
-            event.input.value = ""
+        def _submit_task(self, text: str) -> None:
+            """TaskInput callback: text already stripped, history recorded."""
             if text:
                 self._submit(text)
+
+        def action_interrupt_turn(self) -> None:
+            """Escape: ask a running turn to stop at the next safe point."""
+            if self._turn_start is None:
+                return
+            try:
+                self._agent_loop.request_stop()
+            except Exception:
+                pass
+            self._log("[interrupt requested]")
 
         def _submit(self, text: str) -> None:
             self._log(f"> {text}")

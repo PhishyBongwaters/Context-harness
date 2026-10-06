@@ -15,6 +15,7 @@ Budget enforcement:
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -124,6 +125,15 @@ def _estimate(system: str, messages: list[dict],
     return total
 
 
+class TurnInterrupted(Exception):
+    """Cooperative turn cancellation via Loop.request_stop().
+
+    Raised at safe points (between steps, before model calls and tool
+    executions); never escapes run_turn -- it is caught there, an
+    "interrupted" event is emitted, and the partial turn ends.
+    """
+
+
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
                  on_event=None, prune_provider: Provider | None = None,
@@ -151,9 +161,24 @@ class Loop:
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
         self._turn_seq = 0
+        self._stop_event = threading.Event()
         self._tools = tool_definitions()
         self._prune_tools = [t for t in self._tools
                              if t["name"] in ("write", "edit")]
+
+    def request_stop(self) -> None:
+        """Ask a running turn to stop at the next safe point.
+
+        Cooperative: a turn blocked inside a model call or tool
+        execution finishes that call first (bounded by the request /
+        exec timeouts). If no turn is running, the flag stays set and
+        the next turn aborts immediately instead.
+        """
+        self._stop_event.set()
+
+    def _check_stop(self) -> None:
+        if self._stop_event.is_set():
+            raise TurnInterrupted()
 
     def _emit(self, kind: str, data):
         self.on_event(kind, data)
@@ -315,6 +340,7 @@ class Loop:
         gate = lambda msgs: self._measure(
             self.provider, main_system, msgs, self._tools)["total"]
         for attempt in range(MAX_PRUNE_ATTEMPTS):
+            self._check_stop()
             raw, messages = self._transcript_messages(session)
             if gate(messages) < self.budget.hard:
                 return True
@@ -341,6 +367,7 @@ class Loop:
                                        "messages": turn,
                                        "tools": [t["name"]
                                                  for t in self._prune_tools]})
+                self._check_stop()
                 resp = self.prune_provider.chat(
                     system=system, messages=turn + self._note(bd),
                     tools=self._prune_tools)
@@ -383,6 +410,11 @@ class Loop:
         system = SYSTEM_PROMPT.format(ctx_path=ctx_path,
                                      hard=self.budget.hard,
                                      soft=self.budget.soft)
+        if self._stop_event.is_set():
+            # Stop requested before the turn started: honor it.
+            self._stop_event.clear()
+            self._emit("interrupted", {})
+            return ""
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -394,66 +426,74 @@ class Loop:
         session.context.append(render_user(user_text))
         warned = False
 
-        for step in range(MAX_STEPS):
-            raw, messages = self._transcript_messages(session)
-            if not messages:
-                raise ProviderError(
-                    "Context file parses to zero messages -- the transcript "
-                    f"was emptied. Restore {ctx_path} and retry.")
-            bd = self._measure(self.provider, system, messages, self._tools)
-            est = bd["total"]
-            status = self.budget.status(est)
-            if status == "over":
-                self._emit("budget", {"status": "over", "tokens": est,
-                                      "breakdown": bd})
-                if not self.prune_turn(session):
-                    raise BudgetExceeded(
-                        f"Still over hard budget ({self.budget.hard:,}) "
-                        f"after {MAX_PRUNE_ATTEMPTS} prune attempts. "
-                        f"Prune {ctx_path} by hand and retry.")
-                warned = False
-                continue
-            if status == "warn" and not warned:
-                warned = True
-                self._emit("budget", {"status": "warn", "tokens": est,
-                                      "breakdown": bd})
+        try:
+            for step in range(MAX_STEPS):
+                self._check_stop()
+                raw, messages = self._transcript_messages(session)
+                if not messages:
+                    raise ProviderError(
+                        "Context file parses to zero messages -- the transcript "
+                        f"was emptied. Restore {ctx_path} and retry.")
+                bd = self._measure(self.provider, system, messages, self._tools)
+                est = bd["total"]
+                status = self.budget.status(est)
+                if status == "over":
+                    self._emit("budget", {"status": "over", "tokens": est,
+                                          "breakdown": bd})
+                    if not self.prune_turn(session):
+                        raise BudgetExceeded(
+                            f"Still over hard budget ({self.budget.hard:,}) "
+                            f"after {MAX_PRUNE_ATTEMPTS} prune attempts. "
+                            f"Prune {ctx_path} by hand and retry.")
+                    warned = False
+                    continue
+                if status == "warn" and not warned:
+                    warned = True
+                    self._emit("budget", {"status": "warn", "tokens": est,
+                                          "breakdown": bd})
 
-            self._emit("request", {"phase": "main", "step": step,
-                                   "turn": self._turn_seq,
-                                   "tokens_est": est, "status": status,
-                                   "breakdown": bd,
-                                   "hard": self.budget.hard,
-                                   "soft": self.budget.soft,
-                                   "usage_total": (
-                                       self.tracker.totals
-                                       if self.tracker else None),
-                                   "messages": messages,
-                                   "tools": [t["name"]
-                                             for t in self._tools]})
-            resp = self.provider.chat(system=system,
-                                      messages=messages + self._note(bd),
-                                      tools=self._tools)
-            totals = self._track("main", step, bd, resp.get("usage"))
-            self._emit("response", {"phase": "main",
-                                    "content": resp.get("content"),
-                                    "tool_calls": resp.get("tool_calls"),
-                                    "usage": resp.get("usage"),
-                                    "usage_total": totals})
-            self._emit("usage", resp.get("usage") or {})
-            tool_calls = resp.get("tool_calls") or []
-            # Strip echoed transcript structure (## headers, tool-calls
-            # fences) before storing or showing the reply.
-            content = sanitize_assistant_content(resp.get("content"))
-            # The reply joins the file-transcript before tools run, so a
-            # mid-turn edit of the file sees the reply already in place.
-            session.context.append(
-                render_assistant(content, tool_calls))
-            if content:
-                self._emit("assistant", content)
-            if not tool_calls:
-                return content or ""
-            for tc in tool_calls:
-                result = self._execute_tool(session, tc)
-                session.context.append(render_tool(tc["id"], result))
+                self._emit("request", {"phase": "main", "step": step,
+                                       "turn": self._turn_seq,
+                                       "tokens_est": est, "status": status,
+                                       "breakdown": bd,
+                                       "hard": self.budget.hard,
+                                       "soft": self.budget.soft,
+                                       "usage_total": (
+                                           self.tracker.totals
+                                           if self.tracker else None),
+                                       "messages": messages,
+                                       "tools": [t["name"]
+                                                 for t in self._tools]})
+                self._check_stop()
+                resp = self.provider.chat(system=system,
+                                          messages=messages + self._note(bd),
+                                          tools=self._tools)
+                totals = self._track("main", step, bd, resp.get("usage"))
+                self._emit("response", {"phase": "main",
+                                        "content": resp.get("content"),
+                                        "tool_calls": resp.get("tool_calls"),
+                                        "usage": resp.get("usage"),
+                                        "usage_total": totals})
+                self._emit("usage", resp.get("usage") or {})
+                tool_calls = resp.get("tool_calls") or []
+                # Strip echoed transcript structure (## headers, tool-calls
+                # fences) before storing or showing the reply.
+                content = sanitize_assistant_content(resp.get("content"))
+                # The reply joins the file-transcript before tools run, so a
+                # mid-turn edit of the file sees the reply already in place.
+                session.context.append(
+                    render_assistant(content, tool_calls))
+                if content:
+                    self._emit("assistant", content)
+                if not tool_calls:
+                    return content or ""
+                for tc in tool_calls:
+                    self._check_stop()
+                    result = self._execute_tool(session, tc)
+                    session.context.append(render_tool(tc["id"], result))
+        except TurnInterrupted:
+            self._stop_event.clear()
+            self._emit("interrupted", {})
+            return ""
         raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
                             f"finishing.")

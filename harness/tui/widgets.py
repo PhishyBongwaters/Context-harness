@@ -171,6 +171,8 @@ def format_event(kind: str, data) -> str | None:
         data = data or {}
         msg = data.get("message") or data.get("type") or data
         return f"[error: {msg}]"
+    if kind == "interrupted":
+        return "[turn interrupted]"
     if kind == "approval-wait":
         data = data or {}
         brief = ((data.get("args") or {}).get("command")
@@ -353,6 +355,68 @@ class TranscriptDedupe:
         return []
 
 
+# --- input history (stdlib-only; TaskInput widget below uses it) ---
+
+
+class InputHistory:
+    """Up/down recall for submitted inputs, with draft preservation.
+
+    Pure state machine, no Textual needed: older()/newer() take the
+    current box text and return what the box should show. Editing a
+    recalled entry restarts navigation from that edit as the draft.
+    """
+
+    def __init__(self, limit: int = 200) -> None:
+        self._items: list[str] = []
+        self._limit = max(1, limit)
+        self._pos: int | None = None  # None = not navigating
+        self._draft = ""
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def add(self, text: str) -> None:
+        """Record a submitted input. Consecutive dupes collapse."""
+        if text and (not self._items or self._items[-1] != text):
+            self._items.append(text)
+            del self._items[:-self._limit]
+        self._pos = None
+        self._draft = ""
+
+    def _restart_if_edited(self, current: str) -> None:
+        if (self._pos is not None
+                and current != self._items[self._pos]):
+            # Edited while navigating: the edit becomes the draft.
+            self._draft = current
+            self._pos = None
+
+    def older(self, current: str) -> str:
+        """Step to an older entry (up arrow)."""
+        if not self._items:
+            return current
+        self._restart_if_edited(current)
+        if self._pos is None:
+            self._draft = current
+            self._pos = len(self._items) - 1
+        elif self._pos > 0:
+            self._pos -= 1
+        return self._items[self._pos]
+
+    def newer(self, current: str) -> str:
+        """Step toward newer entries (down arrow); past the newest the
+        preserved draft returns."""
+        if self._pos is None:
+            return current
+        self._restart_if_edited(current)
+        if self._pos is None:
+            return current
+        if self._pos < len(self._items) - 1:
+            self._pos += 1
+            return self._items[self._pos]
+        self._pos = None
+        return self._draft
+
+
 # --- debug tail (new, Phase 3; stdlib-only, best-effort) ---
 
 DEBUG_TAIL_LINES = 50
@@ -392,6 +456,60 @@ except ImportError:  # pragma: no cover - extra missing
     _HAS_TEXTUAL = False
 
 if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
+    from textual.binding import Binding
+    from textual.widgets import TextArea
+
+    class TaskInput(TextArea):
+        """Multi-line task box: ctrl+enter submits, up/down recalls history.
+
+        History navigation applies to single-line input; with multiple
+        lines up/down move the cursor normally. Submitted inputs feed the
+        shared InputHistory (dupes collapse, draft preserved).
+        """
+
+        BINDINGS = [
+            Binding("ctrl+enter", "submit_task", "Send", show=False),
+            Binding("up", "history_up", "", show=False),
+            Binding("down", "history_down", "", show=False),
+        ]
+
+        def __init__(self, *a, on_submit=None, history=None, **k) -> None:
+            super().__init__(*a, **k)
+            self._on_submit = on_submit
+            self._input_history = history if history is not None else InputHistory()
+
+        @property
+        def input_history(self) -> InputHistory:
+            return self._input_history
+
+        def _recall(self, text: str) -> None:
+            self.text = text
+            try:
+                lines = text.split("\n")
+                self.move_cursor((len(lines) - 1, len(lines[-1])))
+            except Exception:
+                pass
+
+        def action_submit_task(self) -> None:
+            text = self.text.strip()
+            if not text:
+                return
+            self._input_history.add(text)
+            self.text = ""
+            if self._on_submit is not None:
+                self._on_submit(text)
+
+        def action_history_up(self) -> None:
+            if "\n" in self.text:
+                super().action_cursor_up()
+                return
+            self._recall(self._input_history.older(self.text))
+
+        def action_history_down(self) -> None:
+            if "\n" in self.text:
+                super().action_cursor_down()
+                return
+            self._recall(self._input_history.newer(self.text))
 
     class BudgetGauge(Static):
         """Bottom-line context gauge: block bar + pct + live status.
