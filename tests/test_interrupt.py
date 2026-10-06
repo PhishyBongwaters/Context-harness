@@ -3,6 +3,7 @@ next safe point (between steps, before model calls and tool runs)."""
 import tempfile
 import unittest
 from pathlib import Path
+from harness.tui import has_tui
 
 from harness.context import Budget
 from harness.loop import Loop, Session
@@ -82,3 +83,35 @@ class TestInterrupt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+@unittest.skipUnless(has_tui(), "textual extra missing")
+class TestInterruptDuringToolPhase(unittest.IsolatedAsyncioTestCase):
+    """Escape must register a stop while the worker runs a tool.
+
+    Regression: the interrupt guard used the request-span timer
+    (_turn_start), which _poll clears on every "response"/"tool" event.
+    During a long tool execution the timer is None while the turn is
+    still running, so escape silently did nothing.
+    """
+
+    async def test_escape_registers_stop_when_request_span_ended(self):
+        from harness.tui.app import HarnessApp
+        from harness.tui.bridge import TuiBridge
+
+        loop = Loop(MockProvider([{"content": "ok"}]),
+                    Budget(hard=100000, soft=80000),
+                    on_event=lambda k, v: None)
+        app = HarnessApp(loop, make_session(), TuiBridge())
+        async with app.run_test() as pilot:
+            # Simulate the UI state mid-tool-execution: the turn is
+            # running, but the last event processed was "response", so
+            # the request-span timer was cleared.
+            app._turn_running = True
+            app._turn_start = None
+            await pilot.press("escape")
+            self.assertTrue(loop._stop_event.is_set(),
+                            "escape must register stop during tool phase")
+            # With no turn running, escape stays a silent no-op.
+            loop._stop_event.clear()
+            app._turn_running = False
+            await pilot.press("escape")
+            self.assertFalse(loop._stop_event.is_set())

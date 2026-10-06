@@ -675,6 +675,11 @@ if _HAS:
             self._dedupe = TranscriptDedupe()
             self._transcript_lines: list[str] = []
             self._turn_start: float | None = None
+            # Turn-lifecycle flag, distinct from the request-span timer
+            # above: _turn_start is cleared on every "response"/"tool"
+            # event (e.g. while the worker runs a long tool), but the
+            # turn is still running then and escape must still register.
+            self._turn_running = False
             self._phase = "main"
             self._debug_visible = False
 
@@ -1124,7 +1129,7 @@ if _HAS:
 
         def action_interrupt_turn(self) -> None:
             """Escape: ask a running turn to stop at the next safe point."""
-            if self._turn_start is None:
+            if not self._turn_running:
                 return
             try:
                 self._agent_loop.request_stop()
@@ -1137,6 +1142,7 @@ if _HAS:
             if self._handle_slash(text):
                 return
             self._turn_start = time.monotonic()
+            self._turn_running = True
             self._phase = "main"
             self._tick_status()
             run_turn_in_thread(
@@ -1149,10 +1155,12 @@ if _HAS:
             )
 
         def _turn_done(self) -> None:
+            self._turn_running = False
             self._turn_start = None
             self._set_status("")
 
         def _turn_failed(self, msg: str, detail: str = "") -> None:
+            self._turn_running = False
             self._turn_start = None
             self._set_status("")
             self._log(f"[error: {msg}]")

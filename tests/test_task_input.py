@@ -121,7 +121,9 @@ class TestInterruptKey(unittest.IsolatedAsyncioTestCase):
         app = await self._app(loop)
         async with app.run_test() as pilot:
             await pilot.pause()
-            app._turn_start = time.monotonic()  # simulate a running turn
+            # simulate a running turn the way _submit sets it up
+            app._turn_start = time.monotonic()
+            app._turn_running = True
             await pilot.press("escape")
             await pilot.pause()
             self.assertEqual(calls, ["stop"])
