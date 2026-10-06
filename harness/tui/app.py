@@ -344,7 +344,9 @@ if _HAS:
 
         BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail"),
                     ("ctrl+s", "open_sessions", "Sessions"),
-                    ("ctrl+p", "pick_provider", "Provider/model")]
+                    # ctrl+p is Textual's command palette (built-in wins),
+                    # so the provider/model picker lives on ctrl+o.
+                    ("ctrl+o", "pick_provider", "Provider/model")]
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -558,7 +560,7 @@ if _HAS:
             self._set_status("")
             self._log_lines(lines)
 
-        # --- session + provider/model pickers (ctrl+s / ctrl+p) ---
+        # --- session + provider/model pickers (ctrl+s / ctrl+o) ---
 
         def _picker_rows(self):
             try:

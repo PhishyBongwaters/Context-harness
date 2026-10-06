@@ -164,10 +164,12 @@ config/providers/models views, debug tail toggle).*
 
 ---
 
-## 13. Pickers: sessions (ctrl+s) + provider/model (ctrl+p)
+## 13. Pickers: sessions (ctrl+s) + provider/model (ctrl+o)
 
-Bindings: `ctrl+s` opens the session picker, `ctrl+p` opens the
-provider picker. `/open`/`/list` keep working as before.
+Bindings: `ctrl+s` opens the session picker, `ctrl+o` opens the
+provider picker (`ctrl+p` is Textual's built-in command palette and
+wins over app bindings, so the picker does not claim it).
+`/open`/`/list` keep working as before.
 
 - Session picker lists `sessions_info(cfg)` rows newest-first:
   `*` = current, `[project]` tag, `N tokens` best-effort (never
@@ -195,5 +197,5 @@ provider picker. `/open`/`/list` keep working as before.
 Still manual: project switching stays `/project`; no streaming;
 `/models` remains a read-only view (the picker is the switch path).
 Manual checks: `pip install -r requirements-tui.txt` if needed,
-`--tui`, `ctrl+s` open/new, `ctrl+p` provider+model switch
+`--tui`, `ctrl+s` open/new, `ctrl+o` provider+model switch
 including the missing-key path.
