@@ -13,9 +13,9 @@ import traceback
 try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.containers import Vertical
+    from textual.containers import Horizontal, Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import (Button, Footer, Header, Input, Label,
+    from textual.widgets import (Button, Header, Input, Label,
                                    Log, OptionList, Static)
     from textual.widgets.option_list import Option
 
@@ -610,14 +610,41 @@ if _HAS:
             self.app.pop_screen()
 
 
+    class _ButtonFooter(Horizontal):
+        """Standard-theme footer: the same actions as clickable Buttons.
+
+        LcarsFooter's pills are LCARS-styled; this is the theme-native
+        equivalent so the buttons exist in every theme, not just lcars.
+        """
+
+        def __init__(self, pills: list[tuple[str, str, str]] | None = None,
+                     **k) -> None:
+            super().__init__(**k)
+            self._pills = pills or []
+
+        def compose(self):
+            for key, label, action in self._pills:
+                yield Button(f"{key} {label}", id=f"btn-{action}")
+
+        def on_button_pressed(self, event: "Button.Pressed") -> None:
+            event.stop()
+            action = (event.button.id or "")[4:]
+            fn = getattr(self.app, f"action_{action}", None)
+            if callable(fn):
+                fn()
+
+
     class HarnessApp(App):
         CSS = ("#transcript { height: 1fr; } #input { height: 5; } "
                "#debug { height: 8; display: none; } "
                "#gauge { height: 1; } #budget { height: 1; } "
                "#chrome-top { height: 1; } #chrome-bottom { height: 1; } "
                "#main { height: 1fr; } "
+               "#transcript { scrollbar-size-horizontal: 0; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#lcars-footer LcarsPill { width: auto; height: 1; } "
+               "#std-footer { height: 1; } "
+               "#std-footer Button { width: auto; height: 1; min-width: 0; } "
                "#gauge.warn, #budget.warn { color: yellow; } "
                "#gauge.over, #budget.over { color: red; }")
 
@@ -722,7 +749,9 @@ if _HAS:
                     LcarsFooter(pills=_binding_pills(self.BINDINGS),
                                 id="lcars-footer"),
                 )
-            return (Header(id="std-header"), Footer(id="std-footer"))
+            return (Header(id="std-header"),
+                    _ButtonFooter(pills=_binding_pills(self.BINDINGS),
+                                  id="std-footer"))
 
         async def _apply_chrome(self, lcars: bool) -> None:
             """Swap the top/bottom chrome for the current theme."""
