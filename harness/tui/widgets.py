@@ -88,23 +88,27 @@ def _bg_code(hex_color: str) -> str:
 
 
 def with_bg(line: str, hex_color: str) -> str:
-    """Wrap a line in a background color using terminal-safe ANSI.
+    """Tag a line with its background color for post-wrap application.
 
-    Uses 16-color ANSI backgrounds (not 24-bit): Windows conhost handles
-    these correctly, and they don't confuse width calculations. Colors are
-    approximate but the panels stay legible everywhere.
-    Applies to every physical line (split on \\n).
+    Returns the line prefixed with a color marker (\\x00#rrggbb\\x00).
+    The marker survives word-wrapping (it's plain text), and write_wrapped
+    applies the actual ANSI background to each wrapped chunk. This ensures
+    multiline messages keep their background on every line.
+    Uses 16-color ANSI backgrounds (terminal-safe, works on conhost).
     """
     if not line or not _RICH_AVAILABLE:
         return line
-    # Map our dark tints to closest 16-color backgrounds.
-    # 40=black, 44=blue, 100=bright black (dark grey)
+    return f"\x00{hex_color}\x00" + line
+
+
+def _apply_bg(line: str, hex_color: str) -> str:
+    """Apply 16-color ANSI background to a single (already-wrapped) line."""
     if hex_color == _USER_BG:
         bg = "\x1b[44m"      # blue for user
     elif hex_color == _ASSISTANT_BG:
         bg = "\x1b[100m"     # bright black for assistant
     else:
-        bg = "\x1b[40m"      # black for tools
+        bg = "\x1b[40m"      # black for tools/other
     out = []
     for part in line.split("\n"):
         out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg)
@@ -771,25 +775,21 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             if len(self._raw) > self.MAX_LINES:
                 del self._raw[:len(self._raw) - self.MAX_LINES]
             w = self._wrap_width()
-            # If the text has a background color, strip it before wrapping
-            # and re-apply to each wrapped chunk. Otherwise wrapped
-            # continuations lose their background (multiline bug).
-            bg_match = _BG_RE.search(text)
-            if bg_match:
-                bg_code = bg_match.group(0)
-                # Remove all bg codes; keep other ANSI (fg colors, bold)
-                clean = _BG_RE.sub("", text)
-                # Remove stray resets left by with_bg
-                clean = clean.replace("\x1b[0m", "")
-                for line in self._wrap(clean, w):
-                    chunk = bg_code + line + "\x1b[0m"
-                    self.write_line(_panel(chunk, w))
-            else:
-                for line in self._wrap(text, w):
-                    # write(), not write_line, CONCATENATES newline-less
-                    # strings into one line -- wrapped chunks must each be
-                    # their own line.
-                    self.write_line(_panel(line, w))
+            # Extract bg color marker (if any), wrap plain text, then
+            # apply background to each wrapped chunk. This keeps multiline
+            # backgrounds intact without ghosting.
+            bg_color = None
+            if text.startswith("\x00#") and "\x00" in text[3:]:
+                end = text.index("\x00", 3)
+                bg_color = text[3:end]
+                text = text[end + 1:]
+            for line in self._wrap(text, w):
+                # write(), not write_line, CONCATENATES newline-less
+                # strings into one line -- wrapped chunks must each be
+                # their own line.
+                if bg_color:
+                    line = _apply_bg(line, bg_color)
+                self.write_line(_panel(line, w))
 
         def clear_all(self) -> None:
             self._raw.clear()
@@ -802,16 +802,15 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._wrap_w = w
             self.clear()
             for text in self._raw:
-                bg_match = _BG_RE.search(text)
-                if bg_match:
-                    bg_code = bg_match.group(0)
-                    clean = _BG_RE.sub("", text).replace("\x1b[0m", "")
-                    for line in self._wrap(clean, w):
-                        chunk = bg_code + line + "\x1b[0m"
-                        self.write_line(_panel(chunk, w))
-                else:
-                    for line in self._wrap(text, w):
-                        self.write_line(_panel(line, w))
+                bg_color = None
+                if text.startswith("\x00#") and "\x00" in text[3:]:
+                    end = text.index("\x00", 3)
+                    bg_color = text[3:end]
+                    text = text[end + 1:]
+                for line in self._wrap(text, w):
+                    if bg_color:
+                        line = _apply_bg(line, bg_color)
+                    self.write_line(_panel(line, w))
 
         def on_resize(self, event) -> None:
             self.rewrap()
