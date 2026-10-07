@@ -52,6 +52,10 @@ tool calls as text, XML, or JSON blocks in your reply. The harness
 stores tool calls in ```tool-calls blocks automatically; you never
 need to write those yourself.
 
+IMPORTANT: After using tools, ALWAYS reply with a text summary of what
+you did or found. Never end your turn with only tool calls and no text.
+The user needs to see your response in the chat.
+
 You can restructure this file freely with your write/edit tools: delete stale
 sections, summarize old tool output in place, reorder, annotate. The parser
 needs three things:

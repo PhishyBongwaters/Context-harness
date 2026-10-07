@@ -144,7 +144,7 @@ def format_event(kind: str, data) -> str | None:
         args = data.get("args") or {}
         brief = args.get("command") or args.get("path") or ""
         denied = " [denied]" if data.get("denied") else ""
-        header = f"{_ansi('$ '+name+' '+brief+denied,2)}".rstrip()
+        header = f"{_ansi('🔧 '+name+' '+brief+denied,2)}".rstrip()
         # Inline syntax-highlighted view for write/edit of source files
         if _RICH_AVAILABLE and name in ("write", "edit"):
             path = args.get("path")
