@@ -46,7 +46,12 @@ FORMAT: sections start with a `## ` header, one per line:
   ## assistant           one of your previous replies
   ## tool <id>           the result of a tool call
 An assistant section may end with a ```tool-calls fenced JSON block listing
-that reply's tool calls.
+that reply's tool calls. Example:
+```tool-calls
+[{{"id": "call_1", "name": "read", "arguments": {{"path": "file.txt"}}}}]
+```
+Each call needs id, name, and arguments. Available tools: read, write,
+edit, exec, tokens. Do NOT use XML or any other format for tool calls.
 
 You can restructure this file freely with your write/edit tools: delete stale
 sections, summarize old tool output in place, reorder, annotate. The parser
