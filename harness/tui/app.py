@@ -154,11 +154,10 @@ if _HAS:
                     ("escape", "deny", "Deny")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
-               "#approval-box { width: 80%; max-width: 72; height: auto; "
-               "max-height: 80%; border: thick $primary; "
-               "background: $surface; padding: 1 2; overflow-y: auto; } "
-               "#approval-title { text-style: bold; text-wrap: wrap; } "
-               "#approval-reason { text-wrap: wrap; } "
+               "#approval-box { width: 62; height: auto; "
+               "border: thick $primary; "
+               "background: $surface; padding: 1 2; } "
+               "#approval-title { text-style: bold; } "
                "#approval-count { color: $warning; }")
 
         def __init__(self, info: dict, box: dict):
@@ -172,9 +171,16 @@ if _HAS:
             title = f"[approval needed] {self._info.get('tool', '?')}"
             if brief:
                 title += f" {brief}"
+            # Truncate long titles: the modal border fragments when
+            # content overflows the box width.
+            if len(title) > 60:
+                title = title[:57] + "..."
+            reason = self._info.get("reason", "")
+            if len(reason) > 60:
+                reason = reason[:57] + "..."
             with Vertical(id="approval-box"):
                 yield Label(title, id="approval-title")
-                yield Label(f"reason: {self._info.get('reason', '')}",
+                yield Label(f"reason: {reason}",
                             id="approval-reason")
                 yield Label("", id="approval-count")
                 yield Label("(a)pprove turn / (s)ession / (d)eny",
