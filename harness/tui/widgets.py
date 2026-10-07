@@ -598,6 +598,24 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 event.prevent_default()
                 self.action_insert_newline()
                 return
+            # TextArea binds ctrl+d (delete_right) and ctrl+y (redo);
+            # the app uses them for panel toggles, so intercept here.
+            if key == "ctrl+d":
+                event.stop()
+                event.prevent_default()
+                try:
+                    self.app.action_toggle_debug()
+                except Exception:
+                    pass
+                return
+            if key == "ctrl+y":
+                event.stop()
+                event.prevent_default()
+                try:
+                    self.app.action_toggle_system()
+                except Exception:
+                    pass
+                return
             await super()._on_key(event)
 
         def action_insert_newline(self) -> None:

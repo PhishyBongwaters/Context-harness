@@ -848,6 +848,10 @@ if _HAS:
             for line in lines or []:
                 self._log(line)
 
+        def _syslog_lines(self, lines) -> None:
+            for line in lines or []:
+                self._syslog(line)
+
         # Approval modal hook: runs on the Loop worker thread, shows the
         # modal on the UI thread, waits up to timeout. None -> deny.
         def _modal_decide(self, info: dict):
@@ -1000,14 +1004,14 @@ if _HAS:
                 if not rest:
                     self._log("usage: /open <id>  (/list to see ids)")
                 elif self._control is not None:
-                    self._log_lines(self._control.do_open(rest))
+                    self._syslog_lines(self._control.do_open(rest))
                     self._sync_state()
                 else:
                     self._log("usage: /open <id>  (/list to see ids)")
                 return True
             if cmd == "new":
                 if self._control is not None:
-                    self._log_lines(self._control.do_new(rest))
+                    self._syslog_lines(self._control.do_new(rest))
                     self._sync_state()
                     if rest:
                         self._submit(rest)
@@ -1093,12 +1097,12 @@ if _HAS:
 
         def _open_picked_session(self, sid: str) -> None:
             if self._control is not None:
-                self._log_lines(self._control.do_open(sid))
+                self._syslog_lines(self._control.do_open(sid))
                 self._sync_state()
 
         def _picker_new(self, rest: str = "") -> None:
             if self._control is not None:
-                self._log_lines(self._control.do_new(rest))
+                self._syslog_lines(self._control.do_new(rest))
                 self._sync_state()
 
         def _open_provider_picker(self) -> None:
