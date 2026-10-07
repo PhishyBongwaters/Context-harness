@@ -783,7 +783,12 @@ def main(argv: list[str] | None = None) -> int:
         tracker = UsageTracker(sess.dir)
         box["tracker"] = tracker
         # Apply CLI overrides for display before showing session header
-        _show_session(_disp_cfg(), sess, tracker.totals, box["project"])
+        if is_tui:
+            # TUI: stash for the system panel instead of printing.
+            box["tui_session_header"] = session_header_line(
+                _disp_cfg(), sess, tracker.totals, box["project"])
+        else:
+            _show_session(_disp_cfg(), sess, tracker.totals, box["project"])
         dbg = None
         if args.debug_file:
             dbg = DebugLog(args.debug_file, session_id=sess.id)
@@ -926,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
                        provider_name=cfg.provider, model=cfg.model,
                        initial=" ".join(args.task) or None,
                        cfg=cfg, control=control,
+                       session_header=box.get("tui_session_header"),
                        debug_path_getter=_tui_debug_path,
                        mouse=not getattr(args, "no_mouse", False))
 

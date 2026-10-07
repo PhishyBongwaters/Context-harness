@@ -692,7 +692,7 @@ if _HAS:
                      provider_name: str = "", model: str = "",
                      initial: str | None = None, cfg=None, control=None,
                      debug_path=None, debug_path_getter=None,
-                     mouse: bool = True):
+                     mouse: bool = True, session_header: str | None = None):
             # mouse=False leaves mouse events to the terminal: native
             # selection/copy works, in-app mouse does nothing. Textual
             # takes it on run(), so stash it for run_app.
@@ -708,6 +708,7 @@ if _HAS:
             self._control = control
             self._debug_path_static = debug_path
             self._debug_path_getter = debug_path_getter
+            self._session_header = session_header
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
             # LCARS is a toggleable theme (command palette): registered
@@ -785,6 +786,8 @@ if _HAS:
             self._wire_approver()
             self.set_interval(0.1, self._poll)
             await self._apply_chrome(self.theme == "lcars")
+            if self._session_header:
+                self._syslog(self._session_header)
             self._focus_input()
             if self._initial:
                 self._submit(self._initial)
@@ -1262,7 +1265,7 @@ if _HAS:
                 pass
             if self._debug_visible:
                 if self._debug_path() is None:
-                    self._log("[debug] no debug log (run with --debug)")
+                    self._syslog("[debug] no debug log (run with --debug)")
                 else:
                     for line in debug_panel_lines(self._debug_path(),
                                                   DEBUG_TAIL_LINES):
