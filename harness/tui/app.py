@@ -154,9 +154,11 @@ if _HAS:
                     ("escape", "deny", "Deny")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
-               "#approval-box { width: 64; height: auto; "
-               "border: thick $primary; background: $surface; padding: 1 2; } "
-               "#approval-title { text-style: bold; } "
+               "#approval-box { width: 80%; max-width: 72; height: auto; "
+               "max-height: 80%; border: thick $primary; "
+               "background: $surface; padding: 1 2; overflow-y: auto; } "
+               "#approval-title { text-style: bold; text-wrap: wrap; } "
+               "#approval-reason { text-wrap: wrap; } "
                "#approval-count { color: $warning; }")
 
         def __init__(self, info: dict, box: dict):

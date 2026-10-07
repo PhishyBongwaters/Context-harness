@@ -77,6 +77,7 @@ def _ansi(text: str, *codes: int) -> str:
 # Chat-style message backgrounds (tasteful dark tints).
 _USER_BG = "#1d2b3a"       # blue-grey for user messages
 _ASSISTANT_BG = "#2b2b2b"  # warm dark grey for agent replies
+_TOOL_BG = "#232323"       # slightly darker for tool calls
 
 
 def _bg_code(hex_color: str) -> str:
@@ -170,10 +171,12 @@ def format_event(kind: str, data) -> str | None:
                             except Exception:
                                 code_blob = text
                             if code_blob:
-                                return f"{header}\n{_ansi('file',1)} {p}\n{code_blob}"
+                                return with_bg(
+                                    f"{header}\n{_ansi('file',1)} {p}\n{code_blob}",
+                                    _TOOL_BG)
                 except Exception:
                     pass
-        return header
+        return with_bg(header, _TOOL_BG)
     if kind == "budget":
         data = data or {}
         return (f"[{str(data.get('status', '?')).upper()} budget: "
