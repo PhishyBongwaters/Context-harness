@@ -10,7 +10,12 @@ DebugPanel) exist only when the textual extra is installed.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# Windows conhost mangles 24-bit ANSI backgrounds (cursor positioning
+# breaks, text appears at random offsets). Disable full-width panels there.
+_WIN32 = sys.platform == "win32"
 
 try:
     from rich.syntax import Syntax
@@ -93,8 +98,10 @@ def with_bg(line: str, hex_color: str) -> str:
     only color the first line. Re-asserts the background after every
     full reset (\\x1b[0m) so it survives inner styling such as syntax
     highlighting. Without Rich the line passes through unchanged.
+    On Windows, returns the line unchanged: conhost mangles 24-bit
+    backgrounds, breaking cursor positioning.
     """
-    if not line or not _RICH_AVAILABLE:
+    if not line or not _RICH_AVAILABLE or _WIN32:
         return line
     bg = _bg_code(hex_color)
     out = []
