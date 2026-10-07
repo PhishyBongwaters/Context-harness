@@ -460,21 +460,26 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
     from textual.widgets import TextArea
 
     class TaskInput(TextArea):
-        """Multi-line task box: ctrl+enter submits, up/down recalls history.
+        """Multi-line task box: enter sends, ctrl+enter inserts a newline,
+        up/down recalls history on single-line input.
 
-        History navigation applies to single-line input; with multiple
-        lines up/down move the cursor normally. Submitted inputs feed the
-        shared InputHistory (dupes collapse, draft preserved).
+        Enter-to-send matches the old single-line Input muscle memory;
+        newlines come from ctrl+enter (or pasting). History navigation
+        applies to single-line input; with multiple lines up/down move
+        the cursor normally. Submitted inputs feed the shared
+        InputHistory (dupes collapse, draft preserved).
         """
 
         BINDINGS = [
-            Binding("ctrl+enter", "submit_task", "Send", show=False),
+            Binding("ctrl+enter", "insert_newline", "", show=False),
             Binding("up", "history_up", "", show=False),
             Binding("down", "history_down", "", show=False),
         ]
 
         def __init__(self, *a, on_submit=None, history=None, **k) -> None:
             super().__init__(*a, **k)
+            self.border_title = ("enter send · ctrl+enter newline · "
+                                 "up/down history")
             self._on_submit = on_submit
             self._input_history = history if history is not None else InputHistory()
 
@@ -498,6 +503,24 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self.text = ""
             if self._on_submit is not None:
                 self._on_submit(text)
+
+        async def _on_key(self, event) -> None:
+            # TextArea swallows Enter (inserts "\n") in its own _on_key
+            # before widget bindings are consulted, so intercept it here:
+            # Enter always sends; ctrl+enter still inserts a newline.
+            # (async on textual 3.x and 8.x alike.)
+            if event.key == "enter":
+                event.stop()
+                event.prevent_default()
+                self.action_submit_task()
+                return
+            await super()._on_key(event)
+
+        def action_insert_newline(self) -> None:
+            try:
+                self.insert("\n")
+            except Exception:
+                pass
 
         def action_history_up(self) -> None:
             if "\n" in self.text:

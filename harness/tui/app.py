@@ -615,6 +615,7 @@ if _HAS:
                "#debug { height: 8; display: none; } "
                "#gauge { height: 1; } #budget { height: 1; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
+               "#lcars-footer LcarsPill { width: auto; height: 1; } "
                "#gauge.warn, #budget.warn { color: yellow; } "
                "#gauge.over, #budget.over { color: red; }")
 

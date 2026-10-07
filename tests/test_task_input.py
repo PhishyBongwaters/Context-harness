@@ -1,5 +1,6 @@
-"""TaskInput widget: ctrl+enter submits, up/down recalls history,
-multi-line input keeps cursor movement. Needs the textual extra."""
+"""TaskInput widget: enter sends, ctrl+enter inserts newline, up/down
+recalls history, multi-line input keeps cursor movement. Needs the
+textual extra."""
 import unittest
 
 from harness.tui import has_tui
@@ -28,12 +29,12 @@ class TestTaskInput(unittest.IsolatedAsyncioTestCase):
             ti = app.query_one("#ti", TaskInput)
             ti.focus()
             await pilot.press(*"hi")
-            await pilot.press("ctrl+enter")
+            await pilot.press("enter")
             self.assertEqual(submitted, ["hi"])
             self.assertEqual(ti.text, "")
 
             await pilot.press(*"there")
-            await pilot.press("ctrl+enter")
+            await pilot.press("enter")
             self.assertEqual(submitted, ["hi", "there"])
 
             await pilot.press("up")
@@ -52,7 +53,7 @@ class TestTaskInput(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             ti = app.query_one("#ti", TaskInput)
             ti.focus()
-            await pilot.press("space", "ctrl+enter")
+            await pilot.press("space", "enter")
             self.assertEqual(submitted, [])
             self.assertEqual(len(ti.input_history), 0)
 
@@ -71,7 +72,7 @@ class TestTaskInput(unittest.IsolatedAsyncioTestCase):
             self.assertLess(ti.cursor_location[0], row_before + 1)
             self.assertEqual(submitted, [])
 
-    async def test_ctrl_enter_submits_multiline(self):
+    async def test_enter_submits_multiline_ctrl_enter_newlines(self):
         from harness.tui.widgets import TaskInput
 
         app, submitted = await self._app()
@@ -79,10 +80,11 @@ class TestTaskInput(unittest.IsolatedAsyncioTestCase):
             ti = app.query_one("#ti", TaskInput)
             ti.focus()
             await pilot.press(*"line1")
-            await pilot.press("enter")
+            await pilot.press("ctrl+enter")
             await pilot.press(*"line2")
             self.assertIn("\n", ti.text)
-            await pilot.press("ctrl+enter")
+            self.assertEqual(submitted, [])
+            await pilot.press("enter")
             self.assertEqual(submitted, ["line1\nline2"])
             self.assertEqual(ti.text, "")
 

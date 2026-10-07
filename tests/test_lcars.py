@@ -67,8 +67,8 @@ class TestFooterSegments(unittest.TestCase):
     def test_pills_from_bindings(self):
         pills = _binding_pills([("ctrl+d", "toggle_debug", "Debug tail"),
                                 ("ctrl+s", "open_sessions", "Sessions")])
-        self.assertEqual(pills, [("ctrl+d", "Debug tail"),
-                                 ("ctrl+s", "Sessions")])
+        self.assertEqual(pills, [("ctrl+d", "Debug tail", "toggle_debug"),
+                                 ("ctrl+s", "Sessions", "open_sessions")])
 
     def test_hidden_and_empty_skipped(self):
         pills = _binding_pills([
@@ -78,9 +78,10 @@ class TestFooterSegments(unittest.TestCase):
         self.assertEqual(pills, [])
 
     def test_binding_objects(self):
-        b = SimpleNamespace(key="ctrl+o", description="Provider/model",
-                            show=True)
-        self.assertEqual(_binding_pills([b]), [("ctrl+o", "Provider/model")])
+        b = SimpleNamespace(key="ctrl+o", action="pick_provider",
+                            description="Provider/model", show=True)
+        self.assertEqual(_binding_pills([b]),
+                         [("ctrl+o", "Provider/model", "pick_provider")])
 
     def test_segments_colored(self):
         segs = footer_segments([("ctrl+d", "Debug tail"),
@@ -100,6 +101,36 @@ class TestWidgets(unittest.TestCase):
     def test_header_footer_classes_exist(self):
         self.assertTrue(hasattr(lcars, "LcarsHeader"))
         self.assertTrue(hasattr(lcars, "LcarsFooter"))
+        self.assertTrue(hasattr(lcars, "LcarsPill"))
+
+
+@unittest.skipUnless(has_tui(), "textual extra missing")
+class TestClickablePills(unittest.IsolatedAsyncioTestCase):
+    """Footer pills are real buttons: clicking one runs the app action."""
+
+    async def test_click_pill_runs_action(self):
+        from textual.app import App, ComposeResult
+        from harness.tui.lcars import LcarsFooter
+
+        fired = []
+
+        class TA(App):
+            def compose(self) -> ComposeResult:
+                yield LcarsFooter(
+                    pills=[("ctrl+d", "Debug", "toggle_debug")],
+                    id="lcars-footer")
+
+            def action_toggle_debug(self):
+                fired.append("toggle_debug")
+
+        app = TA()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            pills = list(app.query("LcarsPill"))
+            self.assertEqual(len(pills), 1)
+            await pilot.click(pills[0])
+            await pilot.pause()
+            self.assertEqual(fired, ["toggle_debug"])
 
 
 if __name__ == "__main__":

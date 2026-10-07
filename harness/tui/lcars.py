@@ -63,25 +63,27 @@ def header_segments(title: str, width: int, phase: int = 0,
     return segs
 
 
-def _binding_pills(bindings) -> list[tuple[str, str]]:
-    """(key, description) pairs from App.BINDINGS, hidden ones skipped.
+def _binding_pills(bindings) -> list[tuple[str, str, str]]:
+    """(key, description, action) triples from App.BINDINGS, hidden ones
+    skipped.
 
     Accepts Binding objects or plain (key, action, description[, show])
     tuples so the pure helper stays testable without Textual.
     """
-    pills: list[tuple[str, str]] = []
+    pills: list[tuple[str, str, str]] = []
     for b in bindings or []:
         if isinstance(b, tuple):
-            parts = list(b) + [None, None]
-            key, desc, show = parts[0], parts[2], parts[3]
+            parts = list(b) + [None, None, None]
+            key, action, desc, show = parts[0], parts[1], parts[2], parts[3]
             show = True if show is None else bool(show)
         else:
             key = getattr(b, "key", "")
+            action = getattr(b, "action", "")
             desc = getattr(b, "description", "")
             show = getattr(b, "show", True)
         if show is False or not desc:
             continue
-        pills.append((str(key), str(desc)))
+        pills.append((str(key), str(desc), str(action)))
     return pills
 
 
@@ -101,6 +103,7 @@ def footer_segments(pills: list[tuple[str, str]], width: int,
 
 try:
     from textual.widgets import Static
+    from textual.containers import Horizontal
     from rich.text import Text
 
     _HAS_TEXTUAL = True
@@ -142,14 +145,41 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             return _to_text(header_segments(self._title, width,
                                             self._phase))
 
-    class LcarsFooter(Static):
-        """LCARS bottom bar: key bindings as colored pills. Static."""
+    class LcarsPill(Static):
+        """One clickable LCARS pill: key hint + label, runs an app action.
 
-        def __init__(self, pills: list[tuple[str, str]] | None = None,
+        Mouse-only affordance; keyboard users have the key binding itself.
+        """
+
+        def __init__(self, key: str, label: str, action: str, bg: str,
+                     **k) -> None:
+            super().__init__(**k)
+            self._key = key
+            self._label = label
+            self._action = action
+            self._bg = bg
+
+        def render(self) -> "Text":
+            t = Text(no_wrap=True)
+            t.append(f" {self._key} {self._label} ",
+                     style=f"{_FG} on {self._bg}")
+            return t
+
+        def on_click(self, event) -> None:
+            event.stop()
+            fn = getattr(self.app, f"action_{self._action}", None)
+            if callable(fn):
+                fn()
+
+    class LcarsFooter(Horizontal):
+        """LCARS bottom bar: key bindings as clickable colored pills."""
+
+        def __init__(self, pills: list[tuple[str, str, str]] | None = None,
                      **k) -> None:
             super().__init__(**k)
             self._pills = pills or []
 
-        def render(self) -> "Text":
-            width = self.size.width or 80
-            return _to_text(footer_segments(self._pills, width))
+        def compose(self):
+            for i, (key, label, action) in enumerate(self._pills):
+                color = LCARS[_PILL_COLORS[i % len(_PILL_COLORS)]]
+                yield LcarsPill(key, label, action, color)
