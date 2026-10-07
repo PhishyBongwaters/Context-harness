@@ -88,40 +88,31 @@ def _bg_code(hex_color: str) -> str:
 
 
 def with_bg(line: str, hex_color: str) -> str:
-    """Wrap a line in a background color using Rich terminal detection.
+    """Wrap a line in a background color using terminal-safe ANSI.
 
-    Applies to every physical line (split on \\n). Rich picks color codes
-    appropriate for the actual terminal (downgrading from 24-bit on
-    Windows conhost), so cursor positioning stays intact. Re-asserts the
-    background after every full reset (\\x1b[0m) so it survives inner
-    styling such as syntax highlighting. Without Rich the line passes
-    through unchanged.
+    Uses 16-color ANSI backgrounds (not 24-bit): Windows conhost handles
+    these correctly, and they don't confuse width calculations. Colors are
+    approximate but the panels stay legible everywhere.
+    Applies to every physical line (split on \\n).
     """
     if not line or not _RICH_AVAILABLE:
         return line
-    from rich.text import Text
-    from rich.style import Style
-    from rich.console import Console
-    # Terminal-aware console: Rich downgrades 24-bit -> 256 -> 16 colors
-    # based on what the terminal actually supports.
-    _console = Console(force_terminal=True, color_system="auto", width=10000)
-    style = Style(bgcolor=hex_color)
+    # Map our dark tints to closest 16-color backgrounds.
+    # 40=black, 44=blue, 100=bright black (dark grey)
+    if hex_color == _USER_BG:
+        bg = "\x1b[44m"      # blue for user
+    elif hex_color == _ASSISTANT_BG:
+        bg = "\x1b[100m"     # bright black for assistant
+    else:
+        bg = "\x1b[40m"      # black for tools
     out = []
     for part in line.split("\n"):
-        # Preserve inner ANSI (e.g. syntax highlighting) by parsing it
-        # into the Text object, then applying our bg style on top.
-        text = Text.from_ansi(part)
-        text.stylize(style)
-        with _console.capture() as cap:
-            _console.print(text, end="", soft_wrap=True)
-        rendered = cap.get()
-        # Ensure the background covers the full line even where the
-        # original had resets: Rich handles this via the style spans.
-        out.append(rendered)
+        out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg)
+                   + "\x1b[0m")
     return "\n".join(out)
 
 
-_BG_RE = _re.compile(r"\x1b\[(?:48;5;\d+|48;2;\d+;\d+;\d+|4\d|10[0-7])(?:;\d+)*m")
+_BG_RE = _re.compile(r"\x1b\[(?:40|44|100)m")
 
 
 def _panel(line: str, width: int) -> str:

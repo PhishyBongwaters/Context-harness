@@ -1209,7 +1209,7 @@ if _HAS:
                 self._log(f"[retarget error: {e}]")
                 return False
             self._sync_state()  # picks up box['loop'] + new labels
-            self._log_lines(lines)
+            self._syslog_lines(lines)
             return True
 
         def action_open_sessions(self) -> None:
