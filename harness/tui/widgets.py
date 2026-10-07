@@ -120,10 +120,15 @@ _BG_RE = _re.compile(r"\x1b\[(?:40|44|100)m")
 
 
 def _panel(line: str, width: int) -> str:
-    """Stretch a with_bg line to full width: a chat panel, not just
-    highlighted text. Wrapped chunks may start mid-line, so ensure the
-    background is asserted at the start too. Pads to width-1: padding
-    to exactly width trips Textual's horizontal scrollbar off-by-one."""
+    """Pad a with_bg line to full width (chat panel effect).
+
+    On Windows, returns the line unchanged: conhost's handling of
+    padded background spans creates jagged edges and ghost artifacts.
+    The text still carries its background color, just not full-width.
+    """
+    import sys
+    if sys.platform == "win32":
+        return line
     m = _BG_RE.search(line)
     if not m or width <= 0:
         return line
