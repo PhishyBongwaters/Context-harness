@@ -159,6 +159,23 @@ class TestInterruptKey(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(calls, [])
 
+    async def test_ctrl_n_inserts_newline(self):
+        from types import SimpleNamespace
+        from harness.tui.widgets import TaskInput
+
+        loop = SimpleNamespace(approver=None,
+                               request_stop=lambda: None)
+        app = await self._app(loop)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            ti = app.query_one("#input", TaskInput)
+            ti.focus()
+            await pilot.press(*"ab")
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            await pilot.press(*"cd")
+            self.assertEqual(ti.text, "ab\ncd")
+
 
 if __name__ == "__main__":
     unittest.main()

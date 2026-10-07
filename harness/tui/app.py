@@ -625,6 +625,10 @@ if _HAS:
                     # so the provider/model picker lives on ctrl+o.
                     ("ctrl+o", "pick_provider", "Provider/model"),
                     ("ctrl+e", "export_transcript", "Export log"),
+                    # Newline in the task box. Plain ctrl combos are the
+                    # only reliably-delivered "modified enter": terminals
+                    # swallow ctrl+enter and merge shift+enter into enter.
+                    ("ctrl+n", "insert_newline", "New line"),
                     # Escape interrupts a running turn (modals keep their
                     # own escape: close/deny wins while one is open).
                     ("escape", "interrupt_turn", "Interrupt"),
@@ -1103,6 +1107,21 @@ if _HAS:
                                    DEBUG_TAIL_LINES)
             except Exception:
                 pass  # missing widget/file must never break the turn
+
+        def action_insert_newline(self) -> None:
+            """Ctrl+n: newline in the task box, from anywhere on screen."""
+            try:
+                box = self.query_one("#input", TaskInput)
+            except Exception:
+                return
+            try:
+                box.insert("\n")
+            except Exception:
+                pass
+            try:
+                box.focus()
+            except Exception:
+                pass
 
         def action_toggle_debug(self) -> None:
             self._debug_visible = not self._debug_visible
