@@ -781,7 +781,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             bg_color = None
             if text.startswith("\x00#") and "\x00" in text[3:]:
                 end = text.index("\x00", 3)
-                bg_color = text[3:end]
+                bg_color = text[1:end]
                 text = text[end + 1:]
             for line in self._wrap(text, w):
                 # write(), not write_line, CONCATENATES newline-less
@@ -805,7 +805,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 bg_color = None
                 if text.startswith("\x00#") and "\x00" in text[3:]:
                     end = text.index("\x00", 3)
-                    bg_color = text[3:end]
+                    bg_color = text[1:end]
                     text = text[end + 1:]
                 for line in self._wrap(text, w):
                     if bg_color:
