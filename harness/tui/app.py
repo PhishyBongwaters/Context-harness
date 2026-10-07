@@ -135,10 +135,10 @@ if _HAS:
     from .lcars import LcarsFooter, LcarsHeader, _binding_pills
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
                            DebugPanel, InputHistory, TaskInput,
-                           TranscriptDedupe, TranscriptLog,
+                           TranscriptDedupe, TranscriptLog, _USER_BG,
                            budget_bar_status, budget_bar_text,
                            debug_panel_lines, format_status, gauge_line,
-                           strip_ansi)
+                           strip_ansi, with_bg)
 
 
     class ApprovalScreen(ModalScreen):
@@ -1158,7 +1158,7 @@ if _HAS:
             self._log("[interrupt requested]")
 
         def _submit(self, text: str) -> None:
-            self._log(f"> {text}")
+            self._log(with_bg(f"> {text}", _USER_BG))
             if self._handle_slash(text):
                 return
             self._turn_start = time.monotonic()

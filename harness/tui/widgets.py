@@ -73,13 +73,40 @@ def _ansi(text: str, *codes: int) -> str:
     except Exception:
         return text
 
+
+# Chat-style message backgrounds (tasteful dark tints).
+_USER_BG = "#1d2b3a"       # blue-grey for user messages
+_ASSISTANT_BG = "#202020"  # neutral dark for agent replies
+
+
+def _bg_code(hex_color: str) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"\x1b[48;2;{r};{g};{b}m"
+
+
+def with_bg(line: str, hex_color: str) -> str:
+    """Wrap an ANSI-encoded line in a background color.
+
+    Re-asserts the background after every full reset (\\x1b[0m) so it
+    survives inner styling such as syntax highlighting. Without Rich
+    the line passes through unchanged.
+    """
+    if not line or not _RICH_AVAILABLE:
+        return line
+    bg = _bg_code(hex_color)
+    return bg + line.replace("\x1b[0m", "\x1b[0m" + bg) + "\x1b[0m"
+
 def format_event(kind: str, data) -> str | None:
     """Render one loop event as a transcript line. None = not shown."""
     if kind == "assistant":
         txt = data if isinstance(data, str) else str(data)
         if txt:
-            # green bold assistant label; fenced code blocks highlighted
-            return f"{_ansi('assistant',1,32)}\n{highlight_fenced_code(txt)}"
+            # green bold assistant label; fenced code blocks highlighted;
+            # whole reply rides a subtle dark background, chat-style
+            return with_bg(
+                f"{_ansi('assistant',1,32)}\n{highlight_fenced_code(txt)}",
+                _ASSISTANT_BG)
         return None
     if kind == "tool":
         data = data or {}
