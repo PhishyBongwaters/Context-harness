@@ -427,10 +427,12 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(tl.virtual_size.width, tl.size.width)
                 for line in tl.lines:
                     if line:
+                        # RichLog lines are Strip objects; get text content
+                        line_text = line.text if hasattr(line, 'text') else str(line)
                         # ASCII test lines: char len == cell len <= wrap w
                         self.assertLessEqual(
-                            len(line), tl.size.width - 2,
-                            f"line exceeds wrap width: {line[:60]!r}")
+                            len(line_text), tl.size.width - 2,
+                            f"line exceeds wrap width: {line_text[:60]!r}")
                 # Narrow the terminal: content rewraps, still no overflow.
                 await pilot.resize_terminal(40, 20)
                 await pilot.pause()
@@ -439,7 +441,7 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 await pilot.resize_terminal(80, 24)
                 await pilot.pause()
                 self.assertLessEqual(tl.virtual_size.width, tl.size.width)
-                self.assertTrue(any("word word" in l for l in tl.lines))
+                self.assertTrue(any("word word" in (l.text if hasattr(l, 'text') else str(l)) for l in tl.lines))
 
     async def test_request_meter_is_bar_not_transcript(self):
         # The [context ...] meter line is CLI furniture; in the TUI the

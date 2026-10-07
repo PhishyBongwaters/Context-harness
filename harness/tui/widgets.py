@@ -88,38 +88,38 @@ def _bg_code(hex_color: str) -> str:
 
 
 def with_bg(line: str, hex_color: str) -> str:
-    """Tag a line with its background color for post-wrap application.
+    """Tag a line with its background color for native Text rendering.
 
-    On Windows, returns the line unchanged: conhost's ANSI handling
-    makes background panels fundamentally unreliable (cursor drift,
-    ghost fragments, jagged padding across 7 attempted fixes). The
-    me/assistant labels already distinguish messages; correctness
-    beats decoration.
+    Returns the line prefixed with a color marker (\\x00#rrggbb\\x00).
+    write_wrapped converts to Rich Text via from_ansi (parsing foreground
+    colors natively) then applies the background as a Text style.
+    Textual renders Text objects natively -- no ANSI background codes
+    are ever sent to the terminal, so conhost renders cleanly.
     """
-    import sys
-    if sys.platform == "win32":
-        return line
-    if not line or not _RICH_AVAILABLE:
+    if not line:
         return line
     return f"\x00{hex_color}\x00" + line
 
 
-def _apply_bg(line: str, hex_color: str) -> str:
-    """Apply 16-color ANSI background to a single (already-wrapped) line."""
-    if hex_color == _USER_BG:
-        bg = "\x1b[44m"      # blue for user
-    elif hex_color == _ASSISTANT_BG:
-        bg = "\x1b[100m"     # bright black for assistant
-    else:
-        bg = "\x1b[40m"      # black for tools/other
-    out = []
-    for part in line.split("\n"):
-        out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg)
-                   + "\x1b[0m")
-    return "\n".join(out)
+def _text_with_bg(ansi_text: str, hex_color: str | None):
+    """Convert an ANSI string to Rich Text with background applied.
 
-
-_BG_RE = _re.compile(r"\x1b\[(?:40|44|100)m")
+    Parses foreground ANSI via Text.from_ansi, then stylizes the whole
+    Text with the background color. Returns a Rich Text object ready
+    for Textual's Log to render natively.
+    """
+    from rich.text import Text
+    from rich.style import Style
+    # Strip the marker if present
+    if ansi_text.startswith("\x00#") and "\x00" in ansi_text[1:]:
+        end = ansi_text.index("\x00", 1)
+        if hex_color is None:
+            hex_color = ansi_text[1:end]
+        ansi_text = ansi_text[end + 1:]
+    text = Text.from_ansi(ansi_text)
+    if hex_color:
+        text.stylize(Style(bgcolor=hex_color))
+    return text
 
 
 def _panel(line: str, width: int) -> str:
@@ -547,7 +547,7 @@ def debug_panel_lines(path: str | Path | None,
 # --- thin Textual widgets (only with the extra installed) ---
 
 try:
-    from textual.widgets import Log, Static
+    from textual.widgets import RichLog, Static
 
     _HAS_TEXTUAL = True
 except ImportError:  # pragma: no cover - extra missing
@@ -707,7 +707,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         def clear(self) -> None:
             self.update("")
 
-    class WrappedLog(Log):
+    class WrappedLog(RichLog):
         """Log + manual soft wrap (keeps drag-select working).
 
         Log is the drag-selectable text widget, but it has no wrap
@@ -783,21 +783,23 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             if len(self._raw) > self.MAX_LINES:
                 del self._raw[:len(self._raw) - self.MAX_LINES]
             w = self._wrap_width()
-            # Extract bg color marker (if any), wrap plain text, then
-            # apply background to each wrapped chunk. This keeps multiline
-            # backgrounds intact without ghosting.
-            bg_color = None
-            if text.startswith("\x00#") and "\x00" in text[3:]:
-                end = text.index("\x00", 3)
-                bg_color = text[1:end]
-                text = text[end + 1:]
-            for line in self._wrap(text, w):
-                # write(), not write_line, CONCATENATES newline-less
-                # strings into one line -- wrapped chunks must each be
-                # their own line.
-                if bg_color:
-                    line = _apply_bg(line, bg_color)
-                self.write_line(_panel(line, w))
+            # Convert to Rich Text with native background style.
+            # Textual renders Text objects natively -- no ANSI bg codes
+            # reach the terminal, so Windows conhost stays clean.
+            rich_text = _text_with_bg(text, None)
+            # Wrap using Rich's native wrapping (preserves styles).
+            from rich.console import Console
+            console = Console(width=w, force_terminal=False)
+            for line_text in rich_text.split():
+                # Rich Text.split() splits on newlines, keeping styles
+                wrapped = line_text.wrap(console, w, justify="left")
+                for chunk in wrapped:
+                    # Pad to full width for panel effect; bg style covers pad
+                    if len(chunk) < w - 1:
+                        chunk.pad_right(w - 1 - len(chunk))
+                    # Log.write needs explicit newline for Text objects
+                    chunk.append("\n")
+                    self.write(chunk)
 
         def clear_all(self) -> None:
             self._raw.clear()
@@ -810,15 +812,17 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._wrap_w = w
             self.clear()
             for text in self._raw:
-                bg_color = None
-                if text.startswith("\x00#") and "\x00" in text[3:]:
-                    end = text.index("\x00", 3)
-                    bg_color = text[1:end]
-                    text = text[end + 1:]
-                for line in self._wrap(text, w):
-                    if bg_color:
-                        line = _apply_bg(line, bg_color)
-                    self.write_line(_panel(line, w))
+                # Reuse write_wrapped logic without re-appending to _raw
+                rich_text = _text_with_bg(text, None)
+                from rich.console import Console
+                console = Console(width=w, force_terminal=False)
+                for line_text in rich_text.split():
+                    wrapped = line_text.wrap(console, w, justify="left")
+                    for chunk in wrapped:
+                        if len(chunk) < w - 1:
+                            chunk.pad_right(w - 1 - len(chunk))
+                        chunk.append("\n")
+                        self.write(chunk)
 
         def on_resize(self, event) -> None:
             self.rewrap()
