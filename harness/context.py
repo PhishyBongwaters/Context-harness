@@ -130,15 +130,17 @@ def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
 
 
 def _split_atem_xml(body: str) -> tuple[str, list[dict]]:
-    fallback_pat = '<atem:' + 'parameter'
-    if fallback_pat not in body:
+    """Fallback: extract atem-style tool calls from malformed model output."""
+    tag_open = chr(60) + 'atem:'  # '<atem:' without triggering XML parsing
+    if tag_open + 'parameter' not in body:
         return body, []
-    invoke_m = re.search(r'<atem:invoke\s+name="([^"]+)"', body)
+    # Extract invoke name if present
+    invoke_m = re.search(tag_open + r'invoke\s+name="([^"]+)"', body)
     tool_name = invoke_m.group(1) if invoke_m else None
+    # Extract parameters: name="X">value (value runs until next < or end)
     params = {}
-    ptag = '<atem:' + 'parameter'
-    pclose = '</atem:' + 'parameter>'
-    for m in re.finditer(ptag + r'\s+name="([^"]+)">(.*?)' + pclose, body, re.DOTALL):
+    ptag = tag_open + 'parameter'
+    for m in re.finditer(ptag + r'\s+name="([^"]+)"' + r'>([^<]*)', body):
         params[m.group(1)] = m.group(2).strip()
     if not params:
         return body, []
@@ -146,9 +148,12 @@ def _split_atem_xml(body: str) -> tuple[str, list[dict]]:
         tool_name = 'read' if 'path' in params else 'exec'
     call_id = 'atem-' + str(abs(hash(body)) % 1000000)
     calls = [{'id': call_id, 'name': tool_name, 'arguments': params}]
-    text = re.sub(r'">?\s*' + ptag + r'.*?' + pclose + r'.*?</atem:function_calls>', '', body, flags=re.DOTALL)
+    # Strip the XML cruft from displayed text
+    text = re.sub(r'\s*' + tag_open + r'[^>]*>.*?(?=' + tag_open + r'|\Z)',
+                  '', body, flags=re.DOTALL)
     text = re.sub(r'</atem:(invoke|function_calls)>', '', text)
-    return text.strip(), calls
+    text = text.replace('">', '').strip()
+    return text, calls
 
 
 def sanitize_assistant_content(content: str | None) -> str | None:
