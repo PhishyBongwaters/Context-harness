@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import sys
 from pathlib import Path
@@ -77,6 +78,32 @@ def _open_session(cfg, sid: str | None, workdir: str) -> Session:
         return _new_session(cfg, workdir)
     _set_current(sessions, sid)
     return Session(id=sid, dir=sessions / sid, workdir=workdir)
+
+
+def _save_session_model(session: Session, provider: str, model: str) -> None:
+    """Persist the last-used provider/model with the session."""
+    try:
+        meta = session.dir / "meta.json"
+        data = {}
+        if meta.is_file():
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        data["provider"] = provider
+        data["model"] = model
+        meta.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_session_model(session: Session) -> tuple:
+    """Return (provider, model) saved with the session, or (None, None)."""
+    try:
+        meta = session.dir / "meta.json"
+        if meta.is_file():
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            return data.get("provider"), data.get("model")
+    except Exception:
+        pass
+    return None, None
 
 
 def _print_event(kind: str, data) -> None:
@@ -646,6 +673,29 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     return loop
 
 
+def _restore_session_model(box: dict, cfg, args) -> None:
+    """If the session saved a provider/model, retarget to it.
+
+    Called after a session is opened so reloading restores the last
+    used model. No-op if nothing saved or already current.
+    """
+    sess = box.get("session")
+    if sess is None or box.get("loop") is None:
+        return
+    try:
+        provider, model = _load_session_model(sess)
+    except Exception:
+        return
+    if not provider or not model:
+        return
+    if provider == cfg.provider and model == cfg.model:
+        return
+    try:
+        retarget_loop(box, cfg, args, provider, model)
+    except Exception:
+        pass
+
+
 def _enable_windows_ansi() -> None:
     """Enable ANSI escape-sequence processing on Windows consoles.
 
@@ -822,6 +872,7 @@ def main(argv: list[str] | None = None) -> int:
         box["session"] = _open_session(cfg, None, _workdir(args))
     stamp(box["session"])
     attach()
+    _restore_session_model(box, cfg, args)
 
     def do_turn(text: str) -> int:
         try:
@@ -846,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         box["session"] = _open_session(cfg, sid, _workdir(args))
         stamp(box["session"])
         attach()
+        _restore_session_model(box, cfg, args)
 
     def switch_project(name: str) -> None:
         proj = resolve_project(name)
@@ -896,6 +948,11 @@ def main(argv: list[str] | None = None) -> int:
 
         def _tui_retarget(provider: str, model: str) -> list[str]:
             retarget_loop(box, cfg, args, provider, model)
+            # Persist with the session so reloading restores it.
+            try:
+                _save_session_model(box["session"], provider, model)
+            except Exception:
+                pass
             # Keep CLI-override display in sync so the header
             # reflects the picker (not stale args).
             try:
