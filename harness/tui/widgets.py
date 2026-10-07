@@ -90,12 +90,15 @@ def _bg_code(hex_color: str) -> str:
 def with_bg(line: str, hex_color: str) -> str:
     """Tag a line with its background color for post-wrap application.
 
-    Returns the line prefixed with a color marker (\\x00#rrggbb\\x00).
-    The marker survives word-wrapping (it's plain text), and write_wrapped
-    applies the actual ANSI background to each wrapped chunk. This ensures
-    multiline messages keep their background on every line.
-    Uses 16-color ANSI backgrounds (terminal-safe, works on conhost).
+    On Windows, returns the line unchanged: conhost's ANSI handling
+    makes background panels fundamentally unreliable (cursor drift,
+    ghost fragments, jagged padding across 7 attempted fixes). The
+    me/assistant labels already distinguish messages; correctness
+    beats decoration.
     """
+    import sys
+    if sys.platform == "win32":
+        return line
     if not line or not _RICH_AVAILABLE:
         return line
     return f"\x00{hex_color}\x00" + line
