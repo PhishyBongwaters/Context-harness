@@ -103,12 +103,17 @@ def render_tool(tool_call_id: str, content: str) -> str:
 
 
 def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
-    """Pull a trailing ```tool-calls JSON block out of an assistant section."""
+    """Pull a trailing ```tool-calls JSON block out of an assistant section.
+
+    Falls back to parsing <atem:> XML fragments (some models emit these
+    instead of the fenced JSON despite prompt instructions).
+    """
     lines = body.splitlines()
     try:
         open_idx = lines.index(_FENCE_OPEN)
     except ValueError:
-        return body, []
+        # No fenced block -- try XML fallback on the whole body
+        return _split_atem_xml(body)
     try:
         close_idx = lines.index(_FENCE_CLOSE, open_idx + 1)
     except ValueError:
@@ -122,6 +127,28 @@ def _split_tool_calls(body: str) -> tuple[str, list[dict]]:
         return body, []
     text = "\n".join(lines[:open_idx]).rstrip()
     return text, calls
+
+
+def _split_atem_xml(body: str) -> tuple[str, list[dict]]:
+    fallback_pat = '<atem:' + 'parameter'
+    if fallback_pat not in body:
+        return body, []
+    invoke_m = re.search(r'<atem:invoke\s+name="([^"]+)"', body)
+    tool_name = invoke_m.group(1) if invoke_m else None
+    params = {}
+    ptag = '<atem:' + 'parameter'
+    pclose = '</atem:' + 'parameter>'
+    for m in re.finditer(ptag + r'\s+name="([^"]+)">(.*?)' + pclose, body, re.DOTALL):
+        params[m.group(1)] = m.group(2).strip()
+    if not params:
+        return body, []
+    if not tool_name:
+        tool_name = 'read' if 'path' in params else 'exec'
+    call_id = 'atem-' + str(abs(hash(body)) % 1000000)
+    calls = [{'id': call_id, 'name': tool_name, 'arguments': params}]
+    text = re.sub(r'">?\s*' + ptag + r'.*?' + pclose + r'.*?</atem:function_calls>', '', body, flags=re.DOTALL)
+    text = re.sub(r'</atem:(invoke|function_calls)>', '', text)
+    return text.strip(), calls
 
 
 def sanitize_assistant_content(content: str | None) -> str | None:

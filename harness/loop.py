@@ -19,9 +19,9 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .context import (Budget, ContextFile, count_tokens, diff_transcripts,
-                      parse_transcript, render_assistant, render_tool,
-                      render_user, sanitize_assistant_content)
+from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
+                      diff_transcripts, parse_transcript, render_assistant,
+                      render_tool, render_user, sanitize_assistant_content)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -480,6 +480,13 @@ class Loop:
                                         "usage_total": totals})
                 self._emit("usage", resp.get("usage") or {})
                 tool_calls = resp.get("tool_calls") or []
+                # Fallback: model emitted <atem:> XML instead of native tools.
+                # Extract and execute it now, don't wait for transcript parse.
+                content_raw = resp.get("content") or ""
+                if not tool_calls and "<atem:" in content_raw:
+                    _clean, _xml_calls = _split_atem_xml(content_raw)
+                    if _xml_calls:
+                        tool_calls = _xml_calls
                 # Strip echoed transcript structure (## headers, tool-calls
                 # fences) before storing or showing the reply.
                 content = sanitize_assistant_content(resp.get("content"))
