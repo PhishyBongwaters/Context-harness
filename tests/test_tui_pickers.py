@@ -480,7 +480,13 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                 joined = "\n".join(app._transcript_lines)
                 self.assertNotIn("WARN budget", joined)
                 self.assertNotIn("[WARN", joined)
-                self.assertIn("[prune-only turn 1", joined)
+                # System kinds (budget, prune) go to the top panel,
+                # not the chat transcript.
+                self.assertNotIn("[prune-only turn 1", joined)
+                sys_panel = app.query_one("#system")
+                sys_text = "\n".join(str(l) for l in sys_panel.lines)
+                self.assertIn("[prune-only turn 1", sys_text)
+                self.assertIn("WARN budget", sys_text)
                 # Real transcript content still flows through.
                 app._bridge("assistant", "hello from the model")
                 app._bridge("response", {"content": "hello from the model"})

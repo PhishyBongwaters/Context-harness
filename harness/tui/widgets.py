@@ -796,3 +796,17 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                     self.write_wrapped(line)
                 except Exception:
                     return
+
+    class SystemPanel(WrappedLog):
+        """System messages (errors, prune, approvals...) kept out of
+        the chat transcript. Small, top-docked, toggleable."""
+
+        MAX_LINES = 200
+
+        def syslog(self, line: str | None) -> None:
+            if not line:
+                return
+            try:
+                self.write_wrapped(line)
+            except Exception:
+                pass

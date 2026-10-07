@@ -34,27 +34,40 @@ def _dim(hex_color: str, factor: float = 0.82) -> str:
 
 
 def header_segments(title: str, width: int, phase: int = 0,
+                    turns: int = 0, budget_pct: float | None = None,
+                    running: bool = False, spin: int = 0,
                     ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS header bar.
 
-    Brand pill left, title pill next, decorative pills right; the last
-    accent pill gently pulses between two shades on odd phases.
-    Total text width never exceeds `width`.
+    Brand pill left, title pill next, live stats right: turn count,
+    token-budget percent, and a diamond that becomes a spinner while
+    the agent runs. Total text width never exceeds `width`.
     """
     segs: list[tuple[str, str, str]] = []
     segs.append((" LCARS ", LCARS["orange"], _FG))
     segs.append((" ", LCARS["black"], _FG))
 
-    max_title = max(8, width - 44)
+    max_title = max(8, width - 48)
     t = title if len(title) <= max_title else title[:max_title - 1] + "\u2026"
     segs.append((f" {t} ", LCARS["mauve"], _FG))
 
-    accent = _dim(LCARS["orange"]) if phase % 2 else LCARS["orange"]
-    right = [(" 01 ", LCARS["periwinkle"], _FG),
+    turn_txt = f" T{turns} " if turns else " -- "
+    if budget_pct is None:
+        budget_txt = " -- "
+    else:
+        budget_txt = f" {budget_pct:.0f}% "
+    if running:
+        frames = (" \u25d0 ", " \u25d1 ", " \u25d2 ", " \u25d3 ")
+        spin_txt = frames[spin % len(frames)]
+        accent = LCARS["orange"]
+    else:
+        spin_txt = " \u25c6 "
+        accent = _dim(LCARS["orange"]) if phase % 2 else LCARS["orange"]
+    right = [(turn_txt, LCARS["periwinkle"], _FG),
              (" ", LCARS["black"], _FG),
-             (" 02 ", LCARS["peach"], _FG),
+             (budget_txt, LCARS["peach"], _FG),
              (" ", LCARS["black"], _FG),
-             (" \u25c6 ", accent, _FG)]
+             (spin_txt, accent, _FG)]
     used = sum(len(text) for text, _, _ in segs)
     right_w = sum(len(text) for text, _, _ in right)
     filler_w = max(1, width - used - right_w)
@@ -119,15 +132,20 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         return t
 
     class LcarsHeader(Static):
-        """LCARS top bar: brand pill, title pill, decorative segments.
+        """LCARS top bar: brand pill, title pill, live stat segments.
 
-        One accent segment gently pulses (~1.6s); everything else static.
+        Right side shows turn count, token-budget %, and a diamond that
+        spins while the agent runs (pulses gently when idle).
         """
 
         def __init__(self, title: str = "", **k) -> None:
             super().__init__(**k)
             self._title = title or ""
             self._phase = 0
+            self._turns = 0
+            self._budget_pct: float | None = None
+            self._running = False
+            self._spin = 0
 
         def on_mount(self) -> None:
             self.set_interval(1.6, self._pulse)
@@ -140,10 +158,28 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._title = title or ""
             self.refresh()
 
+        def set_stats(self, turns: int = 0,
+                      budget_pct: float | None = None,
+                      running: bool = False) -> None:
+            """Update the live segments; call often while running to
+            advance the spinner."""
+            if running:
+                self._spin += 1
+            changed = (self._turns != turns
+                       or self._budget_pct != budget_pct
+                       or self._running != running)
+            self._turns = turns
+            self._budget_pct = budget_pct
+            self._running = running
+            if changed or running:
+                self.refresh()
+
         def render(self) -> "Text":
             width = self.size.width or 80
-            return _to_text(header_segments(self._title, width,
-                                            self._phase))
+            return _to_text(header_segments(
+                self._title, width, self._phase,
+                turns=self._turns, budget_pct=self._budget_pct,
+                running=self._running, spin=self._spin))
 
     class LcarsPill(Static):
         """One clickable LCARS pill: key hint + label, runs an app action.

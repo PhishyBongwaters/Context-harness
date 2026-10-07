@@ -62,6 +62,28 @@ class TestHeaderSegments(unittest.TestCase):
         self.assertEqual([t for t, _, _ in a], [t for t, _, _ in b])
         self.assertNotEqual(bgs_a, bgs_b)
 
+    def test_live_stats(self):
+        segs = header_segments("t", 80, turns=3, budget_pct=45.0,
+                               running=False)
+        flat = "".join(t for t, _, _ in segs)
+        self.assertIn("T3", flat)
+        self.assertIn("45%", flat)
+        self.assertIn("\u25c6", flat)  # idle diamond
+        self.assertLessEqual(len(flat), 80)
+
+    def test_running_shows_spinner(self):
+        a = header_segments("t", 80, running=True, spin=0)
+        b = header_segments("t", 80, running=True, spin=1)
+        fa = "".join(t for t, _, _ in a)
+        fb = "".join(t for t, _, _ in b)
+        self.assertNotEqual(fa, fb)  # spinner advances
+        self.assertNotIn("\u25c6", fa)
+
+    def test_no_stats_shows_dashes(self):
+        segs = header_segments("t", 80)
+        flat = "".join(t for t, _, _ in segs)
+        self.assertIn("--", flat)
+
 
 class TestFooterSegments(unittest.TestCase):
     def test_pills_from_bindings(self):

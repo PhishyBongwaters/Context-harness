@@ -134,7 +134,7 @@ if _HAS:
     from . import commands
     from .lcars import LcarsFooter, LcarsHeader, _binding_pills, lcars_theme
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
-                           DebugPanel, InputHistory, TaskInput,
+                           DebugPanel, InputHistory, SystemPanel, TaskInput,
                            TranscriptDedupe, TranscriptLog, _USER_BG,
                            _ansi, budget_bar_status, budget_bar_text,
                            debug_panel_lines, format_status, gauge_line,
@@ -637,6 +637,7 @@ if _HAS:
     class HarnessApp(App):
         CSS = ("#transcript { height: 1fr; } #input { height: 5; } "
                "#debug { height: 8; display: none; } "
+               "#system { height: 5; } "
                "#gauge { height: 1; } #budget { height: 1; } "
                "#chrome-top { height: 1; } #chrome-bottom { height: 1; } "
                "#main { height: 1fr; } "
@@ -649,6 +650,7 @@ if _HAS:
                "#gauge.over, #budget.over { color: red; }")
 
         BINDINGS = [("ctrl+d", "toggle_debug", "Debug tail"),
+                    ("ctrl+y", "toggle_system", "System"),
                     ("ctrl+s", "open_sessions", "Sessions"),
                     # ctrl+p is Textual's command palette (built-in wins),
                     # so the provider/model picker lives on ctrl+o.
@@ -728,12 +730,15 @@ if _HAS:
             # event (e.g. while the worker runs a long tool), but the
             # turn is still running then and escape must still register.
             self._turn_running = False
+            self._turn_count = 0
+            self._budget_pct: float | None = None
             self._phase = "main"
             self._debug_visible = False
 
         def compose(self) -> "ComposeResult":
             yield Vertical(id="chrome-top")
             with Vertical(id="main"):
+                yield SystemPanel(id="system")
                 yield TranscriptLog(id="transcript")
                 yield DebugPanel(id="debug")
                 yield BudgetGauge(id="gauge")
@@ -810,6 +815,15 @@ if _HAS:
             self._transcript_lines.append(text)
             self.query_one("#transcript", TranscriptLog).write_wrapped(text)
 
+        def _syslog(self, text: str | None) -> None:
+            """System messages go to the top panel, not the chat."""
+            if not text:
+                return
+            try:
+                self.query_one("#system", SystemPanel).syslog(text)
+            except Exception:
+                pass
+
         def _export_transcript(self) -> None:
             """Copyable record: dump transcript lines to a session file.
 
@@ -859,6 +873,11 @@ if _HAS:
             if text is not None:
                 bar.update(text)
             gauge.set_request(data)
+            try:
+                toks, hard = data.get("tokens_est", 0), data.get("hard") or 0
+                self._budget_pct = 100.0 * toks / hard if hard else 0.0
+            except Exception:
+                pass
             status = budget_bar_status(data)
             for w in (gauge, bar):
                 for cls in ("warn", "over"):
@@ -870,6 +889,11 @@ if _HAS:
             if self._turn_start is not None:
                 self._set_status(format_status(
                     self._phase, time.monotonic() - self._turn_start))
+
+        # Event kinds that are system instrumentation, not conversation:
+        # they go to the top SystemPanel, never the chat transcript.
+        _SYSTEM_KINDS = {"error", "prune", "context-diff", "budget",
+                         "interrupted", "approval-wait", "approval-result"}
 
         def _poll(self) -> None:
             entries = self._bridge.drain()
@@ -885,21 +909,36 @@ if _HAS:
                     self._phase = data.get("phase") or "main"
                     self._apply_request(data)
                     continue
-                if kind == "budget":
-                    # Warn/over is agent-facing instrumentation; the
-                    # gauge already colours the state, and prune
-                    # attempts stay visible below. Debug log keeps it.
-                    continue
                 if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here
                     self._set_status("")
                 shown.append((kind, data, _line))
-            for line in self._dedupe.feed(shown):
+            chat = [(k, d, l) for k, d, l in shown
+                    if k not in self._SYSTEM_KINDS]
+            for line in self._dedupe.feed(chat):
                 self._log(line)
+            for kind, _data, line in shown:
+                if kind in self._SYSTEM_KINDS:
+                    self._syslog(line)
             self._tick_status()
+            self._tick_header()
             if self._debug_visible:
                 self._refresh_debug()
             self._focus_input()
+
+        def _tick_header(self) -> None:
+            """Push live stats to the LCARS header (turns, budget, run
+            spinner). No-op when the standard theme chrome is mounted."""
+            try:
+                header = self.query_one("#lcars-header", LcarsHeader)
+            except Exception:
+                return
+            try:
+                header.set_stats(turns=self._turn_count,
+                                 budget_pct=self._budget_pct,
+                                 running=self._turn_running)
+            except Exception:
+                pass
 
         # --- slash parity with the CLI REPL ---
 
@@ -923,7 +962,7 @@ if _HAS:
             try:
                 self._agent_loop, self._session = sync()
             except Exception as e:  # never break the turn loop
-                self._log(f"[error: session switch failed: {e}]")
+                self._syslog(f"[error: session switch failed: {e}]")
                 return
             # Header shows the EFFECTIVE provider/model: picker retarget
             # mutates cfg, so prefer it (via control) over init values.
@@ -1197,6 +1236,16 @@ if _HAS:
             except Exception:
                 pass
 
+        def action_toggle_system(self) -> None:
+            """Show/hide the system panel (visible by default)."""
+            try:
+                panel = self.query_one("#system", SystemPanel)
+                cur = panel.styles.display
+                panel.styles.display = ("none" if cur != "none"
+                                        else "block")
+            except Exception:
+                pass
+
         def action_toggle_debug(self) -> None:
             self._debug_visible = not self._debug_visible
             try:
@@ -1237,6 +1286,7 @@ if _HAS:
                 return
             self._turn_start = time.monotonic()
             self._turn_running = True
+            self._turn_count += 1
             self._phase = "main"
             self._tick_status()
             run_turn_in_thread(
@@ -1257,8 +1307,8 @@ if _HAS:
             self._turn_running = False
             self._turn_start = None
             self._set_status("")
-            self._log(f"[error: {msg}]")
-            self._log(f"[error details: {self._write_error_log(msg, detail)}]")
+            self._syslog(f"[error: {msg}]")
+            self._syslog(f"[error details: {self._write_error_log(msg, detail)}]")
 
         def _write_error_log(self, msg: str, detail: str = "") -> str:
             """Best-effort copyable record (transcript pane can't copy)."""
