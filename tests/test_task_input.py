@@ -88,6 +88,19 @@ class TestTaskInput(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(submitted, ["line1\nline2"])
             self.assertEqual(ti.text, "")
 
+    async def test_shift_enter_inserts_newline(self):
+        from harness.tui.widgets import TaskInput
+
+        app, submitted = await self._app()
+        async with app.run_test() as pilot:
+            ti = app.query_one("#ti", TaskInput)
+            ti.focus()
+            await pilot.press(*"ab")
+            await pilot.press("shift+enter")
+            await pilot.press(*"cd")
+            self.assertEqual(ti.text, "ab\ncd")
+            self.assertEqual(submitted, [])
+
 
 @unittest.skipUnless(has_tui(), "textual extra missing")
 class TestInterruptKey(unittest.IsolatedAsyncioTestCase):

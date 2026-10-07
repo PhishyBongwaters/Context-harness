@@ -271,6 +271,22 @@ def _same_text(a, b) -> bool:
     return (a or "").strip() == (b or "").strip()
 
 
+def _dupe_text(kind: str, data) -> str:
+    """Comparable text for response/assistant dupe detection.
+
+    Compares the underlying content, NOT the formatted line: the
+    assistant line always carries a label prefix (and possibly ANSI
+    highlighting), so formatted lines can never be equal even for the
+    same reply. Comparing data is immune to formatting changes.
+    """
+    if kind == "assistant":
+        return data if isinstance(data, str) else str(data or "")
+    if kind == "response" and isinstance(data, dict):
+        content = data.get("content")
+        return content if isinstance(content, str) else str(content or "")
+    return ""
+
+
 def _tool_calls_note(data) -> str | None:
     calls = (data.get("tool_calls") or []) if isinstance(data, dict) else []
     if not calls:
@@ -297,7 +313,8 @@ def dedupe_entries(entries: list) -> list:
             while j < n and entries[j][0] in _QUIET_KINDS:
                 j += 1
             if (j < n and entries[j][0] == "assistant"
-                    and _same_text(entries[j][2], line)):
+                    and _same_text(_dupe_text("assistant", entries[j][1]),
+                                   _dupe_text(kind, data))):
                 note = _tool_calls_note(data)
                 if note:
                     out.append((kind, data, note))
@@ -327,7 +344,9 @@ class TranscriptDedupe:
                     continue  # keep waiting; quiet events show nothing
                 pk, pd, pl = self._pending
                 self._pending = None
-                if kind == "assistant" and _same_text(line, pl):
+                if kind == "assistant" and _same_text(
+                        _dupe_text("assistant", data),
+                        _dupe_text("response", pd)):
                     note = (_tool_calls_note(pd)
                             if isinstance(pd, dict) else None)
                     if note:
@@ -460,11 +479,11 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
     from textual.widgets import TextArea
 
     class TaskInput(TextArea):
-        """Multi-line task box: enter sends, ctrl+enter inserts a newline,
-        up/down recalls history on single-line input.
+        """Multi-line task box: enter sends, shift+enter / ctrl+enter
+        insert a newline, up/down recalls history on single-line input.
 
         Enter-to-send matches the old single-line Input muscle memory;
-        newlines come from ctrl+enter (or pasting). History navigation
+        newlines come from shift+enter or ctrl+enter (or pasting). History navigation
         applies to single-line input; with multiple lines up/down move
         the cursor normally. Submitted inputs feed the shared
         InputHistory (dupes collapse, draft preserved).
@@ -478,7 +497,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
 
         def __init__(self, *a, on_submit=None, history=None, **k) -> None:
             super().__init__(*a, **k)
-            self.border_title = ("enter send · ctrl+enter newline · "
+            self.border_title = ("enter send · shift+enter newline · "
                                  "up/down history")
             self._on_submit = on_submit
             self._input_history = history if history is not None else InputHistory()
@@ -506,13 +525,19 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
 
         async def _on_key(self, event) -> None:
             # TextArea swallows Enter (inserts "\n") in its own _on_key
-            # before widget bindings are consulted, so intercept it here:
-            # Enter always sends; ctrl+enter still inserts a newline.
-            # (async on textual 3.x and 8.x alike.)
-            if event.key == "enter":
+            # before widget bindings are consulted, so intercept here:
+            # Enter always sends; shift+enter / ctrl+enter insert a
+            # newline. (async on textual 3.x and 8.x alike.)
+            key = event.key
+            if key == "enter":
                 event.stop()
                 event.prevent_default()
                 self.action_submit_task()
+                return
+            if key == "shift+enter":
+                event.stop()
+                event.prevent_default()
+                self.action_insert_newline()
                 return
             await super()._on_key(event)
 

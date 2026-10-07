@@ -119,6 +119,33 @@ class TestDedupe(unittest.TestCase):
                          ["hello"])
         self.assertEqual(d.flush(), [])
 
+    def test_realistic_formatted_lines_collapse(self):
+        # Regression: dedupe compared FORMATTED lines, but the assistant
+        # line always carries a label prefix, so production dupes never
+        # collapsed and every reply showed twice. Build entries the way
+        # the bridge does (format_event output) and require one line.
+        def entry(kind, data):
+            return (kind, data, format_event(kind, data))
+
+        text = "hello there"
+        entries = [
+            entry("response", {"phase": "main", "content": text,
+                               "tool_calls": []}),
+            entry("usage", {"input": 1, "output": 1}),
+            entry("assistant", text),
+        ]
+        got = [l for l in dedupe_entries(entries) if l[2] is not None]
+        self.assertEqual(len(got), 1)
+        self.assertIn("hello there", got[0][2])
+
+        # stateful path too
+        d = TranscriptDedupe()
+        self.assertEqual(d.feed(entries[:1]), [])
+        self.assertEqual(d.feed(entries[1:2]), [])
+        lines = d.feed(entries[2:])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("hello there", lines[0])
+
     def test_stateful_no_dupe_flushes(self):
         d = TranscriptDedupe()
         d.feed([self.resp("hello")])
