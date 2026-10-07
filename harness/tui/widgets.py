@@ -683,6 +683,11 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             super().__init__(*a, **k)
             self._raw: list[str] = []
             self._wrap_w = 0
+            # Log measures raw string length, ANSI bytes included, so any
+            # styled line looks overflow-wide. The terminal interprets the
+            # passthrough ANSI fine; soft-wrap already handles real width,
+            # so a horizontal scrollbar is never legitimate here.
+            self.show_horizontal_scrollbar = False
 
         def _wrap_width(self) -> int:
             try:

@@ -183,3 +183,30 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             for i, (key, label, action) in enumerate(self._pills):
                 color = LCARS[_PILL_COLORS[i % len(_PILL_COLORS)]]
                 yield LcarsPill(key, label, action, color)
+
+
+def lcars_theme():
+    """The LCARS theme: toggleable in the command palette.
+
+    Registers as 'lcars' via App.register_theme. Pure helper (no
+    Textual import at module level) so it stays importable without
+    the extra; returns None when textual is missing.
+    """
+    try:
+        from textual.theme import Theme
+    except ImportError:
+        return None
+    return Theme(
+        name="lcars",
+        primary="#FF9900",      # LCARS orange
+        secondary="#CC99CC",    # mauve
+        accent="#9999FF",       # periwinkle
+        warning="#FFCC99",      # peach
+        error="#CC3333",        # LCARS red
+        success="#4EBF71",
+        foreground="#e0e0e0",
+        background="#121212",
+        surface="#1e1e1e",
+        panel="#1e1e1e",
+        dark=True,
+    )

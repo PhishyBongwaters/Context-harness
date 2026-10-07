@@ -15,7 +15,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import (Button, Input, Label,
+    from textual.widgets import (Button, Footer, Header, Input, Label,
                                    Log, OptionList, Static)
     from textual.widgets.option_list import Option
 
@@ -132,11 +132,11 @@ if _HAS:
     from .approvals import TUIApprover, approval_brief
     from .bridge import run_turn_in_thread
     from . import commands
-    from .lcars import LcarsFooter, LcarsHeader, _binding_pills
+    from .lcars import LcarsFooter, LcarsHeader, _binding_pills, lcars_theme
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
                            DebugPanel, InputHistory, TaskInput,
                            TranscriptDedupe, TranscriptLog, _USER_BG,
-                           budget_bar_status, budget_bar_text,
+                           _ansi, budget_bar_status, budget_bar_text,
                            debug_panel_lines, format_status, gauge_line,
                            strip_ansi, with_bg)
 
@@ -614,6 +614,8 @@ if _HAS:
         CSS = ("#transcript { height: 1fr; } #input { height: 5; } "
                "#debug { height: 8; display: none; } "
                "#gauge { height: 1; } #budget { height: 1; } "
+               "#chrome-top { height: 1; } #chrome-bottom { height: 1; } "
+               "#main { height: 1fr; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#lcars-footer LcarsPill { width: auto; height: 1; } "
                "#gauge.warn, #budget.warn { color: yellow; } "
@@ -677,6 +679,20 @@ if _HAS:
             self._debug_path_getter = debug_path_getter
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
+            # LCARS is a toggleable theme (command palette): registered
+            # here so it lists alongside the builtins. Default on, to
+            # preserve the current look; switching themes swaps the
+            # chrome via watch_theme below.
+            _lt = lcars_theme()
+            if _lt is not None:
+                try:
+                    self.register_theme(_lt)
+                except Exception:
+                    pass
+            try:
+                self.theme = "lcars"
+            except Exception:
+                pass
             self._dedupe = TranscriptDedupe()
             self._transcript_lines: list[str] = []
             self._turn_start: float | None = None
@@ -689,21 +705,50 @@ if _HAS:
             self._debug_visible = False
 
         def compose(self) -> "ComposeResult":
-            yield LcarsHeader(title=self._title or "harness",
-                              id="lcars-header")
-            with Vertical():
+            yield Vertical(id="chrome-top")
+            with Vertical(id="main"):
                 yield TranscriptLog(id="transcript")
                 yield DebugPanel(id="debug")
                 yield BudgetGauge(id="gauge")
                 yield BudgetBar("", id="budget")
                 yield TaskInput(id="input", on_submit=self._submit_task)
-            yield LcarsFooter(pills=_binding_pills(self.BINDINGS),
-                              id="lcars-footer")
+            yield Vertical(id="chrome-bottom")
 
-        def on_mount(self) -> None:
+        def _chrome_widgets(self, lcars: bool):
+            if lcars:
+                return (
+                    LcarsHeader(title=self._title or "harness",
+                                id="lcars-header"),
+                    LcarsFooter(pills=_binding_pills(self.BINDINGS),
+                                id="lcars-footer"),
+                )
+            return (Header(id="std-header"), Footer(id="std-footer"))
+
+        async def _apply_chrome(self, lcars: bool) -> None:
+            """Swap the top/bottom chrome for the current theme."""
+            try:
+                top = self.query_one("#chrome-top", Vertical)
+                bottom = self.query_one("#chrome-bottom", Vertical)
+            except Exception:
+                return
+            for container, widget in (
+                    (top, self._chrome_widgets(lcars)[0]),
+                    (bottom, self._chrome_widgets(lcars)[1])):
+                for child in list(container.children):
+                    await child.remove()
+                await container.mount(widget)
+
+        async def watch_theme(self, old: str, new: str) -> None:
+            # Theme changes (e.g. via the command palette) swap the
+            # chrome: LCARS widgets under the lcars theme, standard
+            # Header/Footer otherwise.
+            await self._apply_chrome(new == "lcars")
+
+        async def on_mount(self) -> None:
             self.title = self._title or "harness"
             self._wire_approver()
             self.set_interval(0.1, self._poll)
+            await self._apply_chrome(self.theme == "lcars")
             self._focus_input()
             if self._initial:
                 self._submit(self._initial)
@@ -1158,7 +1203,7 @@ if _HAS:
             self._log("[interrupt requested]")
 
         def _submit(self, text: str) -> None:
-            self._log(with_bg(f"> {text}", _USER_BG))
+            self._log(with_bg(f"{_ansi('me',1,34)}\n{text}", _USER_BG))
             if self._handle_slash(text):
                 return
             self._turn_start = time.monotonic()
