@@ -88,14 +88,19 @@ def _bg_code(hex_color: str) -> str:
 def with_bg(line: str, hex_color: str) -> str:
     """Wrap an ANSI-encoded line in a background color.
 
-    Re-asserts the background after every full reset (\\x1b[0m) so it
-    survives inner styling such as syntax highlighting. Without Rich
-    the line passes through unchanged.
+    Applies to every physical line (split on \\n): a bare wrap would
+    only color the first line. Re-asserts the background after every
+    full reset (\\x1b[0m) so it survives inner styling such as syntax
+    highlighting. Without Rich the line passes through unchanged.
     """
     if not line or not _RICH_AVAILABLE:
         return line
     bg = _bg_code(hex_color)
-    return bg + line.replace("\x1b[0m", "\x1b[0m" + bg) + "\x1b[0m"
+    out = []
+    for part in line.split("\n"):
+        out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg)
+                   + "\x1b[0m")
+    return "\n".join(out)
 
 
 _BG_RE = _re.compile(r"\x1b\[48;2;\d+;\d+;\d+m")
@@ -104,10 +109,12 @@ _BG_RE = _re.compile(r"\x1b\[48;2;\d+;\d+;\d+m")
 def _panel(line: str, width: int) -> str:
     """Stretch a with_bg line to full width: a chat panel, not just
     highlighted text. Wrapped chunks may start mid-line, so ensure the
-    background is asserted at the start too."""
+    background is asserted at the start too. Pads to width-1: padding
+    to exactly width trips Textual's horizontal scrollbar off-by-one."""
     m = _BG_RE.search(line)
     if not m or width <= 0:
         return line
+    width = width - 1
     bg = m.group(0)
     vis = len(strip_ansi(line))
     if vis >= width:
