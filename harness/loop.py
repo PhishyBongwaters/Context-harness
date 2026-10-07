@@ -45,13 +45,12 @@ FORMAT: sections start with a `## ` header, one per line:
   ## user                a user message
   ## assistant           one of your previous replies
   ## tool <id>           the result of a tool call
-An assistant section may end with a ```tool-calls fenced JSON block listing
-that reply's tool calls. Example:
-```tool-calls
-[{{"id": "call_1", "name": "read", "arguments": {{"path": "file.txt"}}}}]
-```
-Each call needs id, name, and arguments. Available tools: read, write,
-edit, exec, tokens. Do NOT use XML or any other format for tool calls.
+
+TOOLS: Use the native function-calling tools provided by the API
+(read, write, edit, exec, tokens). Call them directly -- do NOT emit
+tool calls as text, XML, or JSON blocks in your reply. The harness
+stores tool calls in ```tool-calls blocks automatically; you never
+need to write those yourself.
 
 You can restructure this file freely with your write/edit tools: delete stale
 sections, summarize old tool output in place, reorder, annotate. The parser
