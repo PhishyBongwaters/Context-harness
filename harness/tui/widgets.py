@@ -76,7 +76,7 @@ def _ansi(text: str, *codes: int) -> str:
 
 # Chat-style message backgrounds (tasteful dark tints).
 _USER_BG = "#1d2b3a"       # blue-grey for user messages
-_ASSISTANT_BG = "#202020"  # neutral dark for agent replies
+_ASSISTANT_BG = "#2b2b2b"  # warm dark grey for agent replies
 
 
 def _bg_code(hex_color: str) -> str:
@@ -96,6 +96,28 @@ def with_bg(line: str, hex_color: str) -> str:
         return line
     bg = _bg_code(hex_color)
     return bg + line.replace("\x1b[0m", "\x1b[0m" + bg) + "\x1b[0m"
+
+
+_BG_RE = _re.compile(r"\x1b\[48;2;\d+;\d+;\d+m")
+
+
+def _panel(line: str, width: int) -> str:
+    """Stretch a with_bg line to full width: a chat panel, not just
+    highlighted text. Wrapped chunks may start mid-line, so ensure the
+    background is asserted at the start too."""
+    m = _BG_RE.search(line)
+    if not m or width <= 0:
+        return line
+    bg = m.group(0)
+    vis = len(strip_ansi(line))
+    if vis >= width:
+        return line
+    if not line.startswith(bg):
+        line = bg + line
+    pad = bg + " " * (width - vis)
+    if line.endswith("\x1b[0m"):
+        return line[:-4] + pad + "\x1b[0m"
+    return line + pad + "\x1b[0m"
 
 def format_event(kind: str, data) -> str | None:
     """Render one loop event as a transcript line. None = not shown."""
@@ -707,11 +729,12 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._raw.append(text)
             if len(self._raw) > self.MAX_LINES:
                 del self._raw[:len(self._raw) - self.MAX_LINES]
-            for line in self._wrap(text, self._wrap_width()):
+            w = self._wrap_width()
+            for line in self._wrap(text, w):
                 # write(), not write_line, CONCATENATES newline-less
                 # strings into one line -- wrapped chunks must each be
                 # their own line.
-                self.write_line(line)
+                self.write_line(_panel(line, w))
 
         def clear_all(self) -> None:
             self._raw.clear()
@@ -725,7 +748,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self.clear()
             for text in self._raw:
                 for line in self._wrap(text, w):
-                    self.write_line(line)
+                    self.write_line(_panel(line, w))
 
         def on_resize(self, event) -> None:
             self.rewrap()
