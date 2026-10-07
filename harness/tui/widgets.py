@@ -780,11 +780,25 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             if len(self._raw) > self.MAX_LINES:
                 del self._raw[:len(self._raw) - self.MAX_LINES]
             w = self._wrap_width()
-            for line in self._wrap(text, w):
-                # write(), not write_line, CONCATENATES newline-less
-                # strings into one line -- wrapped chunks must each be
-                # their own line.
-                self.write_line(_panel(line, w))
+            # Extract background ANSI (if any) before wrapping: wrapping
+            # a line with embedded bg codes splits them across chunks,
+            # leaving continuations without background. Re-apply per chunk.
+            bg_match = _BG_RE.search(text)
+            bg_code = bg_match.group(0) if bg_match else None
+            if bg_code:
+                # Strip all bg codes, keep other ANSI (syntax highlighting)
+                clean = _BG_RE.sub("", text)
+                # Also strip the trailing resets that with_bg added
+                for line in self._wrap(clean, w):
+                    # Re-apply bg to each wrapped chunk
+                    chunk = bg_code + line + "\x1b[0m"
+                    self.write_line(_panel(chunk, w))
+            else:
+                for line in self._wrap(text, w):
+                    # write(), not write_line, CONCATENATES newline-less
+                    # strings into one line -- wrapped chunks must each be
+                    # their own line.
+                    self.write_line(_panel(line, w))
 
         def clear_all(self) -> None:
             self._raw.clear()
@@ -797,8 +811,16 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._wrap_w = w
             self.clear()
             for text in self._raw:
-                for line in self._wrap(text, w):
-                    self.write_line(_panel(line, w))
+                bg_match = _BG_RE.search(text)
+                bg_code = bg_match.group(0) if bg_match else None
+                if bg_code:
+                    clean = _BG_RE.sub("", text)
+                    for line in self._wrap(clean, w):
+                        chunk = bg_code + line + "\x1b[0m"
+                        self.write_line(_panel(chunk, w))
+                else:
+                    for line in self._wrap(text, w):
+                        self.write_line(_panel(line, w))
 
         def on_resize(self, event) -> None:
             self.rewrap()
