@@ -13,10 +13,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Windows conhost mangles 24-bit ANSI backgrounds (cursor positioning
-# breaks, text appears at random offsets). Disable full-width panels there.
-_WIN32 = sys.platform == "win32"
-
 try:
     from rich.syntax import Syntax
     from rich.console import Console
@@ -92,26 +88,40 @@ def _bg_code(hex_color: str) -> str:
 
 
 def with_bg(line: str, hex_color: str) -> str:
-    """Wrap an ANSI-encoded line in a background color.
+    """Wrap a line in a background color using Rich terminal detection.
 
-    Applies to every physical line (split on \\n): a bare wrap would
-    only color the first line. Re-asserts the background after every
-    full reset (\\x1b[0m) so it survives inner styling such as syntax
-    highlighting. Without Rich the line passes through unchanged.
-    On Windows, returns the line unchanged: conhost mangles 24-bit
-    backgrounds, breaking cursor positioning.
+    Applies to every physical line (split on \\n). Rich picks color codes
+    appropriate for the actual terminal (downgrading from 24-bit on
+    Windows conhost), so cursor positioning stays intact. Re-asserts the
+    background after every full reset (\\x1b[0m) so it survives inner
+    styling such as syntax highlighting. Without Rich the line passes
+    through unchanged.
     """
-    if not line or not _RICH_AVAILABLE or _WIN32:
+    if not line or not _RICH_AVAILABLE:
         return line
-    bg = _bg_code(hex_color)
+    from rich.text import Text
+    from rich.style import Style
+    from rich.console import Console
+    # Terminal-aware console: Rich downgrades 24-bit -> 256 -> 16 colors
+    # based on what the terminal actually supports.
+    _console = Console(force_terminal=True, color_system="auto", width=10000)
+    style = Style(bgcolor=hex_color)
     out = []
     for part in line.split("\n"):
-        out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg)
-                   + "\x1b[0m")
+        # Preserve inner ANSI (e.g. syntax highlighting) by parsing it
+        # into the Text object, then applying our bg style on top.
+        text = Text.from_ansi(part)
+        text.stylize(style)
+        with _console.capture() as cap:
+            _console.print(text, end="", soft_wrap=True)
+        rendered = cap.get()
+        # Ensure the background covers the full line even where the
+        # original had resets: Rich handles this via the style spans.
+        out.append(rendered)
     return "\n".join(out)
 
 
-_BG_RE = _re.compile(r"\x1b\[48;2;\d+;\d+;\d+m")
+_BG_RE = _re.compile(r"\x1b\[(?:48;5;\d+|48;2;\d+;\d+;\d+|4\d|10[0-7])(?:;\d+)*m")
 
 
 def _panel(line: str, width: int) -> str:
