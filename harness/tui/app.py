@@ -895,9 +895,7 @@ if _HAS:
             breakdown. Both tint warn/over."""
             gauge = self.query_one("#gauge", BudgetGauge)
             bar = self.query_one("#budget", BudgetBar)
-            text = budget_bar_text(data)
-            if text is not None:
-                bar.update(text)
+            bar.set_request(data)
             gauge.set_request(data)
             try:
                 toks, hard = data.get("tokens_est", 0), data.get("hard") or 0

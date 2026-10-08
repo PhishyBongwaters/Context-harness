@@ -258,7 +258,7 @@ def lcars_gauge_text(data, width: int = 40):
 def lcars_stats_text(data):
     """LCARS-style stats pills as Rich Text.
 
-    Each stat (SYS, CHAT, TOOLS, SESS) in a different LCARS color pill.
+    Each stat (CTX, SYS, CHAT, TOOLS, SESS) in a different LCARS color pill.
     """
     try:
         from rich.text import Text
@@ -268,9 +268,13 @@ def lcars_stats_text(data):
     data = data or {}
     if "tokens_est" not in data:
         return Text("")
+    toks = data["tokens_est"]
+    hard = data.get("hard") or 0
+    pct = (100.0 * toks / hard) if hard else 0.0
     bd = data.get("breakdown") or {}
     ut = data.get("usage_total") or {}
     pills = [
+        (f" CTX {toks:,} / {hard:,} ({pct:.0f}%) ", LCARS["orange"]),
         (f" SYS {bd.get('system', 0):,} ", LCARS["mauve"]),
         (f" CHAT {bd.get('transcript', 0):,} ", LCARS["periwinkle"]),
         (f" TOOLS {bd.get('tools', 0):,} ", LCARS["sky"]),
