@@ -45,15 +45,24 @@ def dedupe_exact(text: str) -> tuple[str, int]:
     """Collapse identical (header, body) assistant/tool sections.
 
     Keeps the newest occurrence (latest state wins); user sections are
-    never deduped. Returns (new_text, n_dropped).
+    never deduped. Also collapses by tool ID: if the same ## tool <id>
+    appears multiple times (stale/reused ID), keep only the newest
+    regardless of body content. Returns (new_text, n_dropped).
     """
     pre, _ = _split_preamble(text)
     sections = _split_sections(text)
     # Key on (role, body): tool headers carry unique call ids, so
     # header-inclusive keys would never match re-run outputs.
     seen: set[tuple[str, str]] = set()
+    seen_tool_ids: set[str] = set()
     keep_rev: list[bool] = []
-    for role, _label, header, body in reversed(sections):
+    for role, label, header, body in reversed(sections):
+        # Tool ID dedupe: same ID twice = stale, keep newest only.
+        if role == "tool" and label:
+            if label in seen_tool_ids:
+                keep_rev.append(False)
+                continue
+            seen_tool_ids.add(label)
         key = (role, body.strip())
         if role in ("assistant", "tool") and key in seen:
             keep_rev.append(False)
