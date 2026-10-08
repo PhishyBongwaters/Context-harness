@@ -122,6 +122,12 @@ def detect_context_window(base_url: str | None, model: str | None,
     GET {base_url}/props for n_ctx (llama.cpp). Returns None if the
     server doesn't expose it. This is how tools detect the actual
     --ctx-size from a local llama.cpp server, not a registry guess.
+
+    Detection chain (prior art: pi-llama-cpp extensions):
+    1. /v1/models -> meta.n_ctx (loaded model, single or router mode)
+    2. /v1/models -> max_model_len (legacy/ik_llama.cpp)
+    3. /props -> n_ctx (llama.cpp; reflects --ctx-size even for unloaded
+       models in router mode, per pi-llama-cpp docs)
     """
     if not base_url:
         return None
@@ -170,6 +176,36 @@ def detect_context_window(base_url: str | None, model: str | None,
         n_ctx = data.get("n_ctx")
         if n_ctx:
             return int(n_ctx)
+    except Exception:
+        pass
+    # 3. Fallback: for local servers, read --ctx-size from the
+    # llama-server process command line (prior art: pi-llama-cpp reads
+    # server args for unloaded models in router mode).
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(base_url).hostname or ""
+        if host in ("localhost", "127.0.0.1", "::1"):
+            import subprocess
+            # Find llama-server processes and parse --ctx-size / -c
+            out = subprocess.run(
+                ["ps", "-eo", "args"], capture_output=True, text=True,
+                timeout=5).stdout
+            for line in out.splitlines():
+                if "llama-server" not in line:
+                    continue
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if p == "--ctx-size" and i + 1 < len(parts):
+                        return int(parts[i + 1])
+                    if p == "-c" and i + 1 < len(parts):
+                        # -c could be ambiguous; only take if numeric
+                        try:
+                            return int(parts[i + 1])
+                        except ValueError:
+                            pass
+                    # --ctx-size=32768 form
+                    if p.startswith("--ctx-size="):
+                        return int(p.split("=", 1)[1])
     except Exception:
         pass
     return None
