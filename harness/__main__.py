@@ -594,7 +594,8 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
                if getattr(cfg, "provider", None) == name else ""))
 
 
-def _autosize_budget(cfg, loop, model: str | None) -> None:
+def _autosize_budget(cfg, loop, model: str | None,
+                     timeout: int = 10) -> None:
     """Auto-size budget from live server values, unless user set it.
 
     Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
@@ -608,7 +609,7 @@ def _autosize_budget(cfg, loop, model: str | None) -> None:
     try:
         kind = _resolved_kind(cfg)
         window = detect_context_window(cfg.base_url, model, cfg.api_key,
-                                       kind=kind)
+                                       kind=kind, timeout=timeout)
         if window:
             if getattr(cfg, "budget_hard_auto", True):
                 cfg.budget_hard = window
@@ -625,6 +626,31 @@ def _autosize_budget(cfg, loop, model: str | None) -> None:
                     loop.budget.soft = new_soft
     except Exception:
         pass
+
+
+def _startup_probe(cfg, loop, timeout: int = 2) -> bool:
+    """Bounded localhost-only budget probe for startup. Returns True when
+    budgets changed. Never raises, never touches the network unless an
+    auto flag is set AND the endpoint is local: localhost answers in ms
+    and refused connections fail instantly, so unlike the old unbounded
+    cloud probe this cannot stall startup. Cloud endpoints are skipped
+    (their APIs expose no window); pinned budgets are skipped.
+    """
+    try:
+        if (not getattr(cfg, "budget_hard_auto", True)
+                and not getattr(cfg, "budget_soft_auto", True)):
+            return False
+        from urllib.parse import urlparse as _up
+        host = (_up(getattr(cfg, "base_url", None) or "").hostname
+                or "").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            return False
+        old = (cfg.budget_hard, cfg.budget_soft)
+        _autosize_budget(cfg, loop, getattr(cfg, "model", None),
+                         timeout=timeout)
+        return (cfg.budget_hard, cfg.budget_soft) != old
+    except Exception:
+        return False
 
 
 def retarget_loop(box: dict, cfg, args, provider: str, model: str):
@@ -900,6 +926,17 @@ def main(argv: list[str] | None = None) -> int:
             cfg, args, on_event=handler,
             approver=approver,
             usage_tracker=tracker, project=box["project"])
+        # Live values before first paint: localhost-only, bounded, so the
+        # session header shows the detected window instead of defaults.
+        _startup_probe(cfg, box["loop"])
+        # Header paints after the probe so it shows live values, not
+        # defaults (CLI prints it, TUI stashes it for the system panel).
+        if is_tui:
+            # TUI: stash for the system panel instead of printing.
+            box["tui_session_header"] = session_header_line(
+                _disp_cfg(), sess, tracker.totals, box["project"])
+        else:
+            _show_session(_disp_cfg(), sess, tracker.totals, box["project"])
 
     if args.new or args.session:
         box["session"] = (_new_session(cfg, _workdir(args)) if args.new
@@ -1018,6 +1055,12 @@ def main(argv: list[str] | None = None) -> int:
                         f"hard={cfg.budget_hard:,} "
                         f"soft={cfg.budget_soft:,}",
                         _tui_header()]
+            if (cfg.budget_hard, cfg.budget_soft) != (100_000, 80_000):
+                # Unchanged but not defaults: an earlier probe (startup)
+                # already set live values. Confirm, don't cry default.
+                return [f"[budget] live window for model={cfg.model}: "
+                        f"hard={cfg.budget_hard:,} "
+                        f"soft={cfg.budget_soft:,} (unchanged)"]
             return [f"[budget] no live window for model={cfg.model} "
                     f"(budget={cfg.budget_hard:,}/{cfg.budget_soft:,} "
                     f"is the unconfigured default; set budget_hard "

@@ -165,5 +165,62 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual(cfg.budget_hard, 200_000)
 
 
+class TestStartupProbe(unittest.TestCase):
+    """_startup_probe: localhost-only, bounded, skips cloud/pinned."""
+
+    def _cfg(self, **kw):
+        from harness.config import Config
+        return Config(
+            provider=kw.get("provider", "openai"),
+            model=kw.get("model", "m"),
+            base_url=kw.get("base_url", "http://127.0.0.1:8080/v1"),
+            api_key_env=kw.get("api_key_env", "OPENAI_API_KEY"),
+            budget_hard=kw.get("budget_hard", 100_000),
+            budget_soft=kw.get("budget_soft", 80_000),
+            budget_hard_auto=kw.get("budget_hard_auto", True),
+            budget_soft_auto=kw.get("budget_soft_auto", True))
+
+    def test_local_applies_live_window(self):
+        from harness import __main__ as cli
+        from harness.context import Budget
+        cfg = self._cfg()
+        loop = {"budget": Budget(cfg.budget_hard, cfg.budget_soft)}
+        loop = type("L", (), loop)()
+        with patch.object(cli, "detect_context_window",
+                          return_value=135168) as det:
+            changed = cli._startup_probe(cfg, loop)
+        self.assertTrue(changed)
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (135168, int(135168 * 0.8)))
+        _, kwargs = det.call_args
+        self.assertEqual(kwargs.get("timeout"), 2)
+
+    def test_cloud_skipped_without_network(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(base_url="https://api.openai.com/v1")
+        with patch.object(cli, "detect_context_window") as det:
+            changed = cli._startup_probe(cfg, None)
+        det.assert_not_called()
+        self.assertFalse(changed)
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (100_000, 80_000))
+
+    def test_pinned_skipped_without_network(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(budget_hard=50_000, budget_hard_auto=False,
+                        budget_soft_auto=False)
+        with patch.object(cli, "detect_context_window") as det:
+            changed = cli._startup_probe(cfg, None)
+        det.assert_not_called()
+        self.assertFalse(changed)
+
+    def test_never_raises(self):
+        from harness import __main__ as cli
+        cfg = self._cfg()
+        with patch.object(cli, "detect_context_window",
+                          side_effect=RuntimeError("boom")):
+            self.assertFalse(cli._startup_probe(cfg, None))
+
+
 if __name__ == "__main__":
     unittest.main()
