@@ -126,22 +126,21 @@ def get_model_context_window(model: str) -> int | None:
     return None
 
 
-# Headroom so the prune request itself fits: at hard == window the prune
-# call (whole file + prune prompt + tool schemas + output margin) would
-# overflow. Flat cap because prune overhead is absolute (~2k in, a few k
-# out), not proportional — but never more than a quarter of tiny windows.
-PRUNE_RESERVE_TOKENS = 8_192
+# Enforcement budgets sit at HALF the context window, not at it: pruning
+# must start early (50%), because at hard == window the prune request
+# itself (whole file + prune prompt + tools) cannot fit. Half leaves the
+# prune turn enormous headroom on every model size, so no separate
+# reserve math is needed. soft stays at 80% of hard (40% of window).
 
 
 def split_budgets(window: int) -> tuple[int, int]:
     """Enforcement (hard, soft) budgets from a model context window.
 
-    hard leaves reserve headroom so a prune-only turn fits inside the
-    window; soft stays at 80% of hard. Applies to every auto budget
-    (live, registry, or default pseudo-window) — never to explicit pins.
+    hard = 50% of window (prune trigger); soft = 80% of hard. Applies
+    to every auto budget (live, registry, or default pseudo-window) —
+    never to explicit pins.
     """
-    reserve = min(PRUNE_RESERVE_TOKENS, window // 4)
-    hard = window - reserve
+    hard = window // 2
     return hard, int(hard * 0.8)
 
 

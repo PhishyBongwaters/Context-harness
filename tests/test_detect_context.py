@@ -240,20 +240,20 @@ class TestBudgetChangeLines(unittest.TestCase):
 
     def test_live_change(self):
         from harness import __main__ as cli
-        cfg = self._cfg(126976, 101580, source="live")
+        cfg = self._cfg(67584, 54067, source="live")
         lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m")
         self.assertEqual(len(lines), 1)
-        self.assertIn("126,976", lines[0])
+        self.assertIn("67,584", lines[0])
         self.assertNotIn("no live window", lines[0])
         self.assertNotIn("registry", lines[0])
 
     def test_registry_change_is_labeled_fallback(self):
         from harness import __main__ as cli
-        cfg = self._cfg(391808, 313446, source="registry")
+        cfg = self._cfg(200000, 160000, source="registry")
         lines = cli._budget_change_lines(cfg, (100_000, 80_000), "gpt-5")
         self.assertEqual(len(lines), 1)
         self.assertIn("registry fallback", lines[0])
-        self.assertIn("391,808", lines[0])
+        self.assertIn("200,000", lines[0])
 
     def test_reset_to_default_reports_undetected(self):
         from harness import __main__ as cli
@@ -265,10 +265,10 @@ class TestBudgetChangeLines(unittest.TestCase):
 
     def test_unchanged_live_is_silent(self):
         from harness import __main__ as cli
-        cfg = self._cfg(126976, 101580, source="live")
+        cfg = self._cfg(67584, 54067, source="live")
         self.assertEqual(
             cli._budget_change_lines(
-                cfg, (126976, 101580), "m"), [])
+                cfg, (67584, 54067), "m"), [])
 
     def test_unchanged_defaults_reports_undetected(self):
         from harness import __main__ as cli

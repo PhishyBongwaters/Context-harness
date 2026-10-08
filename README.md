@@ -11,8 +11,8 @@ special compact tool.
 
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
-Hard sits below the model's context window with ~8k tokens of headroom
-so the prune request itself still fits; soft warns at 80% of hard.
+Hard sits at 50% of the model's context window so pruning starts early
+and the prune request itself always fits; soft warns at 80% of hard.
 Pruning fails repeatedly → loud error, never silent truncation. Every
 prune turn and any model edit of `context.md` backs up the file first
 (`context.pre-prune-<ts>.bak` / `context.pre-edit-<ts>.bak`), so all
