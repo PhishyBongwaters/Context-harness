@@ -592,28 +592,35 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
                if getattr(cfg, "provider", None) == name else ""))
 
 
-def _autosize_budget(cfg, loop, model: str | None) -> None:
+def _autosize_budget(cfg, loop, model: str | None) -> str:
     """Auto-size budget from live-detected context window, unless user set it.
 
     Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
     so repeated model switches keep updating auto-detected budgets.
     Detection ONLY via live server API. No registry fallback — if the
     server doesn't expose it, budget stays at default. No hardcoded lists.
+
+    Returns a status string for logging: what was detected or why not.
     """
     try:
         window = detect_context_window(cfg.base_url, model, cfg.api_key)
-        if window:
-            if getattr(cfg, "budget_hard_auto", True):
-                cfg.budget_hard = window
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.hard = window
-            if getattr(cfg, "budget_soft_auto", True):
-                new_soft = int(window * 0.8)
-                cfg.budget_soft = new_soft
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.soft = new_soft
-    except Exception:
-        pass
+        if not window:
+            return f"detect: no window from {cfg.base_url} (model={model})"
+        updated = []
+        if getattr(cfg, "budget_hard_auto", True):
+            cfg.budget_hard = window
+            if hasattr(loop, "budget") and loop.budget:
+                loop.budget.hard = window
+            updated.append(f"hard={window}")
+        if getattr(cfg, "budget_soft_auto", True):
+            new_soft = int(window * 0.8)
+            cfg.budget_soft = new_soft
+            if hasattr(loop, "budget") and loop.budget:
+                loop.budget.soft = new_soft
+            updated.append(f"soft={new_soft}")
+        return f"detect: window={window} from {cfg.base_url} ({', '.join(updated)})"
+    except Exception as e:
+        return f"detect: error {e}"
 
 
 def retarget_loop(box: dict, cfg, args, provider: str, model: str):
@@ -688,7 +695,8 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     loop = box["loop"]
     loop.provider = new_main
     loop.prune_provider = prune
-    _autosize_budget(cfg, loop, model)
+    det_status = _autosize_budget(cfg, loop, model)
+    print(f"[budget] {det_status}", flush=True)
     # Persist the selection (name or kind) so the file matches live
     # state -- otherwise the next launch resurrects the old endpoint
     # and the switch looks "stuck". Best-effort, never fails the turn.
@@ -902,9 +910,10 @@ def main(argv: list[str] | None = None) -> int:
     # Auto-size budget on startup (not just on retarget) — detection must
     # run for the initial model too, otherwise budget stays at 100k/80k defaults.
     try:
-        _autosize_budget(cfg, box["loop"], cfg.model)
-    except Exception:
-        pass
+        det_status = _autosize_budget(cfg, box["loop"], cfg.model)
+        print(f"[budget] {det_status}", flush=True)
+    except Exception as e:
+        print(f"[budget] startup detect error: {e}", flush=True)
 
     def do_turn(text: str) -> int:
         try:
