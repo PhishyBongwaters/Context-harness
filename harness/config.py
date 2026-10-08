@@ -56,6 +56,61 @@ DEFAULTS = {
     #   else a legacy kind (openai/anthropic/nvidia)
 }
 
+# Model context window registry (tokens). Used to auto-size budget_hard
+# when the user has not explicitly set it. Keyed by model ID substring;
+# first match wins. Extend as needed.
+MODEL_CONTEXT_WINDOWS = {
+    # OpenAI
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo": 16_385,
+    "o1": 200_000,
+    "o1-mini": 128_000,
+    "o3-mini": 200_000,
+    # Anthropic
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "claude-3-opus": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-haiku": 200_000,
+    "claude-opus-4": 200_000,
+    "claude-sonnet-4": 200_000,
+    # Google
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-1.5-pro": 2_097_152,
+    "gemini-1.5-flash": 1_048_576,
+    # Meta (via NVIDIA, etc.)
+    "llama-3.1": 128_000,
+    "llama-3.2": 128_000,
+    "llama-3.3": 128_000,
+    # DeepSeek
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
+    # Mistral
+    "mistral-large": 128_000,
+    "mistral-medium": 32_000,
+    "mistral-small": 32_000,
+    # xAI
+    "grok-2": 131_072,
+    "grok-beta": 131_072,
+}
+
+
+def get_model_context_window(model: str) -> int | None:
+    """Look up a model context window from the registry.
+
+    Matches by substring (case-insensitive); returns None if unknown.
+    """
+    if not model:
+        return None
+    ml = model.lower()
+    for key, window in MODEL_CONTEXT_WINDOWS.items():
+        if key in ml:
+            return window
+    return None
+
+
 # Add-flow starting points (prefilled into the form, never auto-seeded
 # into the user's config). api_key_env None = local server, no key.
 PROVIDER_TEMPLATES = {

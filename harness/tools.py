@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+
+from .approvals import EXEC_TIMEOUT_DEFAULT
 from pathlib import Path
 
 MAX_OUTPUT_CHARS = 30_000
@@ -30,7 +32,7 @@ def tool_definitions() -> list[dict]:
                     "workdir": {"type": "string",
                                "description": "Working directory (default: session cwd)."},
                     "timeout": {"type": "integer",
-                               "description": "Timeout in seconds (default 60)."},
+                               "description": "Timeout in seconds."},
                 },
                 "required": ["command"],
             },
@@ -108,7 +110,7 @@ def _resolve(path: str, workdir: str) -> Path:
 def exec_tool(args: dict, workdir: str) -> str:
     cmd = args["command"]
     cwd = args.get("workdir") or workdir
-    timeout = int(args.get("timeout") or 60)
+    timeout = int(args.get("timeout") or EXEC_TIMEOUT_DEFAULT)
     try:
         proc = subprocess.run(cmd, shell=True, cwd=cwd, timeout=timeout,
                               capture_output=True, text=True,

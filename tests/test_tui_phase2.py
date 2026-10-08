@@ -62,13 +62,18 @@ class TestBudgetBar(unittest.TestCase):
 
 class TestStatusLine(unittest.TestCase):
     def test_thinking(self):
-        self.assertEqual(format_status("main", 3), "thinking 3s")
+        result = format_status("main", 3)
+        self.assertIn("thinking 3s", result)
+        # Animation blocks present
+        self.assertTrue(any(c in result for c in "▁▂▃▄▅▆▇█"))
 
     def test_prune_label_distinct(self):
-        self.assertEqual(format_status("prune", 7), "pruning 7s")
+        result = format_status("prune", 7)
+        self.assertIn("pruning 7s", result)
 
     def test_unknown_phase_thinks(self):
-        self.assertEqual(format_status(None, 0), "thinking 0s")
+        result = format_status(None, 0)
+        self.assertIn("thinking 0s", result)
 
 
 class TestDedupe(unittest.TestCase):
