@@ -128,6 +128,9 @@ def detect_context_window(base_url: str | None, model: str | None,
     import json as _json
     import urllib.request as _req
     base = base_url.rstrip("/")
+    # Strip trailing /v1 to avoid /v1/v1/models (base_url may include it)
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
