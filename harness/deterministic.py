@@ -174,14 +174,40 @@ def cap_sections(text: str, cap: int = DEFAULT_SECTION_CAP
 
 def prune_deterministic(text: str, *, target: int,
                         keep_recent_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
-                        section_cap: int = DEFAULT_SECTION_CAP) -> tuple[str, dict]:
-    """Run the ladder until under target. Returns (new_text, report)."""
+                        section_cap: int = DEFAULT_SECTION_CAP,
+                        archive_dir: str | None = None) -> tuple[str, dict]:
+    """Run the ladder until under target. Returns (new_text, report).
+
+    If archive_dir is given and text is >2x target, the oldest half of
+    sections is moved to a dated archive .md file in archive_dir.
+    The harness does this mechanically -- no model call needed.
+    """
     report: dict = {"deduped": 0, "evicted": [], "capped": 0,
                     "tokens_before": count_tokens(text),
-                    "tokens_after": 0}
+                    "tokens_after": 0, "archived": None}
     if report["tokens_before"] <= target:
         report["tokens_after"] = report["tokens_before"]
         return text, report
+    # Archive-first: if way over target (>2x), split oldest half to a
+    # dated file. Mechanical, no model.
+    if archive_dir and report["tokens_before"] > target * 2:
+        text, archived_text = _archive_oldest_half(text)
+        if archived_text:
+            import datetime as _dt
+            import os as _os
+            stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            apath = _os.path.join(archive_dir,
+                                  f"context.archive-{stamp}.md")
+            try:
+                _os.makedirs(archive_dir, exist_ok=True)
+                with open(apath, "w", encoding="utf-8") as f:
+                    f.write(archived_text)
+                report["archived"] = apath
+            except OSError:
+                pass
+        if count_tokens(text) <= target:
+            report["tokens_after"] = count_tokens(text)
+            return text, report
     text, report["deduped"] = dedupe_exact(text)
     if count_tokens(text) <= target:
         report["tokens_after"] = count_tokens(text)
@@ -194,3 +220,18 @@ def prune_deterministic(text: str, *, target: int,
     text, report["capped"] = cap_sections(text, cap=section_cap)
     report["tokens_after"] = count_tokens(text)
     return text, report
+
+
+def _archive_oldest_half(text: str) -> tuple[str, str | None]:
+    """Split text, returning (newest_half, oldest_half_text).
+
+    Pure function -- caller writes the archive file.
+    """
+    pre, _ = _split_preamble(text)
+    sections = _split_sections(text)
+    if len(sections) < 4:
+        return text, None
+    half = len(sections) // 2
+    old = sections[:half]
+    new = sections[half:]
+    return _render(new, pre), _render(old, pre)

@@ -114,6 +114,25 @@ class TestLadder(unittest.TestCase):
         self.assertIn("## tool c3", s.context.load())
         self.assertNotIn("## tool c1", s.context.load())
 
+    def test_archive_oldest_half_when_way_over(self):
+        import tempfile, os
+        # Build a text with 10 sections, way over a tiny target.
+        text = "".join(
+            render_user(f"q{i}") + f"## assistant\nanswer {i}\n"
+            for i in range(10))
+        with tempfile.TemporaryDirectory() as d:
+            new, rep = prune_deterministic(
+                text, target=10, archive_dir=d)
+            # Archive file was created.
+            self.assertIsNotNone(rep["archived"])
+            self.assertTrue(os.path.exists(rep["archived"]))
+            # Archived content has the oldest sections.
+            archived = open(rep["archived"]).read()
+            self.assertIn("q0", archived)
+            # Trimmed text keeps the newest.
+            self.assertIn("q9", new)
+            self.assertNotIn("q0", new)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,9 +115,26 @@ class Session:
     dir: Path
     workdir: str
     context: ContextFile = field(init=False)
+    satellites: dict = field(init=False)
 
     def __post_init__(self):
         self.context = ContextFile(self.dir / "context.md")
+        # Satellite layer: curated one-liners the prune agent maintains.
+        # Working file gets purged aggressively; these keep what matters.
+        self.satellites = {
+            "facts": ContextFile(self.dir / "facts.md"),
+            "decisions": ContextFile(self.dir / "decisions.md"),
+            "tasks": ContextFile(self.dir / "tasks.md"),
+        }
+        # Ensure satellite files exist with headers.
+        headers = {
+            "facts": "# Facts\n\nDiscovered truths about the world, one line each.\n",
+            "decisions": "# Decisions\n\nChoices made and why, one line each.\n",
+            "tasks": "# Tasks\n\nOpen work items, one line each.\n",
+        }
+        for name, cf in self.satellites.items():
+            if not cf.path.exists():
+                cf.save(headers[name])
 
 
 def _estimate(system: str, messages: list[dict],
@@ -335,7 +352,8 @@ class Loop:
             target=(self.prune_target if self.prune_target is not None
                     else self.budget.soft),
             keep_recent_tools=self.prune_keep_tools,
-            section_cap=self.prune_section_cap)
+            section_cap=self.prune_section_cap,
+            archive_dir=str(session.dir))
         if det_text != det_before:
             session.context.save(det_text)
             self._emit("context-diff", diff_transcripts(det_before, det_text))
