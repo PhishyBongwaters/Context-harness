@@ -221,6 +221,69 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 yield LcarsPill(key, label, action, color)
 
 
+def lcars_gauge_text(data, width: int = 40):
+    """LCARS-style context meter as Rich Text.
+
+    Single orange bar whose length = fill percentage (TNG style),
+    with dark text showing pct and totals. Returns Rich Text for
+    native Textual rendering.
+    """
+    try:
+        from rich.text import Text
+        from rich.style import Style
+    except ImportError:
+        return None
+    data = data or {}
+    if "tokens_est" not in data:
+        return Text("")
+    toks, hard = data["tokens_est"], data.get("hard") or 0
+    pct = (100.0 * toks / hard) if hard else 0.0
+    # Bar length proportional to fill, min 8 for legibility
+    bar_len = max(8, int(width * pct / 100.0))
+    bar_len = min(width, bar_len)
+    label = f" {pct:.0f}% {toks:,}/{hard:,} "
+    # Pad label to bar length or truncate
+    if len(label) > bar_len:
+        label = label[:bar_len]
+    else:
+        label = label.ljust(bar_len)
+    # LCARS orange bar with black text
+    text = Text(label, style=Style(bgcolor=LCARS["orange"], color="black", bold=True))
+    # Fill remainder with empty (dark) if bar < width
+    if bar_len < width:
+        text.append(" " * (width - bar_len), style=Style(bgcolor="#1a1a1a"))
+    return text
+
+
+def lcars_stats_text(data):
+    """LCARS-style stats pills as Rich Text.
+
+    Each stat (SYS, CHAT, TOOLS, SESS) in a different LCARS color pill.
+    """
+    try:
+        from rich.text import Text
+        from rich.style import Style
+    except ImportError:
+        return None
+    data = data or {}
+    if "tokens_est" not in data:
+        return Text("")
+    bd = data.get("breakdown") or {}
+    ut = data.get("usage_total") or {}
+    pills = [
+        (f" SYS {bd.get('system', 0):,} ", LCARS["mauve"]),
+        (f" CHAT {bd.get('transcript', 0):,} ", LCARS["periwinkle"]),
+        (f" TOOLS {bd.get('tools', 0):,} ", LCARS["sky"]),
+    ]
+    if ut:
+        pills.append((f" SESS IN {ut.get('input', 0):,} OUT {ut.get('output', 0):,} ", LCARS["peach"]))
+    text = Text()
+    for label, color in pills:
+        text.append(label, style=Style(bgcolor=color, color="black", bold=True))
+        text.append(" ", style=Style(bgcolor="#000000"))
+    return text
+
+
 def lcars_theme():
     """The LCARS theme: toggleable in the command palette.
 

@@ -691,11 +691,11 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._recall(self._input_history.newer(self.text))
 
     class BudgetGauge(Static):
-        """Bottom-line context gauge: block bar + pct + live status.
+        """Bottom-line context gauge: LCARS bar + live status.
 
-        The status text (thinking/pruning Ns) rides the same line so
-        the bottom of the screen reads as one instrument: gauge left,
-        activity right. Warn/over tint via CSS classes.
+        Uses LCARS-styled Rich Text for the meter (TNG orange bar).
+        The thinking/pruning animation takes over full-width when active.
+        Warn/over tint via CSS classes.
         """
 
         def __init__(self, *a, **k) -> None:
@@ -712,22 +712,49 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._refresh_line()
 
         def _refresh_line(self) -> None:
-            # If status is a full-width bar (TNG thinking animation),
-            # show it alone. Otherwise show gauge + status.
+            # If status is a full-width animation bar, show it alone.
             if self._status and len(self._status) > 40 and "thinking" not in self._status and "pruning" not in self._status:
-                # Full-width animation bar, no gauge
                 self.update(self._status)
-            else:
-                self.update(gauge_line(self._request, self._status))
+                return
+            # Try LCARS-styled gauge
+            try:
+                from .lcars import lcars_gauge_text
+                w = 40
+                try:
+                    w = self.size.width or 40
+                except Exception:
+                    pass
+                lcars_text = lcars_gauge_text(self._request, w)
+                if lcars_text and len(str(lcars_text).strip()):
+                    # Append status if present (compact form)
+                    if self._status:
+                        lcars_text.append(f" · {self._status}")
+                    self.update(lcars_text)
+                    return
+            except Exception:
+                pass
+            # Fallback to plain gauge
+            self.update(gauge_line(self._request, self._status))
 
     class BudgetBar(Static):
-        """One-line budget readout; warn/over tint via CSS classes."""
+        """One-line budget readout as LCARS pills; warn/over tint via CSS."""
 
         def set_request(self, data) -> None:
-            text = budget_bar_text(data)
-            if text is None:
-                return
-            self.update(text)
+            # Try LCARS pills first
+            try:
+                from .lcars import lcars_stats_text
+                lcars_text = lcars_stats_text(data)
+                if lcars_text and len(str(lcars_text).strip()):
+                    self.update(lcars_text)
+                else:
+                    text = budget_bar_text(data)
+                    if text is not None:
+                        self.update(text)
+            except Exception:
+                text = budget_bar_text(data)
+                if text is None:
+                    return
+                self.update(text)
             status = budget_bar_status(data)
             for cls in ("warn", "over"):
                 self.remove_class(cls)
