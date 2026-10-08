@@ -899,12 +899,6 @@ def main(argv: list[str] | None = None) -> int:
     stamp(box["session"])
     attach()
     _restore_session_model(box, cfg, args)
-    # Auto-size budget on startup (not just on retarget) — detection must
-    # run for the initial model too, otherwise budget stays at 100k/80k defaults.
-    try:
-        _autosize_budget(cfg, box["loop"], cfg.model)
-    except Exception:
-        pass
 
     def do_turn(text: str) -> int:
         try:
