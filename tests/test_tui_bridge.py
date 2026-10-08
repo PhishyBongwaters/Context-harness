@@ -18,13 +18,16 @@ def make_session(workdir=None):
 
 class TestFormatEvent(unittest.TestCase):
     def test_assistant(self):
-        self.assertEqual(format_event("assistant", "hi"), "hi")
+        # Assistant label is green bold, then newline, then text
+        self.assertEqual(format_event("assistant", "hi"),
+                         "\x1b[1m\x1b[32massistant\x1b[0m\nhi")
 
     def test_tool(self):
         line = format_event("tool", {"name": "exec",
                                      "args": {"command": "ls"},
                                      "result": "x"})
-        self.assertEqual(line, "$ exec ls")
+        # Tool header is dimmed with wrench icon
+        self.assertEqual(line, "\x1b[2m🔧 exec ls\x1b[0m")
 
     def test_tool_denied(self):
         line = format_event("tool", {"name": "exec",
@@ -88,8 +91,8 @@ class TestBridge(unittest.TestCase):
         b("tool", {"name": "exec", "args": {"command": "ls"}})
         got = b.drain()
         self.assertEqual([k for k, _, _ in got], ["assistant", "tool"])
-        self.assertEqual(got[0][2], "one")
-        self.assertTrue(got[1][2].startswith("$ exec"))
+        self.assertEqual(got[0][2], "\x1b[1m\x1b[32massistant\x1b[0m\none")
+        self.assertTrue(got[1][2].startswith("\x1b[2m🔧 exec"))
         self.assertEqual(b.drain(), [])
 
     def test_full_turn_flows_through(self):

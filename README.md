@@ -68,12 +68,14 @@ Same session, same provider registry, same ledger as the CLI.
 
 - transcript pane (assistant text, tool calls, budget/prune lines),
   budget bar, status line, input box
+- chat-style message panels: blue for you, dark for assistant, black for
+  tools — click any message to copy its full text to the clipboard
 - mutating tools pop an approval dialog: `a` turn / `s` session /
   `d` or `esc` deny, countdown default-deny (same timeout as CLI)
 - `ctrl+s` session picker, `ctrl+o` provider/model picker,
   `ctrl+d` debug-log tail, `ctrl+e` export transcript to a file
-- drag with the mouse to select transcript text; `ctrl+c` copies
-  (never quits — quit is `/quit` or `ctrl+q`)
+- `ctrl+c` copies the current selection (never quits — quit is `/quit`
+  or `ctrl+q`)
 - slash commands work in the input box exactly like the REPL
   (`/new`, `/open`, `/list`, `/project`, `/usage`, `/config`,
   `/providers`, `/models`, `/help`, `/quit`)
