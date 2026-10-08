@@ -95,6 +95,10 @@ MODEL_CONTEXT_WINDOWS = {
     "llama-3.1": 128_000,
     "llama-3.2": 128_000,
     "llama-3.3": 128_000,
+    # Distributor aliases (same underlying weights / published specs)
+    "muse-glimmer": 128_000,  # Llama 3.3 70B via NVIDIA NIM
+    # 01.AI
+    "yi-large": 32_768,  # Yi-Large published 32K context
     # DeepSeek
     "deepseek-chat": 64_000,
     "deepseek-reasoner": 64_000,
@@ -504,12 +508,16 @@ def load_config(path: str | Path | None = None,
         budget_source = "explicit"
         if not budget_soft_explicit:
             budget_soft = int(budget_hard * 0.8)
-    elif not budget_soft_explicit:
+    else:
+        # Hard is auto: registry sizes it even when soft is pinned.
         detected = get_model_context_window(merged.get("model"))
         if detected is not None:
             budget_hard = detected
-            budget_soft = int(detected * 0.8)
             budget_source = "registry"
+        if not budget_soft_explicit:
+            if detected is not None:
+                budget_soft = int(detected * 0.8)
+            # else: soft stays at default; a live probe may size it later
 
     return Config(
         provider=merged.get("provider", "openai"),

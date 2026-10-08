@@ -313,6 +313,24 @@ class TestLoadConfigSource(unittest.TestCase):
                          (100_000, 80_000))
         self.assertEqual(cfg.budget_source, "default")
 
+    def test_hard_auto_with_soft_pinned_still_uses_registry(self):
+        cfg = self._load({"model": "gpt-5",
+                          "base_url": "https://api.openai.com/v1",
+                          "api_key_env": "OPENAI_API_KEY",
+                          "budget_soft": 50_000})
+        self.assertEqual(cfg.budget_hard, 400_000)
+        self.assertEqual(cfg.budget_soft, 50_000)
+        self.assertEqual(cfg.budget_source, "registry")
+        self.assertTrue(cfg.budget_hard_auto)
+        self.assertFalse(cfg.budget_soft_auto)
+
+    def test_distributor_aliases(self):
+        from harness.config import get_model_context_window
+        self.assertEqual(
+            get_model_context_window("meta/muse-glimmer-30b"), 128_000)
+        self.assertEqual(
+            get_model_context_window("01-ai/yi-large"), 32_768)
+
 
 class TestStartupProbe(unittest.TestCase):
     """_startup_probe: localhost-only, bounded, skips cloud/pinned."""
