@@ -331,26 +331,36 @@ def format_status(phase: str | None, elapsed_s: float,
                   width: int | None = None) -> str:
     """thinking/pruning indicator with installer-style animation.
 
-    With width: full-width TNG-style bar, no text — just animated
-    blocks in a wave across the entire line.
+    With width: full-width TNG-style bar — a single pulse breathing
+    from the center (tallest at middle, tapering to edges), no text.
     Without width: compact "▁▂▃▄▅ thinking Ns" for tests/logs.
     """
     label = "pruning" if phase == "prune" else "thinking"
-    frames = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
-              "▇", "▆", "▅", "▄", "▃", "▂"]
     if width and width > 0:
-        # Full-width wave: each position offset for moving effect
-        base = int(elapsed_s * 6)
-        bar = "".join(
-            frames[(base + i * 2) % len(frames)]
-            for i in range(width)
-        )
-        return bar
+        # Single center pulse: amplitude peaks at middle, tapers to edges.
+        # The whole bar breathes in/out with time.
+        import math
+        frames = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+        center = width / 2
+        # Pulse phase: 0..1..0 over ~2 seconds
+        pulse = (math.sin(elapsed_s * 3.0) + 1) / 2  # 0..1
+        bar_chars = []
+        for i in range(width):
+            # Distance factor: 1.0 at center, 0.0 at edges
+            dist_factor = 1.0 - abs(i - center) / center
+            # Height combines pulse with distance falloff
+            h = pulse * dist_factor
+            idx = int(h * (len(frames) - 1))
+            idx = max(0, min(len(frames) - 1, idx))
+            bar_chars.append(frames[idx])
+        return "".join(bar_chars)
     # Compact form for tests/logs
+    cyc = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
+           "▇", "▆", "▅", "▄", "▃", "▂"]
     base = int(elapsed_s * 4)
     blocks = []
     for i in range(5):
-        f = frames[(base + i * 3) % len(frames)]
+        f = cyc[(base + i * 3) % len(cyc)]
         blocks.append(f)
     anim = "".join(blocks)
     return f"{anim} {label} {max(0, int(elapsed_s))}s"
