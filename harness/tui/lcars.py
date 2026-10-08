@@ -236,12 +236,13 @@ def lcars_gauge_text(data, width: int = 40):
     data = data or {}
     if "tokens_est" not in data:
         return Text("")
-    toks, hard = data["tokens_est"], data.get("hard") or 0
-    pct = (100.0 * toks / hard) if hard else 0.0
+    toks = data["tokens_est"]
+    denom = data.get("window") or data.get("hard") or 0
+    pct = (100.0 * toks / denom) if denom else 0.0
     # Bar length proportional to fill, min 8 for legibility
     bar_len = max(8, int(width * pct / 100.0))
     bar_len = min(width, bar_len)
-    label = f" {pct:.0f}% {toks:,}/{hard:,} "
+    label = f" {pct:.0f}% {toks:,}/{denom:,} "
     # Pad label to bar length or truncate
     if len(label) > bar_len:
         label = label[:bar_len]
@@ -269,12 +270,12 @@ def lcars_stats_text(data):
     if "tokens_est" not in data:
         return Text("")
     toks = data["tokens_est"]
-    hard = data.get("hard") or 0
-    pct = (100.0 * toks / hard) if hard else 0.0
+    denom = data.get("window") or data.get("hard") or 0
+    pct = (100.0 * toks / denom) if denom else 0.0
     bd = data.get("breakdown") or {}
     ut = data.get("usage_total") or {}
     pills = [
-        (f" CTX {toks:,} / {hard:,} ({pct:.0f}%) ", LCARS["orange"]),
+        (f" CTX {toks:,} / {denom:,} ({pct:.0f}%) ", LCARS["orange"]),
         (f" SYS {bd.get('system', 0):,} ", LCARS["mauve"]),
         (f" CHAT {bd.get('transcript', 0):,} ", LCARS["periwinkle"]),
         (f" TOOLS {bd.get('tools', 0):,} ", LCARS["sky"]),

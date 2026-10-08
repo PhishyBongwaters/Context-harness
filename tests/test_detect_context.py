@@ -160,6 +160,7 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual(cfg.budget_source, "live")
         self.assertEqual(cfg.context_window, 135168)
         self.assertEqual(cfg.budget_hard, hard)
+        self.assertEqual(loop.budget.window, 135168)
 
     def test_registry_fallback_when_live_exposes_nothing(self):
         from harness import __main__ as cli
@@ -173,6 +174,7 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual(source, "registry")
         self.assertEqual(cfg.budget_source, "registry")
         self.assertEqual(cfg.context_window, 400_000)
+        self.assertEqual(loop.budget.window, 400_000)
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (hard, soft))
         self.assertEqual((loop.budget.hard, loop.budget.soft),
@@ -204,6 +206,7 @@ class TestAutosizeBudget(unittest.TestCase):
                          (hard, soft))
         self.assertEqual(cfg.budget_source, "default")
         self.assertIsNone(cfg.context_window)
+        self.assertIsNone(loop.budget.window)
 
     def test_reset_keeps_pinned_hard_soft_tracks_it(self):
         from harness import __main__ as cli

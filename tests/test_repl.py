@@ -53,6 +53,27 @@ class TestJanitorKeyEnv(unittest.TestCase):
         self.assertEqual(loop.prune_provider.api_key, "sk-ant")
 
 
+class TestBuildLoopWindow(unittest.TestCase):
+    def test_loop_budget_carries_window(self):
+        cfg = Config(provider="openai", model="m",
+                     base_url="http://127.0.0.1:8080/v1",
+                     api_key_env=None, api_key=None,
+                     budget_hard=67584, budget_soft=54067,
+                     context_window=135168)
+        loop = _build_loop(cfg, _args())
+        self.assertEqual(loop.budget.window, 135168)
+        self.assertEqual(loop.budget.denom(), 135168)
+
+    def test_loop_budget_window_defaults_none(self):
+        cfg = Config(provider="openai", model="m",
+                     base_url="http://127.0.0.1:8080/v1",
+                     api_key_env=None, api_key=None,
+                     budget_hard=50000, budget_soft=40000)
+        loop = _build_loop(cfg, _args())
+        self.assertIsNone(loop.budget.window)
+        self.assertEqual(loop.budget.denom(), 50000)
+
+
 class TestReplCommands(unittest.TestCase):
     def test_non_command(self):
         self.assertIsNone(parse_repl_command("hello world"))

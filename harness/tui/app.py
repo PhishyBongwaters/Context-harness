@@ -929,8 +929,9 @@ if _HAS:
             bar.set_request(data)
             gauge.set_request(data)
             try:
-                toks, hard = data.get("tokens_est", 0), data.get("hard") or 0
-                self._budget_pct = 100.0 * toks / hard if hard else 0.0
+                toks = data.get("tokens_est", 0)
+                denom = data.get("window") or data.get("hard") or 0
+                self._budget_pct = 100.0 * toks / denom if denom else 0.0
             except Exception:
                 pass
             status = budget_bar_status(data)

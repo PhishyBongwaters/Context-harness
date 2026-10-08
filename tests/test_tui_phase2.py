@@ -45,6 +45,26 @@ class TestBudgetBar(unittest.TestCase):
         self.assertIsNone(budget_bar_text({"phase": "x"}))
         self.assertIsNone(budget_bar_text(None))
 
+    def test_readout_prefers_window_status_stays_enforcement(self):
+        data = make_request(tokens=1180)
+        data["window"] = 135168
+        cli = format_event("request", data)
+        bar = budget_bar_text(data)
+        for text in (cli, bar):
+            self.assertIn("1,180", text)
+            self.assertIn("135,168", text)
+            self.assertNotIn("8,000", text)
+        # Status still keys off hard/soft, not the window.
+        self.assertEqual(budget_bar_status(data), "ok")
+        data["tokens_est"] = 70000
+        self.assertEqual(budget_bar_status(data), "over")
+
+    def test_readout_falls_back_to_hard_without_window(self):
+        data = make_request(tokens=1000)
+        bar = budget_bar_text(data)
+        self.assertIn("8,000", bar)
+        self.assertNotIn("None", bar)
+
     def test_status_matches_budget(self):
         hard, soft = 8000, 6000
         b = Budget(hard=hard, soft=soft)

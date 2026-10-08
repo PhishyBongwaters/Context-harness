@@ -53,6 +53,15 @@ def count_tokens(text: str) -> int:
 class Budget:
     hard: int
     soft: int
+    # Full model context window for DISPLAY (None when unknown).
+    # Enforcement (status, prune trigger, tints) always uses hard/soft;
+    # every readout shows window when known so the context is never
+    # confused with the prune trigger.
+    window: int | None = None
+
+    def denom(self) -> int:
+        """Display denominator: the window, else the hard budget."""
+        return self.window or self.hard
 
     def status(self, tokens: int) -> str:
         if tokens >= self.hard:

@@ -369,6 +369,7 @@ class Loop:
                                            bd["total"]),
                                        "hard": self.budget.hard,
                                        "soft": self.budget.soft,
+                                       "window": self.budget.window,
                                        "usage_total": (
                                            self.tracker.totals
                                            if self.tracker else None),
@@ -466,6 +467,7 @@ class Loop:
                                        "breakdown": bd,
                                        "hard": self.budget.hard,
                                        "soft": self.budget.soft,
+                                       "window": self.budget.window,
                                        "usage_total": (
                                            self.tracker.totals
                                            if self.tracker else None),

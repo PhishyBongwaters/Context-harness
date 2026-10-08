@@ -199,8 +199,9 @@ def format_event(kind: str, data) -> str | None:
         data = data or {}
         if "tokens_est" not in data:
             return None
-        toks, hard = data["tokens_est"], data.get("hard") or 0
-        pct = 100.0 * toks / hard if hard else 0
+        toks = data["tokens_est"]
+        denom = data.get("window") or data.get("hard") or 0
+        pct = 100.0 * toks / denom if denom else 0
         bd = data.get("breakdown") or {}
         parts = (f"sys {bd.get('system', 0):,} + "
                  f"chat {bd.get('transcript', 0):,} + "
@@ -208,7 +209,7 @@ def format_event(kind: str, data) -> str | None:
         ut = data.get("usage_total") or {}
         sess = (f" | sess in {ut.get('input', 0):,} "
                 f"out {ut.get('output', 0):,}") if ut else ""
-        return f"[context {toks:,} ({parts}) / {hard:,} ({pct:.0f}%){sess}]"
+        return f"[context {toks:,} ({parts}) / {denom:,} ({pct:.0f}%){sess}]"
     if kind == "response":
         data = data or {}
         content = data.get("content")
@@ -252,13 +253,14 @@ def budget_bar_text(data) -> str | None:
     data = data or {}
     if "tokens_est" not in data:
         return None
-    toks, hard = data["tokens_est"], data.get("hard") or 0
-    pct = 100.0 * toks / hard if hard else 0
+    toks = data["tokens_est"]
+    denom = data.get("window") or data.get("hard") or 0
+    pct = 100.0 * toks / denom if denom else 0
     bd = data.get("breakdown") or {}
     ut = data.get("usage_total") or {}
     sess = (f" | sess in {ut.get('input', 0):,} "
             f"out {ut.get('output', 0):,}") if ut else ""
-    return (f"ctx {toks:,} / {hard:,} ({pct:.0f}%) "
+    return (f"ctx {toks:,} / {denom:,} ({pct:.0f}%) "
             f"sys {bd.get('system', 0):,} "
             f"chat {bd.get('transcript', 0):,} "
             f"tools {bd.get('tools', 0):,}{sess}")
@@ -301,10 +303,11 @@ def gauge_line(data, status: str = "", width: int = 20) -> str:
     data = data or {}
     if "tokens_est" not in data:
         return status or ""
-    toks, hard = data["tokens_est"], data.get("hard") or 0
-    pct = (100.0 * toks / hard) if hard else 0.0
-    blocks = gauge_blocks(toks, hard, width)
-    line = f"[{blocks}] {pct:3.0f}% {toks:,}/{hard:,}"
+    toks = data["tokens_est"]
+    denom = data.get("window") or data.get("hard") or 0
+    pct = (100.0 * toks / denom) if denom else 0.0
+    blocks = gauge_blocks(toks, denom, width)
+    line = f"[{blocks}] {pct:3.0f}% {toks:,}/{denom:,}"
     if status:
         line = f"{line} · {status}"
     return line

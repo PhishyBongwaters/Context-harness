@@ -20,6 +20,11 @@ class TestBudget(unittest.TestCase):
         line = Budget(hard=1000, soft=800).meter_line(500)
         self.assertIn("500/1,000", line)
 
+    def test_denom_prefers_window(self):
+        self.assertEqual(Budget(hard=100, soft=80).denom(), 100)
+        self.assertEqual(
+            Budget(hard=100, soft=80, window=1000).denom(), 1000)
+
 
 class TestCountTokens(unittest.TestCase):
     def test_positive(self):

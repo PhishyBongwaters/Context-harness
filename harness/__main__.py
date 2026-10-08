@@ -553,7 +553,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     prune = make_provider(cfg, provider=prune_kind, model=prune_model,
                            base_url=prune_base_url, api_key=prune_key)
 
-    return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft),
+    return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft,
+                              window=getattr(cfg, "context_window", None)),
                 on_event=on_event or _print_event, prune_provider=prune,
                 approver=approver, usage_tracker=usage_tracker,
                 exec_timeout=getattr(args, "exec_timeout", None)
@@ -647,6 +648,8 @@ def _autosize_budget(cfg, loop, model: str | None,
             if applied:
                 cfg.budget_source = source
                 cfg.context_window = window
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.window = window
                 return source
             return None
         elif reset:
@@ -671,6 +674,8 @@ def _autosize_budget(cfg, loop, model: str | None,
                 # hard keeps its explicit provenance.
                 cfg.budget_source = "default"
                 cfg.context_window = None
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.window = None
     except Exception:
         pass
     return None
