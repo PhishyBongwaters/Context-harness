@@ -374,5 +374,68 @@ class TestTools(unittest.TestCase):
             self.assertIn("ERROR", r)
 
 
+class BlockingProvider:
+    """Provider stub that blocks inside chat() until released."""
+
+    name = "blocking"
+
+    def __init__(self):
+        import threading
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def chat(self, *, system, messages, tools):
+        self.calls += 1
+        self.entered.set()
+        self.release.wait(10)
+        return {"content": "hi", "tool_calls": [],
+                "usage": {"input": 0, "output": 0}}
+
+
+class TestInterrupt(unittest.TestCase):
+    def test_stop_during_blocking_call_aborts_without_storing(self):
+        import threading
+        events = []
+        prov = BlockingProvider()
+        loop = Loop(prov, Budget(100000, 80000),
+                    on_event=lambda k, v: events.append(k))
+        s = make_session()
+        out = []
+        t = threading.Thread(
+            target=lambda: out.append(loop.run_turn(s, "hi")))
+        t.start()
+        self.assertTrue(prov.entered.wait(5))
+        loop.request_stop()
+        prov.release.set()
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        # Aborted, not stored: no assistant reply, interrupted emitted.
+        self.assertEqual(out, [""])
+        self.assertIn("interrupted", events)
+        self.assertNotIn("assistant", events)
+
+    def test_completed_turn_consumes_stop_flag(self):
+        import threading
+        prov = BlockingProvider()
+        loop = Loop(prov, Budget(100000, 80000),
+                    on_event=lambda k, v: None)
+        s = make_session()
+        out = []
+        t = threading.Thread(
+            target=lambda: out.append(loop.run_turn(s, "hi")))
+        t.start()
+        self.assertTrue(prov.entered.wait(5))
+        loop.request_stop()
+        prov.release.set()
+        t.join(5)
+        # Interrupted turn cleared the flag: the next turn runs clean.
+        self.assertFalse(loop._stop_event.is_set())
+        prov2 = BlockingProvider()
+        prov2.release.set()
+        loop.provider = prov2
+        self.assertEqual(loop.run_turn(s, "again"), "hi")
+
+
 if __name__ == "__main__":
     unittest.main()

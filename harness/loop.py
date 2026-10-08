@@ -179,8 +179,9 @@ class Loop:
 
         Cooperative: a turn blocked inside a model call or tool
         execution finishes that call first (bounded by the request /
-        exec timeouts). If no turn is running, the flag stays set and
-        the next turn aborts immediately instead.
+        exec timeouts), then aborts before storing or acting on the
+        result. A completed turn always consumes the flag, so a stop
+        can never leak into and kill the next turn.
         """
         self._stop_event.set()
 
@@ -380,6 +381,9 @@ class Loop:
                 resp = self.prune_provider.chat(
                     system=system, messages=turn + self._note(bd),
                     tools=self._prune_tools)
+                # Same as main path: a stop requested mid-generation
+                # takes effect before anything is stored or executed.
+                self._check_stop()
                 totals = self._track("prune", attempt, bd,
                                      resp.get("usage"))
                 self._emit("response", {"phase": "prune",
@@ -478,6 +482,11 @@ class Loop:
                 resp = self.provider.chat(system=system,
                                           messages=messages + self._note(bd),
                                           tools=self._tools)
+                # The call above blocks (up to request_timeout): a stop
+                # requested mid-generation must take effect here, before
+                # the reply is stored or acted on — otherwise an Escape
+                # during a tool-less reply is silently swallowed.
+                self._check_stop()
                 totals = self._track("main", step, bd, resp.get("usage"))
                 self._emit("response", {"phase": "main",
                                         "content": resp.get("content"),
@@ -503,6 +512,10 @@ class Loop:
                 if content:
                     self._emit("assistant", content)
                 if not tool_calls:
+                    # Normal completion consumes any pending stop (e.g. one
+                    # that arrived after the last check): it must never
+                    # leak into and kill the next turn.
+                    self._stop_event.clear()
                     return content or ""
                 for tc in tool_calls:
                     self._check_stop()
