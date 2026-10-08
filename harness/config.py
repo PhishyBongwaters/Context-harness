@@ -12,10 +12,10 @@ Example config.json:
   "model": "claude-opus-4-1-20250822",
   "base_url": null,
   "api_key_env": "ANTHROPIC_API_KEY",
-  "budget_hard": 100000,
-  "budget_soft": 80000,
   "sessions_dir": null
 }
+(budget_hard/budget_soft omitted -> live-detected from the server;
+add explicit numbers only to pin a budget and skip detection.)
 
 Example .env:
 OPENAI_API_KEY=sk-...
@@ -643,7 +643,13 @@ def save_current_provider(cfg, name: str,
 
 
 def write_example_config(path: str | Path | None = None) -> Path:
-    """Write an annotated example config (no secrets). Returns the path."""
+    """Write an annotated example config (no secrets). Returns the path.
+
+    budget_hard/budget_soft are deliberately OMITTED: absent keys mean
+    auto-detect (live server value, else the built-in default). Writing
+    explicit numbers here would fossilize the defaults and permanently
+    disable auto-detection for the user.
+    """
     target = Path(path) if path else config_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     example = {
@@ -651,8 +657,6 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "model": "gpt-5",
         "base_url": None,
         "api_key_env": "OPENAI_API_KEY",
-        "budget_hard": 100000,
-        "budget_soft": 80000,
         "sessions_dir": None,
         "prune_provider": None,
         "prune_model": None,
@@ -678,7 +682,12 @@ def write_example_config(path: str | Path | None = None) -> Path:
             "prompt waits (seconds); exec_timeout/max bound tool runtime. "
             "providers maps a name to {kind, base_url, model, api_key_env} "
             "(api_key_env null = local, no key); provider names a registry "
-            "entry when it matches, else a kind (openai/anthropic/nvidia)."
+            "entry when it matches, else a kind (openai/anthropic/nvidia). "
+            "budget_hard/budget_soft are omitted on purpose: the harness "
+            "live-detects the model's context window (llama.cpp, vLLM, "
+            "LM Studio, Ollama, Anthropic) and only falls back to the "
+            "built-in default where the API exposes nothing — add explicit "
+            "numbers only to pin a budget and skip detection."
         ),
     }
     target.write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")
