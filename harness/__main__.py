@@ -22,7 +22,7 @@ from .config import (DEFAULTS, PROVIDER_DEFAULTS, Config, config_path,
                      load_config, detect_context_window,
                      probe_provider, resolve_provider,
                      save_current_provider, set_active_provider,
-                     write_example_config)
+                     split_budgets, write_example_config)
 from .context import Budget
 from .loop import BudgetExceeded, Loop, Session
 from .providers import ProviderError, make_provider
@@ -622,13 +622,15 @@ def _autosize_budget(cfg, loop, model: str | None,
         if window:
             applied = False
             if getattr(cfg, "budget_hard_auto", True):
-                cfg.budget_hard = window
+                cfg.budget_hard, auto_soft = split_budgets(window)
                 if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.hard = window
+                    loop.budget.hard = cfg.budget_hard
                 applied = True
+            else:
+                auto_soft = None
             if getattr(cfg, "budget_soft_auto", True):
                 if getattr(cfg, "budget_hard_auto", True):
-                    new_soft = int(window * 0.8)
+                    new_soft = auto_soft
                 else:
                     # Hard is user-pinned: keep soft at 80% of hard.
                     new_soft = int(cfg.budget_hard * 0.8)
@@ -645,46 +647,54 @@ def _autosize_budget(cfg, loop, model: str | None,
             # model's window never sticks around enforcing the wrong
             # limit. Pinned budgets are untouched.
             if getattr(cfg, "budget_hard_auto", True):
-                cfg.budget_hard = DEFAULTS["budget_hard"]
+                cfg.budget_hard, auto_soft = split_budgets(
+                    DEFAULTS["budget_hard"])
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.hard = cfg.budget_hard
             if getattr(cfg, "budget_soft_auto", True):
-                cfg.budget_soft = int(cfg.budget_hard * 0.8)
+                if getattr(cfg, "budget_hard_auto", True):
+                    new_soft = auto_soft
+                else:
+                    new_soft = int(cfg.budget_hard * 0.8)
+                cfg.budget_soft = new_soft
                 if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.soft = cfg.budget_soft
-            if (getattr(cfg, "budget_hard_auto", True)
-                    or getattr(cfg, "budget_soft_auto", True)):
+                    loop.budget.soft = new_soft
+            if getattr(cfg, "budget_hard_auto", True):
+                # Only relabel when hard itself fell back; a pinned
+                # hard keeps its explicit provenance.
                 cfg.budget_source = "default"
     except Exception:
         pass
     return None
 
 
-def _budget_change_lines(cfg, old: tuple, model: str | None,
-                         source: str | None = None) -> list[str]:
-    """Honest one-liners describing a budget change (or lack of one).
-
-    Live values get a live line; registry fallbacks get a labeled
-    fallback line (never pose a guess as detected); auto budgets sitting
-    on the built-in defaults get an undetected line; unchanged live
-    values get nothing. Pinned budgets stay silent.
+def _budget_change_lines(cfg, old, model):
+    """Honest one-liners from cfg.budget_source (kept accurate by every
+    budget writer): live values get a live line, registry fallbacks get
+    a labeled fallback line, undetected budgets say so. Unchanged values
+    and pinned budgets stay silent.
     """
     new = (cfg.budget_hard, cfg.budget_soft)
     auto = (getattr(cfg, "budget_hard_auto", True)
             or getattr(cfg, "budget_soft_auto", True))
     if not auto:
         return []
-    if source == "registry" and new != old:
-        return [f"[budget] registry fallback for model={model} (API "
-                f"exposes no window): "
-                f"hard={cfg.budget_hard:,} soft={cfg.budget_soft:,}"]
-    if (new == (DEFAULTS["budget_hard"], DEFAULTS["budget_soft"])):
+    src = getattr(cfg, "budget_source", "default")
+    if new != old:
+        if src == "registry":
+            return [f"[budget] registry fallback for model={model} (API "
+                    f"exposes no window): "
+                    f"hard={cfg.budget_hard:,} soft={cfg.budget_soft:,}"]
+        if src == "live":
+            return [f"[budget] live window for model={model}: "
+                    f"hard={cfg.budget_hard:,} soft={cfg.budget_soft:,}"]
         return [f"[budget] no live window for model={model} "
                 f"(using unconfigured default; set budget_hard "
                 f"explicitly)"]
-    if new != old:
-        return [f"[budget] live window for model={model}: "
-                f"hard={cfg.budget_hard:,} soft={cfg.budget_soft:,}"]
+    if src == "default":
+        return [f"[budget] no live window for model={model} "
+                f"(using unconfigured default; set budget_hard "
+                f"explicitly)"]
     return []
 
 
@@ -1095,10 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.model = model
             except Exception:
                 pass
-            lines = _budget_change_lines(
-                cfg, old, model,
-                cfg.budget_source
-                if cfg.budget_source in ("live", "registry") else None)
+            lines = _budget_change_lines(cfg, old, model)
             lines.append(_tui_header())
             return lines
 
@@ -1114,10 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
                 return []
             old = (cfg.budget_hard, cfg.budget_soft)
             _autosize_budget(cfg, box["loop"], cfg.model)
-            lines = _budget_change_lines(
-                cfg, old, cfg.model,
-                cfg.budget_source
-                if cfg.budget_source in ("live", "registry") else None)
+            lines = _budget_change_lines(cfg, old, cfg.model)
             if (cfg.budget_hard, cfg.budget_soft) != old:
                 lines.append(_tui_header())
             return lines

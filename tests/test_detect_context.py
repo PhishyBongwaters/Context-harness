@@ -120,15 +120,18 @@ class TestAutosizeBudget(unittest.TestCase):
 
     def test_applies_live_window(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop()
+        hard, soft = split_budgets(131072)
         with patch.object(cli, "detect_context_window",
                           return_value=131072) as det:
-            cli._autosize_budget(cfg, loop, "m")
+            source = cli._autosize_budget(cfg, loop, "m")
         det.assert_called_once()
-        self.assertEqual(cfg.budget_hard, 131072)
-        self.assertEqual(cfg.budget_soft, int(131072 * 0.8))
-        self.assertEqual(loop.budget.hard, 131072)
-        self.assertEqual(loop.budget.soft, int(131072 * 0.8))
+        self.assertEqual(source, "live")
+        self.assertEqual(cfg.budget_hard, hard)
+        self.assertEqual(cfg.budget_soft, soft)
+        self.assertEqual(loop.budget.hard, hard)
+        self.assertEqual(loop.budget.soft, soft)
 
     def test_pinned_hard_keeps_value_soft_tracks_hard(self):
         from harness import __main__ as cli
@@ -145,29 +148,33 @@ class TestAutosizeBudget(unittest.TestCase):
     def test_live_beats_registry(self):
         # gpt-5 is in the registry (400k) but a live value must win.
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop()
         cfg.model = "gpt-5"
+        hard, _ = split_budgets(135168)
         with patch.object(cli, "detect_context_window",
                           return_value=135168) as det:
             source = cli._autosize_budget(cfg, loop, "gpt-5")
         det.assert_called_once()
         self.assertEqual(source, "live")
         self.assertEqual(cfg.budget_source, "live")
-        self.assertEqual(cfg.budget_hard, 135168)
+        self.assertEqual(cfg.budget_hard, hard)
 
     def test_registry_fallback_when_live_exposes_nothing(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop()
         cfg.model = "gpt-5"
+        hard, soft = split_budgets(400_000)
         with patch.object(cli, "detect_context_window",
                           return_value=None):
             source = cli._autosize_budget(cfg, loop, "gpt-5")
         self.assertEqual(source, "registry")
         self.assertEqual(cfg.budget_source, "registry")
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (400_000, 320_000))
+                         (hard, soft))
         self.assertEqual((loop.budget.hard, loop.budget.soft),
-                         (400_000, 320_000))
+                         (hard, soft))
 
     def test_none_no_reset_by_default(self):
         from harness import __main__ as cli
@@ -181,15 +188,18 @@ class TestAutosizeBudget(unittest.TestCase):
 
     def test_none_with_reset_falls_back_to_defaults(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop(budget_hard=135168,
                                    budget_soft=int(135168 * 0.8))
+        hard, soft = split_budgets(100_000)
         with patch.object(cli, "detect_context_window",
                           return_value=None):
             cli._autosize_budget(cfg, loop, "cloud-model", reset=True)
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (100_000, 80_000))
+                         (hard, soft))
         self.assertEqual((loop.budget.hard, loop.budget.soft),
-                         (100_000, 80_000))
+                         (hard, soft))
+        self.assertEqual(cfg.budget_source, "default")
 
     def test_reset_keeps_pinned_hard_soft_tracks_it(self):
         from harness import __main__ as cli
@@ -204,45 +214,46 @@ class TestAutosizeBudget(unittest.TestCase):
 
     def test_passes_kind_for_anthropic(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop(
             provider="anthropic", model="claude-x",
             base_url="https://api.anthropic.com/v1",
             api_key_env="ANTHROPIC_API_KEY")
+        hard, _ = split_budgets(200_000)
         with patch.object(cli, "detect_context_window",
                           return_value=200_000) as det:
             cli._autosize_budget(cfg, loop, "claude-x")
         _, kwargs = det.call_args
         self.assertEqual(kwargs.get("kind"), "anthropic")
-        self.assertEqual(cfg.budget_hard, 200_000)
+        self.assertEqual(cfg.budget_hard, hard)
 
 
 class TestBudgetChangeLines(unittest.TestCase):
-    def _cfg(self, hard, soft, auto=True):
+    def _cfg(self, hard, soft, auto=True, source="default"):
         from harness.config import Config
         return Config(provider="openai", model="m",
                       base_url="http://localhost:8080/v1",
                       api_key_env="OPENAI_API_KEY",
                       budget_hard=hard, budget_soft=soft,
-                      budget_hard_auto=auto, budget_soft_auto=auto)
+                      budget_hard_auto=auto, budget_soft_auto=auto,
+                      budget_source=source)
 
     def test_live_change(self):
         from harness import __main__ as cli
-        cfg = self._cfg(135168, int(135168 * 0.8))
-        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m",
-                                         source="live")
+        cfg = self._cfg(126976, 101580, source="live")
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m")
         self.assertEqual(len(lines), 1)
-        self.assertIn("135,168", lines[0])
+        self.assertIn("126,976", lines[0])
         self.assertNotIn("no live window", lines[0])
         self.assertNotIn("registry", lines[0])
 
     def test_registry_change_is_labeled_fallback(self):
         from harness import __main__ as cli
-        cfg = self._cfg(400_000, 320_000)
-        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "gpt-5",
-                                         source="registry")
+        cfg = self._cfg(391808, 313446, source="registry")
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "gpt-5")
         self.assertEqual(len(lines), 1)
         self.assertIn("registry fallback", lines[0])
-        self.assertIn("400,000", lines[0])
+        self.assertIn("391,808", lines[0])
 
     def test_reset_to_default_reports_undetected(self):
         from harness import __main__ as cli
@@ -254,10 +265,10 @@ class TestBudgetChangeLines(unittest.TestCase):
 
     def test_unchanged_live_is_silent(self):
         from harness import __main__ as cli
-        cfg = self._cfg(135168, int(135168 * 0.8))
+        cfg = self._cfg(126976, 101580, source="live")
         self.assertEqual(
             cli._budget_change_lines(
-                cfg, (135168, int(135168 * 0.8)), "m"), [])
+                cfg, (126976, 101580), "m"), [])
 
     def test_unchanged_defaults_reports_undetected(self):
         from harness import __main__ as cli
@@ -288,11 +299,13 @@ class TestLoadConfigSource(unittest.TestCase):
         return load_config(path=tmp / "config.json")
 
     def test_registry_source(self):
+        from harness.config import split_budgets
+        hard, soft = split_budgets(400_000)
         cfg = self._load({"model": "gpt-5",
                           "base_url": "https://api.openai.com/v1",
                           "api_key_env": "OPENAI_API_KEY"})
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (400_000, 320_000))
+                         (hard, soft))
         self.assertEqual(cfg.budget_source, "registry")
         self.assertTrue(cfg.budget_hard_auto)
 
@@ -306,19 +319,23 @@ class TestLoadConfigSource(unittest.TestCase):
         self.assertFalse(cfg.budget_hard_auto)
 
     def test_unknown_model_default_source(self):
+        from harness.config import split_budgets
+        hard, soft = split_budgets(100_000)
         cfg = self._load({"model": "some-future-model-99",
                           "base_url": "https://api.openai.com/v1",
                           "api_key_env": "OPENAI_API_KEY"})
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (100_000, 80_000))
+                         (hard, soft))
         self.assertEqual(cfg.budget_source, "default")
 
     def test_hard_auto_with_soft_pinned_still_uses_registry(self):
+        from harness.config import split_budgets
+        hard, _ = split_budgets(400_000)
         cfg = self._load({"model": "gpt-5",
                           "base_url": "https://api.openai.com/v1",
                           "api_key_env": "OPENAI_API_KEY",
                           "budget_soft": 50_000})
-        self.assertEqual(cfg.budget_hard, 400_000)
+        self.assertEqual(cfg.budget_hard, hard)
         self.assertEqual(cfg.budget_soft, 50_000)
         self.assertEqual(cfg.budget_source, "registry")
         self.assertTrue(cfg.budget_hard_auto)
@@ -349,16 +366,18 @@ class TestStartupProbe(unittest.TestCase):
 
     def test_local_applies_live_window(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         from harness.context import Budget
         cfg = self._cfg()
         loop = {"budget": Budget(cfg.budget_hard, cfg.budget_soft)}
         loop = type("L", (), loop)()
+        hard, soft = split_budgets(135168)
         with patch.object(cli, "detect_context_window",
                           return_value=135168) as det:
             changed = cli._startup_probe(cfg, loop)
         self.assertTrue(changed)
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (135168, int(135168 * 0.8)))
+                         (hard, soft))
         _, kwargs = det.call_args
         self.assertEqual(kwargs.get("timeout"), 2)
 

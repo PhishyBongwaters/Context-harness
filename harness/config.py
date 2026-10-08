@@ -126,6 +126,25 @@ def get_model_context_window(model: str) -> int | None:
     return None
 
 
+# Headroom so the prune request itself fits: at hard == window the prune
+# call (whole file + prune prompt + tool schemas + output margin) would
+# overflow. Flat cap because prune overhead is absolute (~2k in, a few k
+# out), not proportional — but never more than a quarter of tiny windows.
+PRUNE_RESERVE_TOKENS = 8_192
+
+
+def split_budgets(window: int) -> tuple[int, int]:
+    """Enforcement (hard, soft) budgets from a model context window.
+
+    hard leaves reserve headroom so a prune-only turn fits inside the
+    window; soft stays at 80% of hard. Applies to every auto budget
+    (live, registry, or default pseudo-window) — never to explicit pins.
+    """
+    reserve = min(PRUNE_RESERVE_TOKENS, window // 4)
+    hard = window - reserve
+    return hard, int(hard * 0.8)
+
+
 def detect_context_window(base_url: str | None, model: str | None,
                           api_key: str | None = None,
                           timeout: int = 10,
@@ -509,14 +528,16 @@ def load_config(path: str | Path | None = None,
         if not budget_soft_explicit:
             budget_soft = int(budget_hard * 0.8)
     else:
-        # Hard is auto: registry sizes it even when soft is pinned.
-        detected = get_model_context_window(merged.get("model"))
-        if detected is not None:
-            budget_hard = detected
+        # Hard is auto: size from registry (or default pseudo-window),
+        # always through split_budgets so the prune turn fits.
+        window = get_model_context_window(merged.get("model"))
+        if window is None:
+            window = int(merged.get("budget_hard", 100_000))
+        else:
             budget_source = "registry"
+        budget_hard, auto_soft = split_budgets(window)
         if not budget_soft_explicit:
-            if detected is not None:
-                budget_soft = int(detected * 0.8)
+            budget_soft = auto_soft
             # else: soft stays at default; a live probe may size it later
 
     return Config(

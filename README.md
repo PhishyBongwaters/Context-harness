@@ -11,6 +11,8 @@ special compact tool.
 
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
+Hard sits below the model's context window with ~8k tokens of headroom
+so the prune request itself still fits; soft warns at 80% of hard.
 Pruning fails repeatedly → loud error, never silent truncation. Every
 prune turn and any model edit of `context.md` backs up the file first
 (`context.pre-prune-<ts>.bak` / `context.pre-edit-<ts>.bak`), so all
@@ -102,6 +104,14 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `prune_section_cap`. API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
+
+Budgets auto-size and report their source. Omit `budget_hard` /
+`budget_soft` for auto: a live server value (`[live]` — llama.cpp,
+vLLM, LM Studio, Ollama, Anthropic), a published-registry fallback
+(`[registry]`, only where the API exposes no window), or the built-in
+default (`[default]`). Set explicit numbers to pin values (`[explicit]`)
+and skip detection. The session header shows the provenance, e.g.
+`budget=135,168 [live]`.
 
 CLI `--provider` accepts a registry name or a kind
 (`openai`/`anthropic`/`nvidia`); registry first, legacy kind fallback.
