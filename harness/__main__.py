@@ -999,11 +999,36 @@ def main(argv: list[str] | None = None) -> int:
                 pass
             return [_tui_header()]
 
+        def _tui_detect_budget() -> list[str]:
+            """Live-detect the initial model's window (TUI worker thread).
+
+            Startup never blocks on the network: the TUI fires this in
+            a background thread on mount. Skipped when both budgets are
+            user-pinned (nothing to detect). Reports what the server
+            actually returned — or that nothing was exposed, so the
+            header never quietly poses a default as detected.
+            """
+            if (not getattr(cfg, "budget_hard_auto", True)
+                    and not getattr(cfg, "budget_soft_auto", True)):
+                return []
+            old = (cfg.budget_hard, cfg.budget_soft)
+            _autosize_budget(cfg, box["loop"], cfg.model)
+            if (cfg.budget_hard, cfg.budget_soft) != old:
+                return [f"[budget] live window for model={cfg.model}: "
+                        f"hard={cfg.budget_hard:,} "
+                        f"soft={cfg.budget_soft:,}",
+                        _tui_header()]
+            return [f"[budget] no live window for model={cfg.model} "
+                    f"(budget={cfg.budget_hard:,}/{cfg.budget_soft:,} "
+                    f"is the unconfigured default; set budget_hard "
+                    f"explicitly)"]
+
         control = SimpleNamespace(
             do_new=_tui_new,
             do_open=_tui_open,
             do_project=_tui_project,
             do_retarget=_tui_retarget,
+            do_detect_budget=_tui_detect_budget,
             list_lines=lambda: sessions_lines(cfg),
             sessions_info=lambda: sessions_info(cfg),
             usage_lines=lambda rest: usage_lines(box.get("tracker"), rest),

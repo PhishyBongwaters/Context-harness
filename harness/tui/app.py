@@ -801,9 +801,37 @@ if _HAS:
             await self._apply_chrome(self.theme == "lcars")
             if self._session_header:
                 self._syslog(self._session_header)
+            self._detect_budget_on_mount()
             self._focus_input()
             if self._initial:
                 self._submit(self._initial)
+
+        def _detect_budget_on_mount(self) -> None:
+            """Probe the live context window without blocking startup.
+
+            Older controls lack the hook (or pin both budgets, in which
+            case the hook returns no lines): either way this is a no-op.
+            """
+            fn = (getattr(self._control, "do_detect_budget", None)
+                  if self._control is not None else None)
+            if not callable(fn):
+                return
+            threading.Thread(target=self._detect_budget, daemon=True,
+                             name="tui-budget-detect").start()
+
+        def _detect_budget(self) -> None:
+            try:
+                fn = getattr(self._control, "do_detect_budget", None)
+                lines = fn() if callable(fn) else []
+            except Exception:
+                return
+            if not lines:
+                return
+            try:
+                self.call_from_thread(self._syslog_lines,
+                                      [str(l) for l in lines])
+            except Exception:
+                pass
 
         def _focus_input(self) -> None:
             """Pin focus to the input box (main screen only).

@@ -99,5 +99,71 @@ class TestDetectContextWindow(unittest.TestCase):
                 self.assertNotIn("/v1/v1", u)
 
 
+class TestAutosizeBudget(unittest.TestCase):
+    """_autosize_budget applies live values only, honors pinned budgets."""
+
+    def _cfg_loop(self, **kw):
+        from types import SimpleNamespace
+        from harness.config import Config
+        from harness.context import Budget
+        cfg = Config(provider=kw.get("provider", "openai"),
+                     model=kw.get("model", "m"),
+                     base_url=kw.get("base_url", "http://localhost:8080/v1"),
+                     api_key_env=kw.get("api_key_env", "OPENAI_API_KEY"),
+                     budget_hard=kw.get("budget_hard", 100_000),
+                     budget_soft=kw.get("budget_soft", 80_000),
+                     budget_hard_auto=kw.get("budget_hard_auto", True),
+                     budget_soft_auto=kw.get("budget_soft_auto", True))
+        loop = SimpleNamespace(budget=Budget(cfg.budget_hard,
+                                             cfg.budget_soft))
+        return cfg, loop
+
+    def test_applies_live_window(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop()
+        with patch.object(cli, "detect_context_window",
+                          return_value=131072) as det:
+            cli._autosize_budget(cfg, loop, "m")
+        det.assert_called_once()
+        self.assertEqual(cfg.budget_hard, 131072)
+        self.assertEqual(cfg.budget_soft, int(131072 * 0.8))
+        self.assertEqual(loop.budget.hard, 131072)
+        self.assertEqual(loop.budget.soft, int(131072 * 0.8))
+
+    def test_pinned_hard_keeps_value_soft_tracks_hard(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop(budget_hard=50_000,
+                                   budget_hard_auto=False)
+        with patch.object(cli, "detect_context_window",
+                          return_value=131072):
+            cli._autosize_budget(cfg, loop, "m")
+        self.assertEqual(cfg.budget_hard, 50_000)
+        self.assertEqual(cfg.budget_soft, int(50_000 * 0.8))
+        self.assertEqual(loop.budget.hard, 50_000)  # untouched
+        self.assertEqual(loop.budget.soft, int(50_000 * 0.8))
+
+    def test_none_keeps_defaults(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop()
+        with patch.object(cli, "detect_context_window",
+                          return_value=None):
+            cli._autosize_budget(cfg, loop, "gpt-5")
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (100_000, 80_000))
+
+    def test_passes_kind_for_anthropic(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop(
+            provider="anthropic", model="claude-x",
+            base_url="https://api.anthropic.com/v1",
+            api_key_env="ANTHROPIC_API_KEY")
+        with patch.object(cli, "detect_context_window",
+                          return_value=200_000) as det:
+            cli._autosize_budget(cfg, loop, "claude-x")
+        _, kwargs = det.call_args
+        self.assertEqual(kwargs.get("kind"), "anthropic")
+        self.assertEqual(cfg.budget_hard, 200_000)
+
+
 if __name__ == "__main__":
     unittest.main()
