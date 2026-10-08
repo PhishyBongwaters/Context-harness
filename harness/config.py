@@ -162,18 +162,31 @@ def detect_context_window(base_url: str | None, model: str | None,
             n_ctx = meta.get("n_ctx")
             if n_ctx:
                 return int(n_ctx)
-            # Some servers use max_model_len
+            # Some servers use max_model_len (legacy/ik_llama.cpp)
             mml = target.get("max_model_len") or meta.get("max_model_len")
             if mml:
                 return int(mml)
+            # OpenAI-compatible servers (LM Studio, etc.) may expose
+            # context_length / max_context_length at top level
+            # (prior art: opencode feature request for dynamic detection)
+            for key in ("context_length", "max_context_length",
+                        "native_context_length"):
+                cl = target.get(key)
+                if cl:
+                    return int(cl)
     except Exception:
         pass
-    # 2. Fallback to /props for n_ctx (llama.cpp)
+    # 2. Fallback to /props for n_ctx (llama.cpp).
+    # Prior art (maverobot/qwen36-mtp opencode workaround): /props may nest
+    # it under default_generation_settings.n_ctx, not top-level n_ctx.
     try:
         r = _req.Request(f"{base}/props", headers=headers)
         with _req.urlopen(r, timeout=timeout) as resp:
             data = _json.loads(resp.read().decode("utf-8", "replace"))
         n_ctx = data.get("n_ctx")
+        if not n_ctx:
+            dgs = data.get("default_generation_settings") or {}
+            n_ctx = dgs.get("n_ctx")
         if n_ctx:
             return int(n_ctx)
     except Exception:
