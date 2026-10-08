@@ -265,11 +265,31 @@ def budget_bar_text(data) -> str | None:
 
 
 def gauge_blocks(tokens: int, hard: int, width: int = 20) -> str:
-    """Filled/empty block gauge string for tokens of hard."""
+    """Filled/empty block gauge with smooth gradient.
+
+    Uses ▓▒░ for partial fill to give a smoother look than binary █/░.
+    """
     if hard <= 0:
         return "░" * width
-    filled = max(0, min(width, round(width * tokens / hard)))
-    return "█" * filled + "░" * (width - filled)
+    pct = max(0.0, min(1.0, tokens / hard))
+    filled = pct * width
+    full = int(filled)
+    partial = filled - full
+    # Partial block characters for smooth transition
+    if partial >= 0.75:
+        part_char = "▓"
+    elif partial >= 0.5:
+        part_char = "▒"
+    elif partial >= 0.25:
+        part_char = "░"
+    else:
+        part_char = ""
+    bar = "█" * full
+    if part_char and full < width:
+        bar += part_char
+        full += 1
+    bar += "░" * (width - full)
+    return bar[:width]
 
 
 def gauge_line(data, status: str = "", width: int = 20) -> str:
@@ -308,9 +328,21 @@ def budget_bar_status(data) -> str:
 
 
 def format_status(phase: str | None, elapsed_s: float) -> str:
-    """thinking/pruning Ns elapsed; replaces Spinner in TUI mode."""
+    """thinking/pruning Ns elapsed with installer-style animation.
+
+    Uses growing block characters (▁▂▃▄▅▆▇█) cycling like the old
+    Windows installer — a clear "working" indicator.
+    """
     label = "pruning" if phase == "prune" else "thinking"
-    return f"{label} {max(0, int(elapsed_s))}s"
+    # Installer blocks: grow then shrink, 8 frames, 4 fps
+    frames = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
+              "▇", "▆", "▅", "▄", "▃", "▂"]
+    frame = frames[int(elapsed_s * 4) % len(frames)]
+    # Three blocks in sequence, offset for wave effect
+    f2 = frames[(int(elapsed_s * 4) + 4) % len(frames)]
+    f3 = frames[(int(elapsed_s * 4) + 8) % len(frames)]
+    anim = f"{frame}{f2}{f3}"
+    return f"{anim} {label} {max(0, int(elapsed_s))}s"
 
 
 # --- dedupe (moved from bridge.py, verbatim) ---
