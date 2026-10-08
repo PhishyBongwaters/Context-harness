@@ -48,6 +48,9 @@ DEFAULTS = {
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
     # many minutes on big models)
+    "prune_request_timeout": None,  # HTTP seconds per PRUNE call (null ->
+    # 3x request_timeout: prune prompts carry the whole file, so the
+    # janitor needs longer than a normal turn on slow servers)
     "prune_target": None,  # deterministic stages aim here (null -> soft)
     "prune_keep_tools": 5,  # newest tool sections exempt from eviction
     "prune_section_cap": 8000,  # per-section token cap (head+tail kept)
@@ -405,6 +408,7 @@ class Config:
     exec_timeout_max: int = 300
     usage_note: bool = True
     request_timeout: int = 120
+    prune_request_timeout: int | None = None
     prune_target: int | None = None
     prune_keep_tools: int = 5
     prune_section_cap: int = 8000
@@ -565,6 +569,9 @@ def load_config(path: str | Path | None = None,
         exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
         usage_note=bool(merged.get("usage_note", True)),
         request_timeout=int(merged.get("request_timeout", 120)),
+        prune_request_timeout=(int(merged["prune_request_timeout"])
+                               if merged.get("prune_request_timeout")
+                               else None),
         prune_target=(int(merged["prune_target"])
                       if merged.get("prune_target") else None),
         prune_keep_tools=int(merged.get("prune_keep_tools", 5)),
@@ -775,6 +782,7 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "exec_timeout_max": 300,
         "usage_note": True,
         "request_timeout": 120,
+        "prune_request_timeout": None,
         "prune_target": None,
         "prune_keep_tools": 5,
         "prune_section_cap": 8000,
@@ -788,6 +796,9 @@ def write_example_config(path: str | Path | None = None) -> Path:
             "(e.g. a small local model); each falls back to the main "
             "setting when null. approval_timeout is how long an approval "
             "prompt waits (seconds); exec_timeout/max bound tool runtime. "
+            "request_timeout bounds normal model calls; "
+            "prune_request_timeout bounds prune calls (null = 3x "
+            "request_timeout, since prune prompts carry the whole file). "
             "providers maps a name to {kind, base_url, model, api_key_env} "
             "(api_key_env null = local, no key); provider names a registry "
             "entry when it matches, else a kind (openai/anthropic/nvidia). "

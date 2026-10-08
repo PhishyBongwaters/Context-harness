@@ -74,6 +74,38 @@ class TestBuildLoopWindow(unittest.TestCase):
         self.assertEqual(loop.budget.denom(), 50000)
 
 
+class TestPruneTimeout(unittest.TestCase):
+    def _cfg(self, **kw):
+        base = dict(provider="openai", model="m",
+                    base_url="http://127.0.0.1:8080/v1",
+                    api_key_env=None, api_key=None,
+                    budget_hard=50000, budget_soft=40000,
+                    request_timeout=120, prune_request_timeout=None)
+        base.update(kw)
+        return Config(**base)
+
+    def test_default_is_3x_request_timeout(self):
+        from harness import __main__ as cli
+        self.assertEqual(cli._prune_timeout(self._cfg()), 360)
+
+    def test_explicit_wins(self):
+        from harness import __main__ as cli
+        self.assertEqual(
+            cli._prune_timeout(self._cfg(prune_request_timeout=600)),
+            600)
+
+    def test_build_loop_prune_provider_uses_prune_timeout(self):
+        loop = _build_loop(self._cfg(), _args())
+        self.assertEqual(loop.provider.timeout, 120)
+        self.assertEqual(loop.prune_provider.timeout, 360)
+
+    def test_make_provider_timeout_override(self):
+        from harness.providers import make_provider
+        cfg = self._cfg()
+        self.assertEqual(make_provider(cfg).timeout, 120)
+        self.assertEqual(make_provider(cfg, timeout=45).timeout, 45)
+
+
 class TestReplCommands(unittest.TestCase):
     def test_non_command(self):
         self.assertIsNone(parse_repl_command("hello world"))

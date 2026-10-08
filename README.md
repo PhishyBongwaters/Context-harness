@@ -278,6 +278,7 @@ Tunable (config file, CLI flag wins):
 | `exec_timeout` | 60s | `--exec-timeout` |
 | `exec_timeout_max` | 300s | `--exec-timeout-max` |
 | `request_timeout` | 120s | `--request-timeout` (raise for ~100k prompts on slow local servers — prefill can take many minutes) |
+| `prune_request_timeout` | 3× `request_timeout` | (config only; prune prompts carry the whole file, so the janitor gets longer — raise both for huge files on slow servers) |
 
 Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`, `--tui`, `--no-mouse`.
 

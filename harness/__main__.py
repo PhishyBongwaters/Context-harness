@@ -481,6 +481,14 @@ def _resolved_kind(cfg) -> str:
     return resolve_provider(cfg).kind
 
 
+def _prune_timeout(cfg) -> int:
+    """HTTP timeout for prune-only calls: explicit prune setting, else
+    3x the normal request timeout (prune prompts carry the whole file)."""
+    if getattr(cfg, "prune_request_timeout", None):
+        return int(cfg.prune_request_timeout)
+    return 3 * int(getattr(cfg, "request_timeout", 120))
+
+
 def _prune_settings(cfg) -> tuple:
     """(kind, model, base_url, key_env, key) for the janitor model.
 
@@ -551,7 +559,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     _require_key(prune_kind, prune_base_url, prune_key, prune_key_env,
                  "prune")
     prune = make_provider(cfg, provider=prune_kind, model=prune_model,
-                           base_url=prune_base_url, api_key=prune_key)
+                           base_url=prune_base_url, api_key=prune_key,
+                           timeout=_prune_timeout(cfg))
 
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft,
                               window=getattr(cfg, "context_window", None)),
@@ -790,7 +799,8 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
                      prune_key_env, "prune")
         prune = make_provider(cfg, provider=prune_kind,
                               model=prune_model, base_url=prune_base_url,
-                              api_key=prune_key)
+                              api_key=prune_key,
+                              timeout=_prune_timeout(cfg))
     except BaseException:
         (cfg.provider, cfg.model, cfg.base_url, cfg.api_key_env,
          cfg.api_key) = old

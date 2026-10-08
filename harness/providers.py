@@ -278,14 +278,16 @@ _UNSET = object()
 
 
 def make_provider(cfg, *, provider=None, model=None, base_url=None,
-                  api_key=_UNSET) -> Provider:
+                  api_key=_UNSET, timeout: int | None = None) -> Provider:
     """Build a provider from cfg, with explicit overrides winning.
 
     api_key uses a sentinel so an explicit None (no key, e.g. local
-    server) is distinguishable from "fall back to cfg".
+    server) is distinguishable from "fall back to cfg". timeout None
+    falls back to cfg.request_timeout.
     """
     name = provider or cfg.provider
-    timeout = getattr(cfg, "request_timeout", 120)
+    timeout = (timeout if timeout is not None
+               else getattr(cfg, "request_timeout", 120))
     if name == "anthropic":
         return AnthropicProvider(
             api_key=cfg.api_key if api_key is _UNSET else api_key,
