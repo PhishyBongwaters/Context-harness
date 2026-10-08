@@ -331,17 +331,20 @@ def format_status(phase: str | None, elapsed_s: float) -> str:
     """thinking/pruning Ns elapsed with installer-style animation.
 
     Uses growing block characters (▁▂▃▄▅▆▇█) cycling like the old
-    Windows installer — a clear "working" indicator.
+    Windows installer — a clear "working" indicator. Five blocks in
+    a wave sequence for a richer animation.
     """
     label = "pruning" if phase == "prune" else "thinking"
-    # Installer blocks: grow then shrink, 8 frames, 4 fps
+    # Installer blocks: grow then shrink, 14 frames, 4 fps
     frames = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
               "▇", "▆", "▅", "▄", "▃", "▂"]
-    frame = frames[int(elapsed_s * 4) % len(frames)]
-    # Three blocks in sequence, offset for wave effect
-    f2 = frames[(int(elapsed_s * 4) + 4) % len(frames)]
-    f3 = frames[(int(elapsed_s * 4) + 8) % len(frames)]
-    anim = f"{frame}{f2}{f3}"
+    base = int(elapsed_s * 4)
+    # Five blocks in sequence, offset for wave effect
+    blocks = []
+    for i in range(5):
+        f = frames[(base + i * 3) % len(frames)]
+        blocks.append(f)
+    anim = "".join(blocks)
     return f"{anim} {label} {max(0, int(elapsed_s))}s"
 
 

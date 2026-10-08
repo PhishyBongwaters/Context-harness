@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
+                     get_model_context_window,
                      probe_provider, resolve_provider,
                      save_current_provider, set_active_provider,
                      write_example_config)
@@ -663,6 +664,22 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     loop = box["loop"]
     loop.provider = new_main
     loop.prune_provider = prune
+    # Auto-size budget from model registry, unless user explicitly set it.
+    # (Default 100k/80k = not explicitly set; any other value = user's choice.)
+    try:
+        window = get_model_context_window(model)
+        if window:
+            if cfg.budget_hard == 100_000:
+                cfg.budget_hard = window
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.hard = window
+            if cfg.budget_soft == 80_000:
+                new_soft = int(window * 0.8)
+                cfg.budget_soft = new_soft
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.soft = new_soft
+    except Exception:
+        pass
     # Persist the selection (name or kind) so the file matches live
     # state -- otherwise the next launch resurrects the old endpoint
     # and the switch looks "stuck". Best-effort, never fails the turn.
