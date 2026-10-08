@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
-                     detect_context_window, get_model_context_window,
+                     detect_context_window,
                      probe_provider, resolve_provider,
                      save_current_provider, set_active_provider,
                      write_example_config)
@@ -595,17 +595,20 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
 
 
 def _autosize_budget(cfg, loop, model: str | None) -> None:
-    """Auto-size budget from live-detected context window, unless user set it.
+    """Auto-size budget from live server values, unless user set it.
 
     Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
     so repeated model switches keep updating auto-detected budgets.
-    Chain: live server API first, then registry fallback
-    (get_model_context_window). If neither yields a window, budget stays.
+    Live only — no registry. detect_context_window covers llama.cpp
+    (/v1/models meta.n_ctx, /props), vLLM (max_model_len), LM Studio
+    (max_context_length + native REST), Ollama native (/api/show),
+    Anthropic (max_input_tokens). APIs exposing nothing (OpenAI, NVIDIA
+    cloud) yield None and the budget honestly stays at default.
     """
     try:
-        window = detect_context_window(cfg.base_url, model, cfg.api_key)
-        if not window:
-            window = get_model_context_window(model)
+        kind = _resolved_kind(cfg)
+        window = detect_context_window(cfg.base_url, model, cfg.api_key,
+                                       kind=kind)
         if window:
             if getattr(cfg, "budget_hard_auto", True):
                 cfg.budget_hard = window

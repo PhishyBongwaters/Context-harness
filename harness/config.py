@@ -56,86 +56,35 @@ DEFAULTS = {
     #   else a legacy kind (openai/anthropic/nvidia)
 }
 
-# Model context window registry (tokens). Used to auto-size budget_hard
-# when the user has not explicitly set it. Keyed by model ID substring;
-# first match wins. Extend as needed.
-MODEL_CONTEXT_WINDOWS = {
-    # OpenAI (specific/longest keys first — first substring match wins)
-    "gpt-5": 400_000,
-    "gpt-4.1": 1_047_576,
-    "gpt-4o": 128_000,
-    "gpt-4-turbo": 128_000,
-    "gpt-4": 8_192,
-    "gpt-3.5-turbo": 16_385,
-    "o4-mini": 200_000,
-    "o3-mini": 200_000,
-    "o3": 200_000,
-    "o1-mini": 128_000,
-    "o1": 200_000,
-    # Anthropic
-    "claude-opus-4-1": 200_000,
-    "claude-sonnet-4-5": 200_000,
-    "claude-3-5-sonnet": 200_000,
-    "claude-3-5-haiku": 200_000,
-    "claude-3-opus": 200_000,
-    "claude-3-sonnet": 200_000,
-    "claude-3-haiku": 200_000,
-    "claude-opus-4": 200_000,
-    "claude-sonnet-4": 200_000,
-    # Google
-    "gemini-2.5-pro": 1_048_576,
-    "gemini-2.5-flash": 1_048_576,
-    "gemini-2.0-flash": 1_048_576,
-    "gemini-1.5-pro": 2_097_152,
-    "gemini-1.5-flash": 1_048_576,
-    # Meta (via NVIDIA, etc.)
-    "llama-3.1": 128_000,
-    "llama-3.2": 128_000,
-    "llama-3.3": 128_000,
-    # DeepSeek
-    "deepseek-chat": 64_000,
-    "deepseek-reasoner": 64_000,
-    # Mistral
-    "mistral-large": 128_000,
-    "mistral-medium": 32_000,
-    "mistral-small": 32_000,
-    # xAI
-    "grok-2": 131_072,
-    "grok-beta": 131_072,
-}
-
-
-def get_model_context_window(model: str) -> int | None:
-    """Look up a model context window from the registry.
-
-    Matches by substring (case-insensitive); returns None if unknown.
-    This is a fallback — live detection via detect_context_window()
-    is preferred for OpenAI-compatible servers.
-    """
-    if not model:
-        return None
-    ml = model.lower()
-    for key, window in MODEL_CONTEXT_WINDOWS.items():
-        if key in ml:
-            return window
-    return None
+# NOTE: no MODEL_CONTEXT_WINDOWS registry here by design. Budgets come
+# from live server values only (see detect_context_window). Cloud APIs
+# that expose nothing (OpenAI, NVIDIA catalog) honestly yield None and
+# the budget stays at the configured default until the user sets it.
 
 
 def detect_context_window(base_url: str | None, model: str | None,
                           api_key: str | None = None,
-                          timeout: int = 10) -> int | None:
-    """Detect a model's context window from an OpenAI-compatible server.
+                          timeout: int = 10,
+                          kind: str | None = None) -> int | None:
+    """Detect a model's context window from live server values only.
 
-    Queries GET {base_url}/v1/models for meta.n_ctx, falling back to
-    GET {base_url}/props for n_ctx (llama.cpp). Returns None if the
-    server doesn't expose it. This is how tools detect the actual
-    --ctx-size from a local llama.cpp server, not a registry guess.
+    No registry, no guesses: every value returned here came from the
+    API or model server itself. Returns None when the server exposes
+    nothing (e.g. OpenAI / NVIDIA cloud catalogs) — the caller then
+    keeps the configured default and the user should set budget_hard
+    explicitly.
 
-    Detection chain (prior art: pi-llama-cpp extensions):
-    1. /v1/models -> meta.n_ctx (loaded model, single or router mode)
-    2. /v1/models -> max_model_len (legacy/ik_llama.cpp)
-    3. /props -> n_ctx (llama.cpp; reflects --ctx-size even for unloaded
-       models in router mode, per pi-llama-cpp docs)
+    Chain (all live):
+    1. GET {base}/v1/models (OpenAI-compat): meta.n_ctx (llama.cpp
+       allocated), max_model_len (vLLM/self-hosted NIM), top-level
+       context_length / max_context_length / native_context_length
+       (LM Studio etc.), meta.n_ctx_train (llama.cpp trained max,
+       last resort — prefer allocated n_ctx).
+    2. Anthropic GET {base}/v1/models with x-api-key: data[].max_input_tokens.
+    3. GET {base}/props (llama.cpp): n_ctx / default_generation_settings.n_ctx.
+    4. POST {base}/api/show (Ollama native): model_info.*.context_length.
+    5. GET {base}/api/v0/models (LM Studio native): data[].max_context_length.
+    Steps 4-5 target local servers only (no extra cloud latency).
     """
     if not base_url:
         return None
@@ -148,53 +97,79 @@ def detect_context_window(base_url: str | None, model: str | None,
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    # 1. Try /v1/models for meta.n_ctx — check ALL models, not just
-    # the matched one. If the requested model isn't found (or matching
-    # fails), fall back to any model with meta.n_ctx. All harnesses
-    # live-detect from meta; don't let a matching miss block it.
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _host = (_urlparse(base_url).hostname or "").lower()
+    except Exception:
+        _host = ""
+    _local = _host in ("localhost", "127.0.0.1", "::1")
+    _is_anthropic = ((kind or "").lower() == "anthropic"
+                     or "anthropic" in (base_url or "").lower())
+
+    def _ordered(models: list) -> list:
+        # Matched model first, then the rest — a matching miss must not
+        # block detection when the server exposes a window elsewhere.
+        candidates = []
+        if model:
+            ml = model.lower()
+            for m in models:
+                if not isinstance(m, dict):
+                    continue
+                mid = str(m.get("id", ""))
+                if ml in mid.lower() or mid.lower() in ml:
+                    candidates.append(m)
+                    break
+        seen = {str(m.get("id", "")) for m in candidates}
+        for m in models:
+            if isinstance(m, dict) and str(m.get("id", "")) not in seen:
+                candidates.append(m)
+        return candidates
+
+    # 1. OpenAI-compatible /v1/models.
     try:
         r = _req.Request(f"{base}/v1/models", headers=headers)
         with _req.urlopen(r, timeout=timeout) as resp:
             data = _json.loads(resp.read().decode("utf-8", "replace"))
         models = data.get("data") or []
-        # Build ordered candidate list: matched model first, then rest
-        candidates = []
-        if model:
-            ml = model.lower()
-            for m in models:
-                mid = str(m.get("id", ""))
-                if ml in mid.lower() or mid.lower() in ml:
-                    candidates.append(m)
-                    break
-        # Add all models as fallbacks (dedup by id)
-        seen = {str(m.get("id", "")) for m in candidates}
-        for m in models:
-            if str(m.get("id", "")) not in seen:
-                candidates.append(m)
-        if not candidates and len(models) == 1:
-            candidates = models
-        for target in candidates:
+        for target in _ordered(models):
             meta = target.get("meta") or {}
             n_ctx = meta.get("n_ctx")
             if n_ctx:
                 return int(n_ctx)
-            # Some servers use max_model_len (legacy/ik_llama.cpp)
+            # vLLM / self-hosted NIM / ik_llama.cpp
             mml = target.get("max_model_len") or meta.get("max_model_len")
             if mml:
                 return int(mml)
-            # OpenAI-compatible servers (LM Studio, etc.) may expose
-            # context_length / max_context_length at top level
-            # (prior art: opencode feature request for dynamic detection)
+            # LM Studio and friends at top level
             for key in ("context_length", "max_context_length",
                         "native_context_length"):
                 cl = target.get(key)
                 if cl:
                     return int(cl)
+            # llama.cpp trained max — allocated n_ctx (above) wins when
+            # both are present; this is the last resort within meta.
+            n_train = meta.get("n_ctx_train")
+            if n_train:
+                return int(n_train)
     except Exception:
         pass
-    # 2. Fallback to /props for n_ctx (llama.cpp).
-    # Prior art (maverobot/qwen36-mtp opencode workaround): /props may nest
-    # it under default_generation_settings.n_ctx, not top-level n_ctx.
+    # 2. Anthropic models API (different auth + field).
+    if _is_anthropic:
+        try:
+            aheaders = {"anthropic-version": "2023-06-01"}
+            if api_key:
+                aheaders["x-api-key"] = api_key
+            r = _req.Request(f"{base}/v1/models", headers=aheaders)
+            with _req.urlopen(r, timeout=timeout) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+            models = data.get("data") or []
+            for target in _ordered(models):
+                mit = target.get("max_input_tokens")
+                if mit:
+                    return int(mit)
+        except Exception:
+            pass
+    # 3. llama.cpp /props (reflects --ctx-size incl. router mode).
     try:
         r = _req.Request(f"{base}/props", headers=headers)
         with _req.urlopen(r, timeout=timeout) as resp:
@@ -207,6 +182,37 @@ def detect_context_window(base_url: str | None, model: str | None,
             return int(n_ctx)
     except Exception:
         pass
+    if _local and model:
+        # 4. Ollama native: architectural max (not runtime allocation).
+        try:
+            payload = _json.dumps({"model": model}).encode("utf-8")
+            r = _req.Request(
+                f"{base}/api/show", data=payload,
+                headers={"Content-Type": "application/json"}, method="POST")
+            with _req.urlopen(r, timeout=timeout) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+            mi = data.get("model_info") or {}
+            best = None
+            for k, v in mi.items():
+                if "context_length" in str(k).lower() and isinstance(v, int):
+                    if best is None or v > best:
+                        best = v
+            if best:
+                return int(best)
+        except Exception:
+            pass
+        # 5. LM Studio native REST.
+        try:
+            r = _req.Request(f"{base}/api/v0/models", headers=headers)
+            with _req.urlopen(r, timeout=timeout) as resp:
+                data = _json.loads(resp.read().decode("utf-8", "replace"))
+            models = data.get("data") or []
+            for target in _ordered(models):
+                cl = target.get("max_context_length")
+                if cl:
+                    return int(cl)
+        except Exception:
+            pass
     return None
 
 
@@ -419,26 +425,20 @@ def load_config(path: str | Path | None = None,
     key_env = merged["api_key_env"]
     api_key = os.environ.get(key_env) if key_env else None
 
-    # Auto-size budget from the registry when the user did not set it.
+    # Budget defaults: live detection only, no registry of assumed values.
     # NOTE: explicitness is checked against raw (the user file), not merged:
     # merged always contains DEFAULTS keys, so `in merged` is True even
-    # when the user set nothing and auto-size would never run (the 100k
-    # hardcode bug). Registry-only here (no network): keeps startup fast
-    # per origin/main perf fix; live server probing stays in _autosize_budget
-    # on retarget.
+    # when the user set nothing. Unset budgets keep the numeric defaults
+    # (100k/80k) purely as an unconfigured fallback — no network probe here
+    # (startup stays fast); live detection runs on retarget via
+    # _autosize_budget. Anthropic/OpenAI/NVIDIA clouds that expose nothing
+    # honestly stay at default until the user sets budget_hard.
     budget_hard_explicit = "budget_hard" in raw
     budget_soft_explicit = "budget_soft" in raw
     budget_hard = int(merged.get("budget_hard", 100_000))
     budget_soft = int(merged.get("budget_soft", 80_000))
     if budget_hard_explicit and not budget_soft_explicit:
         budget_soft = int(budget_hard * 0.8)
-    elif not budget_hard_explicit or not budget_soft_explicit:
-        detected = get_model_context_window(merged.get("model"))
-        if detected is not None:
-            if not budget_hard_explicit:
-                budget_hard = detected
-            if not budget_soft_explicit:
-                budget_soft = int(detected * 0.8)
 
     return Config(
         provider=merged.get("provider", "openai"),
