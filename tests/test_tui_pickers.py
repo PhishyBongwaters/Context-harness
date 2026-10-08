@@ -363,83 +363,62 @@ class TestPickerPilot(unittest.IsolatedAsyncioTestCase):
                                          SessionPickerScreen)
                 self.assertIsInstance(app.screen.focused, TaskInput)
 
-    async def test_transcript_selection_and_copy(self):
-        # Log (not RichLog) = drag-select works; RichLog is a scroll
-        # container that Textual's selection never targets. Verify the
-        # chain: mousedown starts selection, the widget extracts text,
-        # ctrl+c puts it on the clipboard. (The pilot cannot synthesize
-        # a full drag -- its MouseMove never reaches _select_end -- so
-        # the selection is set the way the screen's own drag code does.)
-        from textual.geometry import Offset
-        from textual.selection import Selection
-        from textual.widgets import Log
+    async def test_transcript_click_to_copy(self):
+        # Per-message widgets replaced the single Log: clicking a message
+        # copies its full plain (ANSI-stripped) text via
+        # app.copy_to_clipboard. Rob approved this trade explicitly.
+        from harness.tui.widgets import MessageWidget, TranscriptContainer
         control = SimpleNamespace()
         with tempfile.TemporaryDirectory() as d:
             app = await self._app(d, control)
             control.sess = app._session
             async with app.run_test(size=(80, 30)) as pilot:
-                tl = app.query_one("#transcript")
-                self.assertIsInstance(tl, Log)  # selectable leaf, not RichLog
-                app._log("draggable alpha line")
-                app._log("draggable beta line")
+                tc = app.query_one("#transcript", TranscriptContainer)
+                app._log("alpha \x1b[1mbold\x1b[0m line", kind="assistant")
+                app._log("user line", kind="user")
                 await pilot.pause()
-                await pilot.mouse_down("#transcript", offset=(0, 0))
+                widgets = list(tc.query(MessageWidget))
+                self.assertEqual(len(widgets), 2)
+                # CSS classes mark the kinds
+                self.assertIn("message-assistant", widgets[0].classes)
+                self.assertIn("message-user", widgets[1].classes)
+                # plain text stored without ANSI
+                self.assertEqual(widgets[0].plain_text, "alpha bold line")
+                # click copies the message text
+                copied = {}
+                app.copy_to_clipboard = lambda t: copied.setdefault("t", t)
+                await pilot.click(MessageWidget)
                 await pilot.pause()
-                self.assertTrue(app.screen._selecting,
-                                "mousedown must start selection")
-                await pilot.mouse_up("#transcript", offset=(0, 0))
-                await pilot.pause()
-                # The screen's drag handler stores selections exactly
-                # like this (widget -> Selection of content offsets).
-                app.screen.selections = {
-                    tl: Selection(Offset(0, 0), Offset(8, 1))}
-                text, _end = tl.get_selection(
-                    Selection(Offset(0, 0), Offset(8, 1)))
-                # 8 chars from the transcript's first text line
-                # (Log seeds an empty line 0, hence the col-8 window).
-                self.assertEqual(text.strip(), "draggabl")
-                await pilot.press("ctrl+c")
-                await pilot.pause()
-                # Screen selection wins even with focus in the Input.
-                self.assertIn("draggabl", app._clipboard or "")
-                app.screen.clear_selection()
-                app._clipboard = ""
-                # Without a screen selection, ctrl+c falls back to the
-                # focused widget (Input copies its own selection).
-                await pilot.press("ctrl+c")
-                await pilot.pause()
-                self.assertFalse(app.screen._selecting)
+                self.assertEqual(copied.get("t"), "alpha bold line")
+                # export lines still recorded for the file export path
+                self.assertEqual(len(app._transcript_lines), 2)
 
-    async def test_transcript_wraps_and_rewraps(self):
-        # Regression: the Log switch (for drag-select) dropped RichLog's
-        # wrap=True -- long lines scrolled horizontally. WrappedLog must
-        # wrap to the pane width and rewrap on resize, keeping selection.
+    async def test_transcript_message_widgets_wrap(self):
+        # Per-message widgets wrap natively (Static wraps); long lines
+        # must not overflow the pane horizontally.
+        from harness.tui.widgets import MessageWidget, TranscriptContainer
         control = SimpleNamespace()
         with tempfile.TemporaryDirectory() as d:
             app = await self._app(d, control)
             control.sess = app._session
             async with app.run_test(size=(60, 20)) as pilot:
-                tl = app.query_one("#transcript")
-                app._log("word " * 60)  # 300 chars, spaces to wrap on
-                app._log("x" * 400)     # pathological long single word
+                tc = app.query_one("#transcript", TranscriptContainer)
+                app._log("word " * 60, kind="assistant")  # 300 chars
+                app._log("x" * 400, kind="tool")  # long single word
                 await pilot.pause()
-                # No horizontal overflow: everything fits the pane.
-                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
-                for line in tl.lines:
-                    if line:
-                        # ASCII test lines: char len == cell len <= wrap w
-                        self.assertLessEqual(
-                            len(line), tl.size.width - 2,
-                            f"line exceeds wrap width: {line[:60]!r}")
-                # Narrow the terminal: content rewraps, still no overflow.
+                widgets = list(tc.query(MessageWidget))
+                self.assertEqual(len(widgets), 2)
+                # No horizontal overflow from the container.
+                self.assertLessEqual(tc.virtual_size.width, tc.size.width)
+                # Narrow the terminal: still no overflow.
                 await pilot.resize_terminal(40, 20)
                 await pilot.pause()
-                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
-                # Widen again: still consistent, raw lines preserved.
+                self.assertLessEqual(tc.virtual_size.width, tc.size.width)
+                # Widen again: messages persist.
                 await pilot.resize_terminal(80, 24)
                 await pilot.pause()
-                self.assertLessEqual(tl.virtual_size.width, tl.size.width)
-                self.assertTrue(any("word word" in l for l in tl.lines))
+                self.assertLessEqual(tc.virtual_size.width, tc.size.width)
+                self.assertEqual(len(list(tc.query(MessageWidget))), 2)
 
     async def test_request_meter_is_bar_not_transcript(self):
         # The [context ...] meter line is CLI furniture; in the TUI the

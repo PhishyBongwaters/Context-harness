@@ -116,7 +116,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(d.feed([self.resp("hello")]), [])
         self.assertEqual(d.feed([("usage", {}, None)]), [])
         self.assertEqual(d.feed([("assistant", "hello", "hello")]),
-                         ["hello"])
+                         [("assistant", "hello")])
         self.assertEqual(d.flush(), [])
 
     def test_realistic_formatted_lines_collapse(self):
@@ -142,16 +142,17 @@ class TestDedupe(unittest.TestCase):
         d = TranscriptDedupe()
         self.assertEqual(d.feed(entries[:1]), [])
         self.assertEqual(d.feed(entries[1:2]), [])
-        lines = d.feed(entries[2:])
-        self.assertEqual(len(lines), 1)
-        self.assertIn("hello there", lines[0])
+        pairs = d.feed(entries[2:])
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0][0], "assistant")
+        self.assertIn("hello there", pairs[0][1])
 
     def test_stateful_no_dupe_flushes(self):
         d = TranscriptDedupe()
         d.feed([self.resp("hello")])
         got = d.feed([("tool", {"name": "exec", "args": {}},
                        "$ exec x")])
-        self.assertEqual(got, ["hello", "$ exec x"])
+        self.assertEqual(got, [("response", "hello"), ("tool", "$ exec x")])
 
 
 class TestNormalizeAnswer(unittest.TestCase):

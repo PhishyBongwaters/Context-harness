@@ -41,7 +41,7 @@ TUI_KEYS_HELP = [
     "  ctrl+e export transcript to a file (copy from there)",
     "  esc interrupt the running turn",
     "  input: ctrl+enter send (multi-line), up/down history",
-    "  drag with the mouse to select transcript text, ctrl+c copies",
+    "  click a chat message to copy it, ctrl+e exports, ctrl+c copies",
     "  (no mouse? restart with --no-mouse for terminal selection)",
     "  a/s/d/esc in approval + picker dialogs",
 ]
@@ -134,11 +134,12 @@ if _HAS:
     from . import commands
     from .lcars import LcarsFooter, LcarsHeader, _binding_pills, lcars_theme
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
-                           DebugPanel, InputHistory, SystemPanel, TaskInput,
-                           TranscriptDedupe, TranscriptLog, _USER_BG,
+                           DebugPanel, InputHistory, MessageWidget,
+                           SystemPanel, TaskInput, TranscriptContainer,
+                           TranscriptDedupe,
                            _ansi, budget_bar_status, budget_bar_text,
                            debug_panel_lines, format_status, gauge_line,
-                           strip_ansi, with_bg)
+                           strip_ansi)
 
 
     class ApprovalScreen(ModalScreen):
@@ -650,6 +651,12 @@ if _HAS:
                "#chrome-top { height: 1; } #chrome-bottom { height: 1; } "
                "#main { height: 1fr; } "
                "#transcript { scrollbar-size-horizontal: 0; } "
+               ".message-user { background: #1d2b3a; padding: 0 1; "
+               "margin-bottom: 1; width: 1fr; } "
+               ".message-assistant { background: #2b2b2b; padding: 0 1; "
+               "margin-bottom: 1; width: 1fr; } "
+               ".message-tool { background: #232323; padding: 0 1; "
+               "margin-bottom: 1; width: 1fr; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#lcars-footer LcarsPill { width: auto; height: 1; } "
                "#std-footer { height: 1; } "
@@ -748,7 +755,7 @@ if _HAS:
             yield Vertical(id="chrome-top")
             with Vertical(id="main"):
                 yield SystemPanel(id="system")
-                yield TranscriptLog(id="transcript")
+                yield TranscriptContainer(id="transcript")
                 yield DebugPanel(id="debug")
                 yield BudgetGauge(id="gauge")
                 yield BudgetBar("", id="budget")
@@ -822,9 +829,14 @@ if _HAS:
                     and not approver.auto_approve):
                 approver.decide = self._modal_decide
 
-        def _log(self, text: str) -> None:
+        def _log(self, text: str, kind: str = "system") -> None:
             self._transcript_lines.append(text)
-            self.query_one("#transcript", TranscriptLog).write_wrapped(text)
+            try:
+                self.query_one(
+                    "#transcript", TranscriptContainer).write_message(
+                        kind, text)
+            except Exception:
+                pass
 
         def _syslog(self, text: str | None) -> None:
             """System messages go to the top panel, not the chat."""
@@ -838,9 +850,8 @@ if _HAS:
         def _export_transcript(self) -> None:
             """Copyable record: dump transcript lines to a session file.
 
-            Drag-select works in the transcript now (Log widget), but
-            export remains the bulk copy path: open the file in any
-            editor. """
+            Click a message to copy it; export remains the bulk copy
+            path: open the file in any editor. """
             try:
                 lines = list(getattr(self, "_transcript_lines", []) or [])
                 stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -930,8 +941,8 @@ if _HAS:
                 shown.append((kind, data, _line))
             chat = [(k, d, l) for k, d, l in shown
                     if k not in self._SYSTEM_KINDS]
-            for line in self._dedupe.feed(chat):
-                self._log(line)
+            for kind, line in self._dedupe.feed(chat):
+                self._log(line, kind=kind)
             for kind, _data, line in shown:
                 if kind in self._SYSTEM_KINDS:
                     self._syslog(line)
@@ -1296,7 +1307,7 @@ if _HAS:
             self._log("[interrupt requested]")
 
         def _submit(self, text: str) -> None:
-            self._log(with_bg(f"{_ansi('me',1,34)}\n{text}", _USER_BG))
+            self._log(f"{_ansi('me',1,34)}\n{text}", kind="user")
             if self._handle_slash(text):
                 return
             self._turn_start = time.monotonic()

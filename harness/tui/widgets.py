@@ -5,8 +5,9 @@ budget bar, status line, dedupe, debug-tail reading. The canonical
 definitions live here; bridge.py re-exports them so existing imports
 keep working with identical objects (no behaviour change).
 
-Thin Textual widgets (BudgetBar, StatusLine, TranscriptLog,
-DebugPanel) exist only when the textual extra is installed.
+Thin Textual widgets (BudgetBar, StatusLine, MessageWidget,
+TranscriptContainer, DebugPanel) exist only when the textual extra is
+installed.
 """
 from __future__ import annotations
 
@@ -88,25 +89,13 @@ def _bg_code(hex_color: str) -> str:
 
 
 def with_bg(line: str, hex_color: str) -> str:
-    """Wrap a line in a 16-color ANSI background.
+    """No-op (kept for import compatibility).
 
-    Uses terminal-safe 16-color codes (not 24-bit): Windows conhost
-    handles these correctly. Applies to every physical line.
-    Blue for user, bright-black for assistant, black for tools.
+    Message backgrounds are now CSS classes on MessageWidget
+    (.message-user/.message-assistant/.message-tool), which render
+    natively on every terminal -- no ANSI background codes needed.
     """
-    if not line:
-        return line
-    if hex_color == _USER_BG:
-        bg = "\x1b[44m"
-    elif hex_color == _ASSISTANT_BG:
-        bg = "\x1b[100m"
-    else:
-        bg = "\x1b[40m"
-    out = []
-    for part in line.split("\n"):
-        # Re-assert bg after any reset so it survives inner styling
-        out.append(bg + part.replace("\x1b[0m", "\x1b[0m" + bg) + "\x1b[0m")
-    return "\n".join(out)
+    return line
 
 
 _BG_START_RE = _re.compile(r"^\x1b\[(44|100|40)m")
@@ -139,11 +128,10 @@ def format_event(kind: str, data) -> str | None:
     if kind == "assistant":
         txt = data if isinstance(data, str) else str(data)
         if txt:
-            # green bold assistant label; fenced code blocks highlighted;
-            # whole reply rides a subtle dark background, chat-style
-            return with_bg(
-                f"{_ansi('assistant',1,32)}\n{highlight_fenced_code(txt)}",
-                _ASSISTANT_BG)
+            # green bold assistant label; fenced code blocks highlighted.
+            # Background is a CSS class on MessageWidget, not ANSI.
+            return (f"{_ansi('assistant',1,32)}\n"
+                    f"{highlight_fenced_code(txt)}")
         return None
     if kind == "tool":
         data = data or {}
@@ -178,12 +166,11 @@ def format_event(kind: str, data) -> str | None:
                             except Exception:
                                 code_blob = text
                             if code_blob:
-                                return with_bg(
-                                    f"{header}\n{_ansi('file',1)} {p}\n{code_blob}",
-                                    _TOOL_BG)
+                                return (f"{header}\n{_ansi('file',1)} {p}\n"
+                                        f"{code_blob}")
                 except Exception:
                     pass
-        return with_bg(header, _TOOL_BG)
+        return header
     if kind == "budget":
         data = data or {}
         return (f"[{str(data.get('status', '?')).upper()} budget: "
@@ -396,14 +383,17 @@ class TranscriptDedupe:
 
     A bare main-phase response is buffered until the next visible event
     resolves dupe-or-not, so pairs split across polls still collapse.
-    feed() returns display lines; flush() emits any held line.
+    feed() returns (kind, line) display pairs; flush() emits any held line.
     """
 
     def __init__(self) -> None:
         self._pending = None  # buffered (kind, data, line)
 
-    def feed(self, entries: list) -> list[str]:
-        lines: list[str] = []
+    def feed(self, entries: list) -> list[tuple]:
+        """Feed (kind, data, line) entries; returns (kind, line) pairs
+        for display lines. Kinds are preserved so the transcript can
+        style each message (CSS background per kind)."""
+        out: list[tuple] = []
         for kind, data, line in entries:
             if self._pending is not None:
                 if kind in _QUIET_KINDS:
@@ -416,12 +406,12 @@ class TranscriptDedupe:
                     note = (_tool_calls_note(pd)
                             if isinstance(pd, dict) else None)
                     if note:
-                        lines.append(note)
+                        out.append((kind, note))
                     if line:
-                        lines.append(line)
+                        out.append((kind, line))
                     continue
                 if pl:
-                    lines.append(pl)  # no dupe: flush buffered first
+                    out.append((pk, pl))  # no dupe: flush buffered first
                 # fall through to handle the current entry below
             if (kind == "response" and isinstance(data, dict)
                     and data.get("content")
@@ -429,8 +419,8 @@ class TranscriptDedupe:
                 self._pending = (kind, data, line)
                 continue
             if line:
-                lines.append(line)
-        return lines
+                out.append((kind, line))
+        return out
 
     def flush(self) -> list[str]:
         if self._pending is not None:
@@ -542,6 +532,7 @@ except ImportError:  # pragma: no cover - extra missing
 
 if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
     from textual.binding import Binding
+    from textual.containers import VerticalScroll
     from textual.widgets import TextArea
 
     class TaskInput(TextArea):
@@ -815,22 +806,77 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         def on_resize(self, event) -> None:
             self.rewrap()
 
-    class TranscriptLog(WrappedLog):
-        """Transcript with a deduping write helper.
+    class MessageWidget(Static):
+        """One chat message (opencode-style per-message widget).
 
-        Log (not RichLog): RichLog is a scroll *container*, which
-        Textual's text-selection machinery never targets -- Log is a
-        plain leaf widget with drag-select support built in (plus
-        get_selection for ctrl+c copy). Wrapping comes from WrappedLog.
+        Background comes from a CSS class (.message-user,
+        .message-assistant, .message-tool) -- no ANSI background codes,
+        so panels render natively on every terminal. Foreground ANSI
+        (syntax highlighting, labels) is parsed into a Rich Text for
+        native display; the plain ANSI-stripped text is kept for
+        click-to-copy.
+        """
+
+        def __init__(self, text: str, kind: str = "system") -> None:
+            from rich.text import Text
+            self._plain_text = strip_ansi(text)
+            self._kind = kind
+            super().__init__(Text.from_ansi(text or ""))
+            self.add_class(f"message-{kind}")
+
+        @property
+        def plain_text(self) -> str:
+            return self._plain_text
+
+        @property
+        def message_kind(self) -> str:
+            return self._kind
+
+        def on_click(self) -> None:
+            """Click a message to copy its full plain text."""
+            try:
+                self.app.copy_to_clipboard(self._plain_text)
+            except Exception:
+                return
+            try:
+                self.app.notify("Message copied", timeout=1)
+            except Exception:
+                pass
+
+    class TranscriptContainer(VerticalScroll):
+        """Scrollable per-message transcript (opencode-style).
+
+        Each message is a MessageWidget with a CSS background; click a
+        message to copy its plain text. Replaces the single-Log
+        transcript: backgrounds are reliable on every terminal, at the
+        cost of drag-select (click-to-copy covers it).
         """
 
         def __init__(self, *a, **k) -> None:
             super().__init__(*a, **k)
-            self._dedupe = TranscriptDedupe()
+            self._message_count = 0
 
-        def write_entries(self, entries: list) -> None:
-            for line in self._dedupe.feed(entries):
-                self.write_wrapped(line)
+        @property
+        def message_count(self) -> int:
+            return self._message_count
+
+        def write_message(self, kind: str, text: str) -> None:
+            try:
+                self.mount(MessageWidget(text, kind))
+            except Exception:
+                return
+            self._message_count += 1
+            try:
+                self.scroll_end(animate=False)
+            except Exception:
+                pass
+
+        def clear_all(self) -> None:
+            self._message_count = 0
+            try:
+                self.remove_children()
+            except Exception:
+                pass
 
     class DebugPanel(WrappedLog):
         """Live tail of the session debug.jsonl (best-effort)."""
