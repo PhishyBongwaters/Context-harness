@@ -299,6 +299,10 @@ class Config:
     api_key_env: str = "OPENAI_API_KEY"
     budget_hard: int = 100_000
     budget_soft: int = 80_000
+    # True if budget was auto-detected (not explicitly set by user).
+    # Auto-detected budgets update on model switch; user-set ones don't.
+    budget_hard_auto: bool = True
+    budget_soft_auto: bool = True
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
     approval_timeout: int = 120
@@ -423,6 +427,9 @@ def load_config(path: str | Path | None = None,
         api_key_env=key_env,
         budget_hard=int(merged.get("budget_hard", 100_000)),
         budget_soft=int(merged.get("budget_soft", 80_000)),
+        # If user explicitly set budget, don't auto-update on model switch
+        budget_hard_auto=("budget_hard" not in merged),
+        budget_soft_auto=("budget_soft" not in merged),
         sessions_dir=merged.get("sessions_dir"),
         api_key=api_key,
         approval_timeout=int(merged.get("approval_timeout", 120)),
