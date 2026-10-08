@@ -518,8 +518,10 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         cfg.request_timeout = args.request_timeout
     if getattr(args, "budget_hard", None):
         cfg.budget_hard = args.budget_hard
+        cfg.budget_hard_auto = False
     if getattr(args, "budget_soft", None):
         cfg.budget_soft = args.budget_soft
+        cfg.budget_soft_auto = False
     kind = _resolved_kind(cfg)
     # Sync display fields from the registry entry (no-op for legacy, so
     # load_config values and CLI overrides keep working untouched).
@@ -597,18 +599,24 @@ def _autosize_budget(cfg, loop, model: str | None) -> None:
 
     Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
     so repeated model switches keep updating auto-detected budgets.
-    Detection ONLY via live server API. No registry fallback — if the
-    server doesn't expose it, budget stays at default. No hardcoded lists.
+    Chain: live server API first, then registry fallback
+    (get_model_context_window). If neither yields a window, budget stays.
     """
     try:
         window = detect_context_window(cfg.base_url, model, cfg.api_key)
+        if not window:
+            window = get_model_context_window(model)
         if window:
             if getattr(cfg, "budget_hard_auto", True):
                 cfg.budget_hard = window
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.hard = window
             if getattr(cfg, "budget_soft_auto", True):
-                new_soft = int(window * 0.8)
+                if getattr(cfg, "budget_hard_auto", True):
+                    new_soft = int(window * 0.8)
+                else:
+                    # Hard is user-pinned: keep soft at 80% of hard.
+                    new_soft = int(cfg.budget_hard * 0.8)
                 cfg.budget_soft = new_soft
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.soft = new_soft
