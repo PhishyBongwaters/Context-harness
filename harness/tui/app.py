@@ -915,7 +915,10 @@ if _HAS:
             self.push_screen(ApprovalScreen(info, box))
 
         def _set_status(self, text: str) -> None:
-            self.query_one("#gauge", BudgetGauge).set_status(text)
+            try:
+                self.query_one("#gauge", BudgetGauge).set_status(text)
+            except Exception:
+                pass  # timer may tick before mount; next tick retries
 
         def _apply_request(self, data) -> None:
             """Route one request event into the bottom instruments:

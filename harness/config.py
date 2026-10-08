@@ -394,6 +394,10 @@ class Config:
     # live (detected from the server), registry (last-resort fallback),
     # default (unconfigured fallback). Every budget report shows it.
     budget_source: str = "default"
+    # The full model context window behind the budgets (None when
+    # unknown). Budgets enforce at ~50% of this; the header displays
+    # both so the window is never confused with the prune trigger.
+    context_window: int | None = None
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
     approval_timeout: int = 120
@@ -522,22 +526,25 @@ def load_config(path: str | Path | None = None,
     budget_hard = int(merged.get("budget_hard", 100_000))
     budget_soft = int(merged.get("budget_soft", 80_000))
     budget_source = "default"
+    context_window = None
     if budget_hard_explicit:
         budget_source = "explicit"
         if not budget_soft_explicit:
             budget_soft = int(budget_hard * 0.8)
     else:
         # Hard is auto: size from registry (or default pseudo-window),
-        # always through split_budgets so the prune turn fits.
-        window = get_model_context_window(merged.get("model"))
-        if window is None:
+        # always through split_budgets (enforce at 50% of window).
+        # context_window records the full window for display; None when
+        # unknown (never the pseudo-window, never a guess).
+        context_window = get_model_context_window(merged.get("model"))
+        if context_window is None:
             window = int(merged.get("budget_hard", 100_000))
         else:
+            window = context_window
             budget_source = "registry"
         budget_hard, auto_soft = split_budgets(window)
         if not budget_soft_explicit:
             budget_soft = auto_soft
-            # else: soft stays at default; a live probe may size it later
 
     return Config(
         provider=merged.get("provider", "openai"),
@@ -550,6 +557,7 @@ def load_config(path: str | Path | None = None,
         budget_hard_auto=not budget_hard_explicit,
         budget_soft_auto=not budget_soft_explicit,
         budget_source=budget_source,
+        context_window=context_window,
         sessions_dir=merged.get("sessions_dir"),
         api_key=api_key,
         approval_timeout=int(merged.get("approval_timeout", 120)),

@@ -242,9 +242,15 @@ def session_header_line(cfg, session: Session, totals=None,
                 f"out {totals['output']:,}")
     proj = f" project={project}" if project else ""
     src = getattr(cfg, "budget_source", "default")
+    win = getattr(cfg, "context_window", None)
+    if win:
+        mid = (f"window={win:,} [{src}] "
+               f"prune-at={cfg.budget_hard:,}")
+    else:
+        mid = f"prune-at={cfg.budget_hard:,} [{src}]"
     return (f"[session {session.id}{proj}] provider={cfg.provider} "
             f"model={cfg.model} "
-            f"budget={cfg.budget_hard:,} [{src}]{using}{life} "
+            f"{mid}{using}{life} "
             f"ctx={session.context.path}")
 
 
@@ -640,6 +646,7 @@ def _autosize_budget(cfg, loop, model: str | None,
                 applied = True
             if applied:
                 cfg.budget_source = source
+                cfg.context_window = window
                 return source
             return None
         elif reset:
@@ -663,6 +670,7 @@ def _autosize_budget(cfg, loop, model: str | None,
                 # Only relabel when hard itself fell back; a pinned
                 # hard keeps its explicit provenance.
                 cfg.budget_source = "default"
+                cfg.context_window = None
     except Exception:
         pass
     return None

@@ -11,8 +11,10 @@ special compact tool.
 
 A token budget meter shows every turn. Soft breach warns; hard breach
 gives the model a prune-only turn (write/edit on `context.md` only).
-Hard sits at 50% of the model's context window so pruning starts early
-and the prune request itself always fits; soft warns at 80% of hard.
+Enforcement sits at 50% of the model's context window so pruning starts
+early and the prune request itself always fits; soft warns at 80% of
+hard. The header shows both numbers, e.g. `window=135,168 [live]
+prune-at=67,584` — the window is the context, the prune trigger is not.
 Pruning fails repeatedly → loud error, never silent truncation. Every
 prune turn and any model edit of `context.md` backs up the file first
 (`context.pre-prune-<ts>.bak` / `context.pre-edit-<ts>.bak`), so all
@@ -110,8 +112,8 @@ Budgets auto-size and report their source. Omit `budget_hard` /
 vLLM, LM Studio, Ollama, Anthropic), a published-registry fallback
 (`[registry]`, only where the API exposes no window), or the built-in
 default (`[default]`). Set explicit numbers to pin values (`[explicit]`)
-and skip detection. The session header shows the provenance, e.g.
-`budget=135,168 [live]`.
+and skip detection. Enforcement runs at 50% of the window; the session
+header shows both, e.g. `window=135,168 [live] prune-at=67,584`.
 
 CLI `--provider` accepts a registry name or a kind
 (`openai`/`anthropic`/`nvidia`); registry first, legacy kind fallback.

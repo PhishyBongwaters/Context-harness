@@ -158,6 +158,7 @@ class TestAutosizeBudget(unittest.TestCase):
         det.assert_called_once()
         self.assertEqual(source, "live")
         self.assertEqual(cfg.budget_source, "live")
+        self.assertEqual(cfg.context_window, 135168)
         self.assertEqual(cfg.budget_hard, hard)
 
     def test_registry_fallback_when_live_exposes_nothing(self):
@@ -171,6 +172,7 @@ class TestAutosizeBudget(unittest.TestCase):
             source = cli._autosize_budget(cfg, loop, "gpt-5")
         self.assertEqual(source, "registry")
         self.assertEqual(cfg.budget_source, "registry")
+        self.assertEqual(cfg.context_window, 400_000)
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (hard, soft))
         self.assertEqual((loop.budget.hard, loop.budget.soft),
@@ -191,6 +193,7 @@ class TestAutosizeBudget(unittest.TestCase):
         from harness.config import split_budgets
         cfg, loop = self._cfg_loop(budget_hard=135168,
                                    budget_soft=int(135168 * 0.8))
+        cfg.context_window = 270336
         hard, soft = split_budgets(100_000)
         with patch.object(cli, "detect_context_window",
                           return_value=None):
@@ -200,6 +203,7 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual((loop.budget.hard, loop.budget.soft),
                          (hard, soft))
         self.assertEqual(cfg.budget_source, "default")
+        self.assertIsNone(cfg.context_window)
 
     def test_reset_keeps_pinned_hard_soft_tracks_it(self):
         from harness import __main__ as cli
@@ -284,6 +288,41 @@ class TestBudgetChangeLines(unittest.TestCase):
             cli._budget_change_lines(cfg, (50_000, 40_000), "m"), [])
 
 
+class TestHeaderShowsWindow(unittest.TestCase):
+    def test_window_and_prune_trigger(self):
+        import tempfile
+        from pathlib import Path
+        from harness import __main__ as cli
+        from harness.config import Config
+        from harness.loop import Session
+        with tempfile.TemporaryDirectory() as d:
+            s = Session(id="s1", dir=Path(d), workdir=d)
+            cfg = Config(provider="openai", model="m",
+                         base_url="http://localhost:8080/v1",
+                         budget_hard=67584, budget_soft=54067,
+                         budget_source="live", context_window=135168)
+            line = cli.session_header_line(cfg, s, None, None)
+            self.assertIn("window=135,168 [live]", line)
+            self.assertIn("prune-at=67,584", line)
+            self.assertNotIn("budget=", line)
+
+    def test_unknown_window_shows_prune_trigger_only(self):
+        import tempfile
+        from pathlib import Path
+        from harness import __main__ as cli
+        from harness.config import Config
+        from harness.loop import Session
+        with tempfile.TemporaryDirectory() as d:
+            s = Session(id="s1", dir=Path(d), workdir=d)
+            cfg = Config(provider="openai", model="m",
+                         base_url="http://localhost:8080/v1",
+                         budget_hard=50000, budget_soft=40000,
+                         budget_source="default", context_window=None)
+            line = cli.session_header_line(cfg, s, None, None)
+            self.assertIn("prune-at=50,000 [default]", line)
+            self.assertNotIn("window=", line)
+
+
 class TestLoadConfigSource(unittest.TestCase):
     """load_config labels budget provenance; registry applies offline."""
 
@@ -307,6 +346,7 @@ class TestLoadConfigSource(unittest.TestCase):
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (hard, soft))
         self.assertEqual(cfg.budget_source, "registry")
+        self.assertEqual(cfg.context_window, 400_000)
         self.assertTrue(cfg.budget_hard_auto)
 
     def test_explicit_source(self):
@@ -327,6 +367,7 @@ class TestLoadConfigSource(unittest.TestCase):
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (hard, soft))
         self.assertEqual(cfg.budget_source, "default")
+        self.assertIsNone(cfg.context_window)
 
     def test_hard_auto_with_soft_pinned_still_uses_registry(self):
         from harness.config import split_budgets
