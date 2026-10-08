@@ -557,6 +557,7 @@ class Loop:
                     self._check_stop()
                     result = self._execute_tool(session, tc)
                     session.context.append(render_tool(tc["id"], result))
+                    self._auto_dedupe(session)
         except TurnInterrupted:
             self._stop_event.clear()
             self._emit("interrupted", {})
