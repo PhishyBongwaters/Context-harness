@@ -41,6 +41,19 @@ def _split_preamble(text: str) -> tuple[str, str]:
     return text, ""
 
 
+def _strip_line_numbers(body: str) -> str:
+    """Remove leading 'N: ' line-number prefixes for dedupe comparison.
+
+    The read tool returns line-numbered output; two reads of similar
+    content differ only in numbers. Stripping them lets dedupe catch
+    the semantic duplicate.
+    """
+    import re
+    lines = body.splitlines()
+    stripped = [re.sub(r"^\d+:\s?", "", ln) for ln in lines]
+    return "\n".join(stripped).strip()
+
+
 def dedupe_exact(text: str) -> tuple[str, int]:
     """Collapse identical (header, body) assistant/tool sections.
 
@@ -63,7 +76,11 @@ def dedupe_exact(text: str) -> tuple[str, int]:
                 keep_rev.append(False)
                 continue
             seen_tool_ids.add(label)
-        key = (role, body.strip())
+        # For tool sections, compare with line numbers stripped --
+        # read outputs differ only in numbering.
+        cmp_body = (_strip_line_numbers(body) if role == "tool"
+                    else body.strip())
+        key = (role, cmp_body)
         if role in ("assistant", "tool") and key in seen:
             keep_rev.append(False)
         else:
