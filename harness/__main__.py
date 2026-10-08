@@ -593,16 +593,15 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
 
 
 def _autosize_budget(cfg, loop, model: str | None) -> None:
-    """Auto-size budget from detected context window, unless user set it.
+    """Auto-size budget from live-detected context window, unless user set it.
 
     Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
     so repeated model switches keep updating auto-detected budgets.
-    Detection order: live server API (for llama.cpp etc.) -> registry -> default.
+    Detection ONLY via live server API. No registry fallback — if the
+    server doesn't expose it, budget stays at default. No hardcoded lists.
     """
     try:
         window = detect_context_window(cfg.base_url, model, cfg.api_key)
-        if not window:
-            window = get_model_context_window(model)
         if window:
             if getattr(cfg, "budget_hard_auto", True):
                 cfg.budget_hard = window
