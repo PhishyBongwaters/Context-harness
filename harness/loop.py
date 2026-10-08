@@ -274,6 +274,23 @@ class Loop:
     def _policy(self, session: Session) -> Policy:
         return Policy(session.workdir, session.dir, session.context.path)
 
+    def _auto_dedupe(self, session: Session) -> None:
+        """Run exact-dedupe after every turn, automatically.
+
+        The harness does this mechanically -- byte-identical assistant/tool
+        sections collapse to the newest. No model call, no budget check.
+        Keeps the file clean continuously instead of waiting for prune.
+        """
+        from .deterministic import dedupe_exact
+        try:
+            before = session.context.load()
+            after, dropped = dedupe_exact(before)
+            if dropped and after != before:
+                session.context.save(after)
+                self._emit("auto-dedupe", {"dropped": dropped})
+        except Exception:
+            pass
+
     def _backup_context(self, session: Session, content: str,
                         label: str):
         """Snapshot pre-edit transcript content (best effort).
@@ -534,6 +551,7 @@ class Loop:
                     # that arrived after the last check): it must never
                     # leak into and kill the next turn.
                     self._stop_event.clear()
+                    self._auto_dedupe(session)
                     return content or ""
                 for tc in tool_calls:
                     self._check_stop()
