@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import (PROVIDER_DEFAULTS, Config, config_path, load_config,
-                     get_model_context_window,
+                     detect_context_window, get_model_context_window,
                      probe_provider, resolve_provider,
                      save_current_provider, set_active_provider,
                      write_example_config)
@@ -666,8 +666,11 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     loop.prune_provider = prune
     # Auto-size budget from model registry, unless user explicitly set it.
     # (Default 100k/80k = not explicitly set; any other value = user's choice.)
+    # Detection order: live server API (for llama.cpp etc.) -> registry -> default.
     try:
-        window = get_model_context_window(model)
+        window = detect_context_window(cfg.base_url, model, cfg.api_key)
+        if not window:
+            window = get_model_context_window(model)
         if window:
             if cfg.budget_hard == 100_000:
                 cfg.budget_hard = window

@@ -101,6 +101,8 @@ def get_model_context_window(model: str) -> int | None:
     """Look up a model context window from the registry.
 
     Matches by substring (case-insensitive); returns None if unknown.
+    This is a fallback — live detection via detect_context_window()
+    is preferred for OpenAI-compatible servers.
     """
     if not model:
         return None
@@ -108,6 +110,65 @@ def get_model_context_window(model: str) -> int | None:
     for key, window in MODEL_CONTEXT_WINDOWS.items():
         if key in ml:
             return window
+    return None
+
+
+def detect_context_window(base_url: str | None, model: str | None,
+                          api_key: str | None = None,
+                          timeout: int = 10) -> int | None:
+    """Detect a model's context window from an OpenAI-compatible server.
+
+    Queries GET {base_url}/v1/models for meta.n_ctx, falling back to
+    GET {base_url}/props for n_ctx (llama.cpp). Returns None if the
+    server doesn't expose it. This is how tools detect the actual
+    --ctx-size from a local llama.cpp server, not a registry guess.
+    """
+    if not base_url:
+        return None
+    import json as _json
+    import urllib.request as _req
+    base = base_url.rstrip("/")
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    # 1. Try /v1/models for meta.n_ctx
+    try:
+        r = _req.Request(f"{base}/v1/models", headers=headers)
+        with _req.urlopen(r, timeout=timeout) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "replace"))
+        models = data.get("data") or []
+        # Find matching model, or use first if only one
+        target = None
+        if model:
+            ml = model.lower()
+            for m in models:
+                mid = str(m.get("id", ""))
+                if ml in mid.lower() or mid.lower() in ml:
+                    target = m
+                    break
+        if target is None and len(models) == 1:
+            target = models[0]
+        if target:
+            meta = target.get("meta") or {}
+            n_ctx = meta.get("n_ctx")
+            if n_ctx:
+                return int(n_ctx)
+            # Some servers use max_model_len
+            mml = target.get("max_model_len") or meta.get("max_model_len")
+            if mml:
+                return int(mml)
+    except Exception:
+        pass
+    # 2. Fallback to /props for n_ctx (llama.cpp)
+    try:
+        r = _req.Request(f"{base}/props", headers=headers)
+        with _req.urlopen(r, timeout=timeout) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "replace"))
+        n_ctx = data.get("n_ctx")
+        if n_ctx:
+            return int(n_ctx)
+    except Exception:
+        pass
     return None
 
 
