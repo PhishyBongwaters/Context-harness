@@ -56,10 +56,70 @@ DEFAULTS = {
     #   else a legacy kind (openai/anthropic/nvidia)
 }
 
-# NOTE: no MODEL_CONTEXT_WINDOWS registry here by design. Budgets come
-# from live server values only (see detect_context_window). Cloud APIs
-# that expose nothing (OpenAI, NVIDIA catalog) honestly yield None and
-# the budget stays at the configured default until the user sets it.
+# Last-resort registry of published context windows (tokens). Used ONLY
+# when the live API exposes nothing (OpenAI / NVIDIA catalogs). Live
+# server values always win — see detect_context_window. Keyed by model ID
+# substring; specific/longest keys first since first match wins. Every
+# budget report labels its source (live/registry/default/explicit) so a
+# registry fallback can never quietly pose as a detected value.
+MODEL_CONTEXT_WINDOWS = {
+    # OpenAI (specific/longest keys first — first substring match wins)
+    "gpt-5": 400_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4": 8_192,
+    "gpt-3.5-turbo": 16_385,
+    "o4-mini": 200_000,
+    "o3-mini": 200_000,
+    "o3": 200_000,
+    "o1-mini": 128_000,
+    "o1": 200_000,
+    # Anthropic
+    "claude-opus-4-1": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "claude-3-opus": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-haiku": 200_000,
+    "claude-opus-4": 200_000,
+    "claude-sonnet-4": 200_000,
+    # Google
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-1.5-pro": 2_097_152,
+    "gemini-1.5-flash": 1_048_576,
+    # Meta (via NVIDIA, etc.)
+    "llama-3.1": 128_000,
+    "llama-3.2": 128_000,
+    "llama-3.3": 128_000,
+    # DeepSeek
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
+    # Mistral
+    "mistral-large": 128_000,
+    "mistral-medium": 32_000,
+    "mistral-small": 32_000,
+    # xAI
+    "grok-2": 131_072,
+    "grok-beta": 131_072,
+}
+
+
+def get_model_context_window(model: str) -> int | None:
+    """Last-resort registry lookup (live detection preferred).
+
+    Matches by substring (case-insensitive); None when unknown.
+    """
+    if not model:
+        return None
+    ml = model.lower()
+    for key, window in MODEL_CONTEXT_WINDOWS.items():
+        if key in ml:
+            return window
+    return None
 
 
 def detect_context_window(base_url: str | None, model: str | None,
@@ -308,6 +368,10 @@ class Config:
     # Auto-detected budgets update on model switch; user-set ones don't.
     budget_hard_auto: bool = True
     budget_soft_auto: bool = True
+    # Provenance of the current budget values: explicit (user-pinned),
+    # live (detected from the server), registry (last-resort fallback),
+    # default (unconfigured fallback). Every budget report shows it.
+    budget_source: str = "default"
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
     approval_timeout: int = 120
@@ -425,20 +489,27 @@ def load_config(path: str | Path | None = None,
     key_env = merged["api_key_env"]
     api_key = os.environ.get(key_env) if key_env else None
 
-    # Budget defaults: live detection only, no registry of assumed values.
+    # Budget provenance: explicit pins win; otherwise the last-resort
+    # registry applies instantly at load (no network, startup stays
+    # fast); live server values upgrade it later via _autosize_budget.
     # NOTE: explicitness is checked against raw (the user file), not merged:
     # merged always contains DEFAULTS keys, so `in merged` is True even
-    # when the user set nothing. Unset budgets keep the numeric defaults
-    # (100k/80k) purely as an unconfigured fallback — no network probe here
-    # (startup stays fast); live detection runs on retarget via
-    # _autosize_budget. Anthropic/OpenAI/NVIDIA clouds that expose nothing
-    # honestly stay at default until the user sets budget_hard.
+    # when the user set nothing.
     budget_hard_explicit = "budget_hard" in raw
     budget_soft_explicit = "budget_soft" in raw
     budget_hard = int(merged.get("budget_hard", 100_000))
     budget_soft = int(merged.get("budget_soft", 80_000))
-    if budget_hard_explicit and not budget_soft_explicit:
-        budget_soft = int(budget_hard * 0.8)
+    budget_source = "default"
+    if budget_hard_explicit:
+        budget_source = "explicit"
+        if not budget_soft_explicit:
+            budget_soft = int(budget_hard * 0.8)
+    elif not budget_soft_explicit:
+        detected = get_model_context_window(merged.get("model"))
+        if detected is not None:
+            budget_hard = detected
+            budget_soft = int(detected * 0.8)
+            budget_source = "registry"
 
     return Config(
         provider=merged.get("provider", "openai"),
@@ -450,6 +521,7 @@ def load_config(path: str | Path | None = None,
         # If user explicitly set budget, don't auto-update on model switch
         budget_hard_auto=not budget_hard_explicit,
         budget_soft_auto=not budget_soft_explicit,
+        budget_source=budget_source,
         sessions_dir=merged.get("sessions_dir"),
         api_key=api_key,
         approval_timeout=int(merged.get("approval_timeout", 120)),

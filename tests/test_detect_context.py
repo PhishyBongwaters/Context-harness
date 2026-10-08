@@ -142,6 +142,33 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual(loop.budget.hard, 50_000)  # untouched
         self.assertEqual(loop.budget.soft, int(50_000 * 0.8))
 
+    def test_live_beats_registry(self):
+        # gpt-5 is in the registry (400k) but a live value must win.
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop()
+        cfg.model = "gpt-5"
+        with patch.object(cli, "detect_context_window",
+                          return_value=135168) as det:
+            source = cli._autosize_budget(cfg, loop, "gpt-5")
+        det.assert_called_once()
+        self.assertEqual(source, "live")
+        self.assertEqual(cfg.budget_source, "live")
+        self.assertEqual(cfg.budget_hard, 135168)
+
+    def test_registry_fallback_when_live_exposes_nothing(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop()
+        cfg.model = "gpt-5"
+        with patch.object(cli, "detect_context_window",
+                          return_value=None):
+            source = cli._autosize_budget(cfg, loop, "gpt-5")
+        self.assertEqual(source, "registry")
+        self.assertEqual(cfg.budget_source, "registry")
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (400_000, 320_000))
+        self.assertEqual((loop.budget.hard, loop.budget.soft),
+                         (400_000, 320_000))
+
     def test_none_no_reset_by_default(self):
         from harness import __main__ as cli
         cfg, loop = self._cfg_loop(budget_hard=135168,
@@ -201,10 +228,21 @@ class TestBudgetChangeLines(unittest.TestCase):
     def test_live_change(self):
         from harness import __main__ as cli
         cfg = self._cfg(135168, int(135168 * 0.8))
-        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m")
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m",
+                                         source="live")
         self.assertEqual(len(lines), 1)
         self.assertIn("135,168", lines[0])
         self.assertNotIn("no live window", lines[0])
+        self.assertNotIn("registry", lines[0])
+
+    def test_registry_change_is_labeled_fallback(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(400_000, 320_000)
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "gpt-5",
+                                         source="registry")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("registry fallback", lines[0])
+        self.assertIn("400,000", lines[0])
 
     def test_reset_to_default_reports_undetected(self):
         from harness import __main__ as cli
@@ -233,6 +271,47 @@ class TestBudgetChangeLines(unittest.TestCase):
         cfg = self._cfg(50_000, 40_000, auto=False)
         self.assertEqual(
             cli._budget_change_lines(cfg, (50_000, 40_000), "m"), [])
+
+
+class TestLoadConfigSource(unittest.TestCase):
+    """load_config labels budget provenance; registry applies offline."""
+
+    def _load(self, raw):
+        import json
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "config.json").write_text(json.dumps(raw))
+        import os
+        os.environ["OPENAI_API_KEY"] = "dummy"
+        from harness.config import load_config
+        return load_config(path=tmp / "config.json")
+
+    def test_registry_source(self):
+        cfg = self._load({"model": "gpt-5",
+                          "base_url": "https://api.openai.com/v1",
+                          "api_key_env": "OPENAI_API_KEY"})
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (400_000, 320_000))
+        self.assertEqual(cfg.budget_source, "registry")
+        self.assertTrue(cfg.budget_hard_auto)
+
+    def test_explicit_source(self):
+        cfg = self._load({"model": "gpt-5",
+                          "base_url": "https://api.openai.com/v1",
+                          "api_key_env": "OPENAI_API_KEY",
+                          "budget_hard": 12345})
+        self.assertEqual(cfg.budget_hard, 12345)
+        self.assertEqual(cfg.budget_source, "explicit")
+        self.assertFalse(cfg.budget_hard_auto)
+
+    def test_unknown_model_default_source(self):
+        cfg = self._load({"model": "some-future-model-99",
+                          "base_url": "https://api.openai.com/v1",
+                          "api_key_env": "OPENAI_API_KEY"})
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (100_000, 80_000))
+        self.assertEqual(cfg.budget_source, "default")
 
 
 class TestStartupProbe(unittest.TestCase):

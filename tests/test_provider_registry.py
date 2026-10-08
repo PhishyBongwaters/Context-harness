@@ -211,8 +211,17 @@ class TestProviderOverride(unittest.TestCase):
         self._saved = dict(os.environ)
         os.environ["OPENAI_API_KEY"] = "k-openai"
         os.environ["NVIDIA_API_KEY"] = "k-nvidia"
+        # retarget_loop persists the selection: redirect the config path
+        # to temp so tests never rewrite the developer's real config.
+        self._tmp = tempfile.TemporaryDirectory()
+        self._cfg_patch = mock.patch.object(
+            cli, "config_path",
+            return_value=Path(self._tmp.name) / "config.json")
+        self._cfg_patch.start()
 
     def tearDown(self):
+        self._cfg_patch.stop()
+        self._tmp.cleanup()
         os.environ.clear()
         os.environ.update(self._saved)
 

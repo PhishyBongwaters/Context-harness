@@ -241,9 +241,10 @@ def session_header_line(cfg, session: Session, totals=None,
         life = (f" | lifetime in {totals['input']:,} "
                 f"out {totals['output']:,}")
     proj = f" project={project}" if project else ""
+    src = getattr(cfg, "budget_source", "default")
     return (f"[session {session.id}{proj}] provider={cfg.provider} "
             f"model={cfg.model} "
-            f"budget={cfg.budget_hard:,}{using}{life} "
+            f"budget={cfg.budget_hard:,} [{src}]{using}{life} "
             f"ctx={session.context.path}")
 
 
@@ -595,29 +596,36 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
 
 
 def _autosize_budget(cfg, loop, model: str | None,
-                     timeout: int = 10, reset: bool = False) -> None:
+                     timeout: int = 10, reset: bool = False) -> str | None:
     """Auto-size budget from live server values, unless user set it.
 
-    Uses budget_hard_auto/budget_soft_auto flags (not == default checks)
-    so repeated model switches keep updating auto-detected budgets.
-    Live only — no registry. detect_context_window covers llama.cpp
-    (/v1/models meta.n_ctx, /props), vLLM (max_model_len), LM Studio
-    (max_context_length + native REST), Ollama native (/api/show),
-    Anthropic (max_input_tokens). APIs exposing nothing (OpenAI, NVIDIA
-    cloud) yield None: with reset=False the budget is left alone (startup
-    probes must not clobber); with reset=True (provider/model switch)
-    auto budgets fall back to the built-in defaults so a previous
-    model's window never sticks. Pinned budgets are never touched.
+    Chain: live server API first, last-resort registry second
+    (get_model_context_window), built-in defaults last. Uses
+    budget_hard_auto/budget_soft_auto flags (not == default checks) so
+    repeated model switches keep updating auto-detected budgets.
+    Returns the winning source ("live"/"registry") or None when nothing
+    was detected (or nothing is auto). With reset=True (provider/model
+    switch) undetected auto budgets fall back to defaults so a previous
+    model's window never sticks; with reset=False (startup probes) they
+    are left alone. Pinned budgets are never touched. cfg.budget_source
+    always reflects the current values.
     """
     try:
         kind = _resolved_kind(cfg)
         window = detect_context_window(cfg.base_url, model, cfg.api_key,
                                        kind=kind, timeout=timeout)
+        source = "live"
+        if not window:
+            from .config import get_model_context_window
+            window = get_model_context_window(model)
+            source = "registry"
         if window:
+            applied = False
             if getattr(cfg, "budget_hard_auto", True):
                 cfg.budget_hard = window
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.hard = window
+                applied = True
             if getattr(cfg, "budget_soft_auto", True):
                 if getattr(cfg, "budget_hard_auto", True):
                     new_soft = int(window * 0.8)
@@ -627,6 +635,11 @@ def _autosize_budget(cfg, loop, model: str | None,
                 cfg.budget_soft = new_soft
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.soft = new_soft
+                applied = True
+            if applied:
+                cfg.budget_source = source
+                return source
+            return None
         elif reset:
             # Undetectable model on a switch: fall back so the previous
             # model's window never sticks around enforcing the wrong
@@ -639,22 +652,33 @@ def _autosize_budget(cfg, loop, model: str | None,
                 cfg.budget_soft = int(cfg.budget_hard * 0.8)
                 if hasattr(loop, "budget") and loop.budget:
                     loop.budget.soft = cfg.budget_soft
+            if (getattr(cfg, "budget_hard_auto", True)
+                    or getattr(cfg, "budget_soft_auto", True)):
+                cfg.budget_source = "default"
     except Exception:
         pass
+    return None
 
 
-def _budget_change_lines(cfg, old: tuple, model: str | None) -> list[str]:
+def _budget_change_lines(cfg, old: tuple, model: str | None,
+                         source: str | None = None) -> list[str]:
     """Honest one-liners describing a budget change (or lack of one).
 
-    Live values get a live line; auto budgets sitting on the built-in
-    defaults get an undetected line (never pose a default as detected);
-    unchanged live values get nothing. Pinned budgets stay silent.
+    Live values get a live line; registry fallbacks get a labeled
+    fallback line (never pose a guess as detected); auto budgets sitting
+    on the built-in defaults get an undetected line; unchanged live
+    values get nothing. Pinned budgets stay silent.
     """
     new = (cfg.budget_hard, cfg.budget_soft)
     auto = (getattr(cfg, "budget_hard_auto", True)
             or getattr(cfg, "budget_soft_auto", True))
-    if (new == (DEFAULTS["budget_hard"], DEFAULTS["budget_soft"])
-            and auto):
+    if not auto:
+        return []
+    if source == "registry" and new != old:
+        return [f"[budget] registry fallback for model={model} (API "
+                f"exposes no window): "
+                f"hard={cfg.budget_hard:,} soft={cfg.budget_soft:,}"]
+    if (new == (DEFAULTS["budget_hard"], DEFAULTS["budget_soft"])):
         return [f"[budget] no live window for model={model} "
                 f"(using unconfigured default; set budget_hard "
                 f"explicitly)"]
@@ -1071,7 +1095,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.model = model
             except Exception:
                 pass
-            lines = _budget_change_lines(cfg, old, model)
+            lines = _budget_change_lines(
+                cfg, old, model,
+                cfg.budget_source
+                if cfg.budget_source in ("live", "registry") else None)
             lines.append(_tui_header())
             return lines
 
@@ -1087,7 +1114,10 @@ def main(argv: list[str] | None = None) -> int:
                 return []
             old = (cfg.budget_hard, cfg.budget_soft)
             _autosize_budget(cfg, box["loop"], cfg.model)
-            lines = _budget_change_lines(cfg, old, cfg.model)
+            lines = _budget_change_lines(
+                cfg, old, cfg.model,
+                cfg.budget_source
+                if cfg.budget_source in ("live", "registry") else None)
             if (cfg.budget_hard, cfg.budget_soft) != old:
                 lines.append(_tui_header())
             return lines
