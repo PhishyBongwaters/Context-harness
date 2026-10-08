@@ -142,14 +142,38 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual(loop.budget.hard, 50_000)  # untouched
         self.assertEqual(loop.budget.soft, int(50_000 * 0.8))
 
-    def test_none_keeps_defaults(self):
+    def test_none_no_reset_by_default(self):
         from harness import __main__ as cli
-        cfg, loop = self._cfg_loop()
+        cfg, loop = self._cfg_loop(budget_hard=135168,
+                                   budget_soft=int(135168 * 0.8))
         with patch.object(cli, "detect_context_window",
                           return_value=None):
-            cli._autosize_budget(cfg, loop, "gpt-5")
+            cli._autosize_budget(cfg, loop, "m")
+        self.assertEqual((cfg.budget_hard, cfg.budget_soft),
+                         (135168, int(135168 * 0.8)))
+
+    def test_none_with_reset_falls_back_to_defaults(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop(budget_hard=135168,
+                                   budget_soft=int(135168 * 0.8))
+        with patch.object(cli, "detect_context_window",
+                          return_value=None):
+            cli._autosize_budget(cfg, loop, "cloud-model", reset=True)
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (100_000, 80_000))
+        self.assertEqual((loop.budget.hard, loop.budget.soft),
+                         (100_000, 80_000))
+
+    def test_reset_keeps_pinned_hard_soft_tracks_it(self):
+        from harness import __main__ as cli
+        cfg, loop = self._cfg_loop(budget_hard=50_000,
+                                   budget_soft=int(135168 * 0.8),
+                                   budget_hard_auto=False)
+        with patch.object(cli, "detect_context_window",
+                          return_value=None):
+            cli._autosize_budget(cfg, loop, "cloud-model", reset=True)
+        self.assertEqual(cfg.budget_hard, 50_000)
+        self.assertEqual(cfg.budget_soft, int(50_000 * 0.8))
 
     def test_passes_kind_for_anthropic(self):
         from harness import __main__ as cli
@@ -163,6 +187,52 @@ class TestAutosizeBudget(unittest.TestCase):
         _, kwargs = det.call_args
         self.assertEqual(kwargs.get("kind"), "anthropic")
         self.assertEqual(cfg.budget_hard, 200_000)
+
+
+class TestBudgetChangeLines(unittest.TestCase):
+    def _cfg(self, hard, soft, auto=True):
+        from harness.config import Config
+        return Config(provider="openai", model="m",
+                      base_url="http://localhost:8080/v1",
+                      api_key_env="OPENAI_API_KEY",
+                      budget_hard=hard, budget_soft=soft,
+                      budget_hard_auto=auto, budget_soft_auto=auto)
+
+    def test_live_change(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(135168, int(135168 * 0.8))
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("135,168", lines[0])
+        self.assertNotIn("no live window", lines[0])
+
+    def test_reset_to_default_reports_undetected(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(100_000, 80_000)
+        lines = cli._budget_change_lines(
+            cfg, (135168, int(135168 * 0.8)), "cloud-m")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no live window", lines[0])
+
+    def test_unchanged_live_is_silent(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(135168, int(135168 * 0.8))
+        self.assertEqual(
+            cli._budget_change_lines(
+                cfg, (135168, int(135168 * 0.8)), "m"), [])
+
+    def test_unchanged_defaults_reports_undetected(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(100_000, 80_000)
+        lines = cli._budget_change_lines(cfg, (100_000, 80_000), "m")
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no live window", lines[0])
+
+    def test_pinned_stays_silent(self):
+        from harness import __main__ as cli
+        cfg = self._cfg(50_000, 40_000, auto=False)
+        self.assertEqual(
+            cli._budget_change_lines(cfg, (50_000, 40_000), "m"), [])
 
 
 class TestStartupProbe(unittest.TestCase):
