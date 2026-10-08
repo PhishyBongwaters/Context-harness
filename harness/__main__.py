@@ -829,27 +829,31 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     return loop
 
 
-def _restore_session_model(box: dict, cfg, args) -> None:
+def _restore_session_model(box: dict, cfg, args) -> bool:
     """If the session saved a provider/model, retarget to it.
 
     Called after a session is opened so reloading restores the last
-    used model. No-op if nothing saved or already current.
+    used model. No-op if nothing saved or already current. Returns True
+    when it retargeted (callers refresh the header: attach() paints
+    before this runs, so without a refresh the display shows the
+    pre-restore budgets).
     """
     sess = box.get("session")
     if sess is None or box.get("loop") is None:
-        return
+        return False
     try:
         provider, model = _load_session_model(sess)
     except Exception:
-        return
+        return False
     if not provider or not model:
-        return
+        return False
     if provider == cfg.provider and model == cfg.model:
-        return
+        return False
     try:
         retarget_loop(box, cfg, args, provider, model)
     except Exception:
-        pass
+        return False
+    return True
 
 
 def _enable_windows_ansi() -> None:
@@ -1039,7 +1043,16 @@ def main(argv: list[str] | None = None) -> int:
         box["session"] = _open_session(cfg, None, _workdir(args))
     stamp(box["session"])
     attach()
-    _restore_session_model(box, cfg, args)
+    if _restore_session_model(box, cfg, args):
+        # Restore retargeted behind attach()'s back: repaint so the
+        # header shows the restored model's budgets, not stale ones.
+        if is_tui:
+            box["tui_session_header"] = session_header_line(
+                _disp_cfg(), box["session"],
+                box["tracker"].totals, box["project"])
+        else:
+            _show_session(_disp_cfg(), box["session"],
+                          box["tracker"].totals, box["project"])
 
     def do_turn(text: str) -> int:
         try:
@@ -1064,7 +1077,14 @@ def main(argv: list[str] | None = None) -> int:
         box["session"] = _open_session(cfg, sid, _workdir(args))
         stamp(box["session"])
         attach()
-        _restore_session_model(box, cfg, args)
+        if _restore_session_model(box, cfg, args):
+            if is_tui:
+                box["tui_session_header"] = session_header_line(
+                    _disp_cfg(), box["session"],
+                    box["tracker"].totals, box["project"])
+            else:
+                _show_session(_disp_cfg(), box["session"],
+                              box["tracker"].totals, box["project"])
 
     def switch_project(name: str) -> None:
         proj = resolve_project(name)

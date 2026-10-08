@@ -149,6 +149,79 @@ class TestRetargetLoop(unittest.TestCase):
         self.assertEqual(commands.local_lines("bogus", ""), [hint])
 
 
+class TestRestoreSessionModel(unittest.TestCase):
+    """_restore_session_model reports whether it retargeted (callers
+    repaint the header only then; attach() paints pre-restore)."""
+
+    def setUp(self):
+        self._saved = dict(os.environ)
+        os.environ["OPENAI_API_KEY"] = "k-openai"
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._saved)
+
+    def _session_with_meta(self, meta):
+        import json
+        from harness.loop import Session
+        d = tempfile.mkdtemp()
+        sdir = Path(d) / "s1"
+        sdir.mkdir(exist_ok=True)
+        if meta is not None:
+            (sdir / "meta.json").write_text(json.dumps(meta))
+        return Session(id="s1", dir=sdir, workdir=d)
+
+    def _patched(self):
+        from unittest import mock
+        tmp = tempfile.TemporaryDirectory()
+        return (mock.patch.object(
+            cli, "config_path",
+            return_value=Path(tmp.name) / "config.json"),
+            mock.patch.object(cli, "detect_context_window",
+                              return_value=None),
+            tmp)
+
+    def test_retargets_and_reports_true(self):
+        cfg = make_cfg(provider="openai", model="gpt-5",
+                       base_url="http://localhost:1234/v1",
+                       api_key="k-openai")
+        box = {"session": self._session_with_meta(
+            {"provider": "openai", "model": "m2"}),
+            "loop": make_box(cfg)["loop"]}
+        cfg_patch, det_patch, tmp = self._patched()
+        with cfg_patch, det_patch:
+            self.assertTrue(
+                cli._restore_session_model(box, cfg, make_args()))
+        tmp.cleanup()
+        self.assertEqual((cfg.provider, cfg.model), ("openai", "m2"))
+
+    def test_noop_when_current_reports_false(self):
+        cfg = make_cfg(provider="openai", model="gpt-5",
+                       base_url="http://localhost:1234/v1",
+                       api_key="k-openai")
+        box = {"session": self._session_with_meta(
+            {"provider": "openai", "model": "gpt-5"}),
+            "loop": make_box(cfg)["loop"]}
+        cfg_patch, det_patch, tmp = self._patched()
+        with cfg_patch, det_patch:
+            self.assertFalse(
+                cli._restore_session_model(box, cfg, make_args()))
+        tmp.cleanup()
+        self.assertEqual((cfg.provider, cfg.model), ("openai", "gpt-5"))
+
+    def test_noop_without_meta_reports_false(self):
+        cfg = make_cfg(provider="openai", model="gpt-5",
+                       base_url="http://localhost:1234/v1",
+                       api_key="k-openai")
+        box = {"session": self._session_with_meta(None),
+               "loop": make_box(cfg)["loop"]}
+        cfg_patch, det_patch, tmp = self._patched()
+        with cfg_patch, det_patch:
+            self.assertFalse(
+                cli._restore_session_model(box, cfg, make_args()))
+        tmp.cleanup()
+
+
 class TestPickerHelpers(unittest.TestCase):
     def test_format_and_parse(self):
         from harness.tui.app import (format_provider_row, format_session_row,
