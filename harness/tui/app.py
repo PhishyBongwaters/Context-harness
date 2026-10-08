@@ -913,8 +913,14 @@ if _HAS:
 
         def _tick_status(self) -> None:
             if self._turn_start is not None:
+                try:
+                    gauge = self.query_one("#gauge", BudgetGauge)
+                    w = gauge.size.width or 80
+                except Exception:
+                    w = 80
                 self._set_status(format_status(
-                    self._phase, time.monotonic() - self._turn_start))
+                    self._phase, time.monotonic() - self._turn_start,
+                    width=w))
 
         # Event kinds that are system instrumentation, not conversation:
         # they go to the top SystemPanel, never the chat transcript.

@@ -327,19 +327,27 @@ def budget_bar_status(data) -> str:
     return "ok"
 
 
-def format_status(phase: str | None, elapsed_s: float) -> str:
-    """thinking/pruning Ns elapsed with installer-style animation.
+def format_status(phase: str | None, elapsed_s: float,
+                  width: int | None = None) -> str:
+    """thinking/pruning indicator with installer-style animation.
 
-    Uses growing block characters (▁▂▃▄▅▆▇█) cycling like the old
-    Windows installer — a clear "working" indicator. Five blocks in
-    a wave sequence for a richer animation.
+    With width: full-width TNG-style bar, no text — just animated
+    blocks in a wave across the entire line.
+    Without width: compact "▁▂▃▄▅ thinking Ns" for tests/logs.
     """
     label = "pruning" if phase == "prune" else "thinking"
-    # Installer blocks: grow then shrink, 14 frames, 4 fps
     frames = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
               "▇", "▆", "▅", "▄", "▃", "▂"]
+    if width and width > 0:
+        # Full-width wave: each position offset for moving effect
+        base = int(elapsed_s * 6)
+        bar = "".join(
+            frames[(base + i * 2) % len(frames)]
+            for i in range(width)
+        )
+        return bar
+    # Compact form for tests/logs
     base = int(elapsed_s * 4)
-    # Five blocks in sequence, offset for wave effect
     blocks = []
     for i in range(5):
         f = frames[(base + i * 3) % len(frames)]
@@ -694,7 +702,13 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._refresh_line()
 
         def _refresh_line(self) -> None:
-            self.update(gauge_line(self._request, self._status))
+            # If status is a full-width bar (TNG thinking animation),
+            # show it alone. Otherwise show gauge + status.
+            if self._status and len(self._status) > 40 and "thinking" not in self._status and "pruning" not in self._status:
+                # Full-width animation bar, no gauge
+                self.update(self._status)
+            else:
+                self.update(gauge_line(self._request, self._status))
 
     class BudgetBar(Static):
         """One-line budget readout; warn/over tint via CSS classes."""
