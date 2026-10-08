@@ -592,6 +592,30 @@ def _candidate_for(cfg, name: str) -> SimpleNamespace:
                if getattr(cfg, "provider", None) == name else ""))
 
 
+def _autosize_budget(cfg, loop, model: str | None) -> None:
+    """Auto-size budget from detected context window, unless user set it.
+
+    (Default 100k/80k = not explicitly set; any other value = user's choice.)
+    Detection order: live server API (for llama.cpp etc.) -> registry -> default.
+    """
+    try:
+        window = detect_context_window(cfg.base_url, model, cfg.api_key)
+        if not window:
+            window = get_model_context_window(model)
+        if window:
+            if cfg.budget_hard == 100_000:
+                cfg.budget_hard = window
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.hard = window
+            if cfg.budget_soft == 80_000:
+                new_soft = int(window * 0.8)
+                cfg.budget_soft = new_soft
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.soft = new_soft
+    except Exception:
+        pass
+
+
 def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     """Retarget the live loop to provider/model without rebuilding.
 
@@ -664,25 +688,7 @@ def retarget_loop(box: dict, cfg, args, provider: str, model: str):
     loop = box["loop"]
     loop.provider = new_main
     loop.prune_provider = prune
-    # Auto-size budget from model registry, unless user explicitly set it.
-    # (Default 100k/80k = not explicitly set; any other value = user's choice.)
-    # Detection order: live server API (for llama.cpp etc.) -> registry -> default.
-    try:
-        window = detect_context_window(cfg.base_url, model, cfg.api_key)
-        if not window:
-            window = get_model_context_window(model)
-        if window:
-            if cfg.budget_hard == 100_000:
-                cfg.budget_hard = window
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.hard = window
-            if cfg.budget_soft == 80_000:
-                new_soft = int(window * 0.8)
-                cfg.budget_soft = new_soft
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.soft = new_soft
-    except Exception:
-        pass
+    _autosize_budget(cfg, loop, model)
     # Persist the selection (name or kind) so the file matches live
     # state -- otherwise the next launch resurrects the old endpoint
     # and the switch looks "stuck". Best-effort, never fails the turn.
@@ -893,6 +899,12 @@ def main(argv: list[str] | None = None) -> int:
     stamp(box["session"])
     attach()
     _restore_session_model(box, cfg, args)
+    # Auto-size budget on startup (not just on retarget) — detection must
+    # run for the initial model too, otherwise budget stays at 100k/80k defaults.
+    try:
+        _autosize_budget(cfg, box["loop"], cfg.model)
+    except Exception:
+        pass
 
     def do_turn(text: str) -> int:
         try:
