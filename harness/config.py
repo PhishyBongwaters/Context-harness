@@ -140,24 +140,32 @@ def detect_context_window(base_url: str | None, model: str | None,
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    # 1. Try /v1/models for meta.n_ctx
+    # 1. Try /v1/models for meta.n_ctx — check ALL models, not just
+    # the matched one. If the requested model isn't found (or matching
+    # fails), fall back to any model with meta.n_ctx. All harnesses
+    # live-detect from meta; don't let a matching miss block it.
     try:
         r = _req.Request(f"{base}/v1/models", headers=headers)
         with _req.urlopen(r, timeout=timeout) as resp:
             data = _json.loads(resp.read().decode("utf-8", "replace"))
         models = data.get("data") or []
-        # Find matching model, or use first if only one
-        target = None
+        # Build ordered candidate list: matched model first, then rest
+        candidates = []
         if model:
             ml = model.lower()
             for m in models:
                 mid = str(m.get("id", ""))
                 if ml in mid.lower() or mid.lower() in ml:
-                    target = m
+                    candidates.append(m)
                     break
-        if target is None and len(models) == 1:
-            target = models[0]
-        if target:
+        # Add all models as fallbacks (dedup by id)
+        seen = {str(m.get("id", "")) for m in candidates}
+        for m in models:
+            if str(m.get("id", "")) not in seen:
+                candidates.append(m)
+        if not candidates and len(models) == 1:
+            candidates = models
+        for target in candidates:
             meta = target.get("meta") or {}
             n_ctx = meta.get("n_ctx")
             if n_ctx:
