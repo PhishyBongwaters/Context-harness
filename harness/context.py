@@ -10,6 +10,7 @@ Section format (one header line per section):
     ## user
     ## assistant
     ## tool <tool_call_id>
+    ## sat <name>          assembled satellite content (T3)
 
 An assistant section may end with a ```tool-calls fenced JSON block listing
 that reply's tool calls. Anything before the first ## header is a preamble:
@@ -87,7 +88,8 @@ Sections start with a `## ` header: `## user`, `## assistant`,
 `## tool <id>`. Keep those headers parseable and the transcript stays yours.
 """
 
-_HEADER_RE = re.compile(r"^##[ \t]+(user|assistant|tool)(?:[ \t]+(\S+))?.*$")
+_HEADER_RE = re.compile(
+    r"^##[ \t]+(user|assistant|tool|sat)(?:[ \t]+(\S+))?.*$")
 _FENCE_OPEN = "```tool-calls"
 _FENCE_CLOSE = "```"
 
@@ -265,6 +267,11 @@ def parse_transcript(text: str) -> list[dict]:
                 messages.append({"role": "tool", "tool_call_id": label,
                                  "content": body})
             # orphan tool result: dropped, never sent
+        elif role == "sat":
+            # Assembled satellite content (T3): satellite files wrapped
+            # by the harness as `## sat <name>`. Sent as user-role so
+            # the model sees curated state as conversation context.
+            messages.append({"role": "user", "content": body})
     return messages
 
 
