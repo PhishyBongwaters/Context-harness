@@ -227,6 +227,9 @@ class Loop:
                            if t["name"] in allowed]
         # One subagent slot per parent loop (spec: one at a time).
         self._subagent: dict | None = None
+        # Completed subagents, drained into history.md at episode close
+        # so the model retains a durable record of what it delegated.
+        self._completed_subagents: list[dict] = []
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -411,6 +414,16 @@ class Loop:
                        f"archive: archive/{dest.name}\n"
                        f"turns: {tag}-{tag}\n"
                        f"tool_calls: {tool_calls}\n")
+            # Durable subagent record: the model must remember what it
+            # delegated, or it concludes it fabricated the results.
+            if self._completed_subagents:
+                lines = ["subagents:"]
+                for c in self._completed_subagents:
+                    lines.append(
+                        f"  - {c['id']}: \"{c['task']}\" -> {c['status']} "
+                        f"({c['result_path']})")
+                pointer += "\n".join(lines) + "\n"
+                self._completed_subagents.clear()
             self._append_source(session, "history.md", pointer)
             # H1: the closing reply joins history, stamped. Empty
             # replies record nothing.
@@ -667,6 +680,14 @@ class Loop:
         if status == "failed":
             out["error"] = ("see result.md; for the full trace read "
                             f"{slot['sdir']}/history.md")
+        # Durable record: drained into history.md at episode close.
+        self._completed_subagents.append({
+            "id": slot["id"],
+            "task": (slot["task"].splitlines() or [""])[0][:120],
+            "status": status,
+            "result_path": slot["result_path"],
+            "session_dir": str(slot["sdir"]),
+        })
         return json.dumps(out)
 
     def _cancel_subagent(self) -> str:
