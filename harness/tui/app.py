@@ -155,9 +155,13 @@ if _HAS:
                     ("escape", "deny", "Deny")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
+               "@keyframes approval-pulse { "
+               "0% { opacity: 1; } 50% { opacity: 0.88; } "
+               "100% { opacity: 1; } } "
                "#approval-box { width: 62; height: auto; "
                "border: thick $primary; "
-               "background: $surface; padding: 1 2; } "
+               "background: $surface; padding: 1 2; "
+               "animation: approval-pulse 1.5s infinite; } "
                "#approval-title { text-style: bold; } "
                "#approval-count { color: $warning; }")
 
@@ -748,6 +752,7 @@ if _HAS:
             self._turn_running = False
             self._turn_count = 0
             self._budget_pct: float | None = None
+            self._budget_status: str = "ok"
             self._phase = "main"
             self._debug_visible = False
 
@@ -935,6 +940,7 @@ if _HAS:
             except Exception:
                 pass
             status = budget_bar_status(data)
+            self._budget_status = status
             for w in (gauge, bar):
                 for cls in ("warn", "over"):
                     w.remove_class(cls)
@@ -961,6 +967,12 @@ if _HAS:
             entries = self._bridge.drain()
             shown: list = []
             for kind, data, _line in entries:
+                if kind == "episode-close":
+                    try:
+                        self.query_one("#lcars-header",
+                                       LcarsHeader).flash_episode()
+                    except Exception:
+                        pass
                 if kind == "request" and isinstance(data, dict) \
                         and "tokens_est" in data:
                     # The gauge + detail line own this info in the TUI;
@@ -999,6 +1011,18 @@ if _HAS:
                 header.set_stats(turns=self._turn_count,
                                  budget_pct=self._budget_pct,
                                  running=self._turn_running)
+                # Blinking alert pill: approval modal open wins,
+                # budget-over second.
+                alert = None
+                try:
+                    if isinstance(self.screen, ApprovalScreen):
+                        alert = "approval"
+                except Exception:
+                    pass
+                if alert is None and getattr(
+                        self, "_budget_status", "ok") == "over":
+                    alert = "over"
+                header.set_alert(alert)
             except Exception:
                 pass
 

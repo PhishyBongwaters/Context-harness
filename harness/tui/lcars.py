@@ -10,6 +10,8 @@ need the textual extra and skip cleanly without it.
 """
 from __future__ import annotations
 
+import time
+
 # Classic TNG LCARS palette (hex).
 LCARS = {
     "orange":     "#FF9900",
@@ -36,38 +38,64 @@ def _dim(hex_color: str, factor: float = 0.82) -> str:
 def header_segments(title: str, width: int, phase: int = 0,
                     turns: int = 0, budget_pct: float | None = None,
                     running: bool = False, spin: int = 0,
+                    alert: str | None = None, flash: bool = False,
+                    turn_flash: bool = False, marquee: int = 0,
                     ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS header bar.
 
     Brand pill left, title pill next, live stats right: turn count,
     token-budget percent, and a diamond that becomes a spinner while
     the agent runs. Total text width never exceeds `width`.
+
+    Micro-animations: `alert` ("approval"/"over") shows a blinking
+    pill, `flash` lights the diamond (episode close), `turn_flash`
+    brightens the turn pill, and `marquee` scrolls overlong titles.
     """
     segs: list[tuple[str, str, str]] = []
     segs.append((" LCARS ", LCARS["orange"], _FG))
     segs.append((" ", LCARS["black"], _FG))
 
-    max_title = max(8, width - 48)
-    t = title if len(title) <= max_title else title[:max_title - 1] + "\u2026"
+    max_title = max(8, width - 48 - (4 if alert else 0))
+    if len(title) > max_title:
+        # Marquee: slide a window through the title instead of
+        # truncating; wraps around.
+        span = len(title) - max_title + 1
+        start = marquee % span
+        t = title[start:start + max_title]
+    else:
+        t = title
     segs.append((f" {t} ", LCARS["mauve"], _FG))
 
+    turn_bg = LCARS["ice"] if turn_flash else LCARS["periwinkle"]
     turn_txt = f" T{turns} " if turns else " -- "
     if budget_pct is None:
         budget_txt = " -- "
     else:
         budget_txt = f" {budget_pct:.0f}% "
-    if running:
+    if flash:
+        spin_txt = " \u25c6 "
+        accent = LCARS["ice"]
+    elif running:
         frames = (" \u25d0 ", " \u25d1 ", " \u25d2 ", " \u25d3 ")
         spin_txt = frames[spin % len(frames)]
         accent = LCARS["orange"]
     else:
         spin_txt = " \u25c6 "
         accent = _dim(LCARS["orange"]) if phase % 2 else LCARS["orange"]
-    right = [(turn_txt, LCARS["periwinkle"], _FG),
+    right = [(turn_txt, turn_bg, _FG),
              (" ", LCARS["black"], _FG),
              (budget_txt, LCARS["peach"], _FG),
              (" ", LCARS["black"], _FG),
              (spin_txt, accent, _FG)]
+    if alert:
+        # Blinking alert pill; always present (dim when "off") so the
+        # bar width never jumps between phases.
+        alert_color = (LCARS["orange"] if alert == "approval"
+                       else LCARS["red"])
+        if phase % 2:
+            alert_color = _dim(alert_color, 0.45)
+        right.append((" ", LCARS["black"], _FG))
+        right.append((" ! ", alert_color, _FG))
     used = sum(len(text) for text, _, _ in segs)
     right_w = sum(len(text) for text, _, _ in right)
     filler_w = max(1, width - used - right_w)
@@ -146,16 +174,39 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._budget_pct: float | None = None
             self._running = False
             self._spin = 0
+            self._alert: str | None = None
+            self._flash_until = 0.0
+            self._turn_flash_until = 0.0
+            self._marquee = 0
 
         def on_mount(self) -> None:
             self.set_interval(1.6, self._pulse)
+            self.set_interval(0.45, self._marquee_tick)
 
         def _pulse(self) -> None:
             self._phase ^= 1
             self.refresh()
 
+        def _marquee_tick(self) -> None:
+            # Only re-render when the title actually needs scrolling.
+            if len(self._title or "") > 40:
+                self._marquee += 1
+                self.refresh()
+
         def set_title(self, title: str) -> None:
             self._title = title or ""
+            self._marquee = 0
+            self.refresh()
+
+        def set_alert(self, alert: str | None) -> None:
+            """Blinking header pill: "approval", "over", or None."""
+            if self._alert != alert:
+                self._alert = alert
+                self.refresh()
+
+        def flash_episode(self) -> None:
+            """Brief bright diamond flash when an episode closes."""
+            self._flash_until = time.monotonic() + 1.2
             self.refresh()
 
         def set_stats(self, turns: int = 0,
@@ -165,6 +216,8 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             advance the spinner."""
             if running:
                 self._spin += 1
+            if turns > self._turns:
+                self._turn_flash_until = time.monotonic() + 1.0
             changed = (self._turns != turns
                        or self._budget_pct != budget_pct
                        or self._running != running)
@@ -176,10 +229,15 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
 
         def render(self) -> "Text":
             width = self.size.width or 80
+            now = time.monotonic()
             return _to_text(header_segments(
                 self._title, width, self._phase,
                 turns=self._turns, budget_pct=self._budget_pct,
-                running=self._running, spin=self._spin))
+                running=self._running, spin=self._spin,
+                alert=self._alert,
+                flash=now < self._flash_until,
+                turn_flash=now < self._turn_flash_until,
+                marquee=self._marquee))
 
     class LcarsPill(Static):
         """One clickable LCARS pill: key hint + label, runs an app action.
@@ -221,12 +279,13 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 yield LcarsPill(key, label, action, color)
 
 
-def lcars_gauge_text(data, width: int = 40):
+def lcars_gauge_text(data, width: int = 40, sweep: float | None = None):
     """LCARS-style context meter as Rich Text.
 
     Single orange bar whose length = fill percentage (TNG style),
     with dark text showing pct and totals. Returns Rich Text for
-    native Textual rendering.
+    native Textual rendering. `sweep` (0.0-1.0) draws a bright band
+    gliding across the bar — the idle shimmer.
     """
     try:
         from rich.text import Text
@@ -249,7 +308,18 @@ def lcars_gauge_text(data, width: int = 40):
     else:
         label = label.ljust(bar_len)
     # LCARS orange bar with black text
-    text = Text(label, style=Style(bgcolor=LCARS["orange"], color="black", bold=True))
+    text = Text()
+    if sweep is None:
+        text.append(label, style=Style(bgcolor=LCARS["orange"],
+                                       color="black", bold=True))
+    else:
+        # Bright band gliding across the bar (idle shimmer).
+        pos = int(sweep * max(1, len(label) - 2))
+        for i, ch in enumerate(label):
+            bg = (LCARS["ice"] if pos <= i < pos + 2
+                  else LCARS["orange"])
+            text.append(ch, style=Style(bgcolor=bg, color="black",
+                                        bold=True))
     # Fill remainder with empty (dark) if bar < width
     if bar_len < width:
         text.append(" " * (width - bar_len), style=Style(bgcolor="#1a1a1a"))

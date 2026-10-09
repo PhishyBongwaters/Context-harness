@@ -706,6 +706,18 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             super().__init__("", *a, **k)
             self._request = None
             self._status = ""
+            self._sweep = 0.0
+
+        def on_mount(self) -> None:
+            self.set_interval(0.12, self._sweep_tick)
+
+        def _sweep_tick(self) -> None:
+            # Idle shimmer: glide the bright band only when the
+            # thinking/pruning animation isn't owning the line.
+            if self._status:
+                return
+            self._sweep = (self._sweep + 0.05) % 1.0
+            self._refresh_line()
 
         def set_request(self, data) -> None:
             self._request = data
@@ -728,7 +740,9 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                     w = self.size.width or 40
                 except Exception:
                     pass
-                lcars_text = lcars_gauge_text(self._request, w)
+                sweep = None if self._status else self._sweep
+                lcars_text = lcars_gauge_text(self._request, w,
+                                              sweep=sweep)
                 if lcars_text and len(str(lcars_text).strip()):
                     # Append status if present (compact form)
                     if self._status:
