@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.context import (Budget, parse_transcript, render_tool,
-                               render_user)
+from harness.context import (Budget, parse_transcript, render_history_user,
+                               render_tool, render_user)
 from harness.loop import BudgetExceeded, Loop, Session, _estimate
 from harness.providers import MockProvider
 
@@ -61,23 +61,34 @@ class TestLoop(unittest.TestCase):
         self.assertTrue(any("unknown tool" in r for r in results))
 
     def _bloated_session(self):
-        # Valid transcript sections (bare text would be preamble -> 0 msgs).
+        # Bloat history.md (the model-curated source): 100 stamped
+        # sections. Valid sections, not bare text.
         s = make_session()
-        s.context.save("".join(render_user("x" * 200) for _ in range(100)))
+        big = "".join(render_history_user("x" * 200, i)
+                      for i in range(1, 101))
+        (s.dir / "history.md").write_text(big, encoding="utf-8")
         return s
+
+    def _curate_history_script(self, s):
+        # Janitor script: shrink history.md via a single edit.
+        hist = s.dir / "history.md"
+        big = hist.read_text(encoding="utf-8")
+        return [
+            {"content": None, "tool_calls": [
+                {"id": "p1", "name": "edit",
+                 "arguments": {"path": str(hist),
+                               "old_text": big,
+                               "new_text": render_history_user(
+                                   "fresh start", 1)}}]},
+            {"content": "PRUNED"},
+        ]
 
     def test_hard_budget_triggers_prune_then_resumes(self):
         # hard budget above the system prompt's own size but below the
-        # bloated transcript: prune turn runs, mock shrinks the file,
+        # bloated history: prune turn runs, mock curates the source,
         # turn resumes.
         s = self._bloated_session()
-        script = [
-            # prune turn: shrink the file
-            {"content": None, "tool_calls": [
-                {"id": "p1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("fresh start")}}]},
-            {"content": "PRUNED"},
+        script = self._curate_history_script(s) + [
             # resumed normal turn
             {"content": "all good"},
         ]
@@ -87,11 +98,12 @@ class TestLoop(unittest.TestCase):
         out = loop.run_turn(s, "hi")
         self.assertEqual(out, "all good")
         self.assertIn("prune", events)
-        self.assertIn("fresh start", s.context.load())
+        self.assertIn("fresh start",
+                      (s.dir / "history.md").read_text(encoding="utf-8"))
 
     def test_prune_failure_raises_loudly(self):
         s = self._bloated_session()
-        # mock never shrinks the file -> prune attempts exhaust
+        # mock never shrinks the sources -> prune attempts exhaust
         script = [{"content": "PRUNED"}] * 70
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
         with self.assertRaises(BudgetExceeded):
@@ -101,20 +113,15 @@ class TestLoop(unittest.TestCase):
         # The model says PRUNED without editing: the loop must nudge and
         # retry within the attempt, not burn the whole attempt on nothing.
         s = self._bloated_session()
-        script = [
-            {"content": "PRUNED"},
-            {"content": None, "tool_calls": [
-                {"id": "p1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("fresh start")}}]},
-            {"content": "PRUNED"},
+        script = [{"content": "PRUNED"}] + self._curate_history_script(s) + [
             {"content": "all good"},
         ]
         events = []
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000),
                     on_event=lambda k, v: events.append(k))
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
-        self.assertIn("fresh start", s.context.load())
+        self.assertIn("fresh start",
+                      (s.dir / "history.md").read_text(encoding="utf-8"))
 
     def test_model_edit_emits_context_diff(self):
         # An edit targeting a model-editable source (history.md)
@@ -176,8 +183,13 @@ class TestLoop(unittest.TestCase):
         seen = [m for m in loop2.provider.calls[0]["messages"]
                 if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
+        # T6: turn 2 assembles sats (3 user) + history (2 users) +
+        # scratch (assistant, tool, assistant). The trailing harness
+        # note is filtered above.
         self.assertEqual(roles,
-                         ["user", "assistant", "tool", "assistant", "user"])
+                         ["user", "user", "user",
+                          "user", "user",
+                          "assistant", "tool", "assistant"])
         tool_msgs = [m for m in seen if m["role"] == "tool"]
         self.assertIn("42", tool_msgs[0]["content"])
 
@@ -195,29 +207,27 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "original question"), "done")
+        # The denial lives in scratch (tool results); the assembled
+        # artifact picks it up on the next assembly.
+        scratch = (s.dir / "scratch.md").read_text(encoding="utf-8")
+        self.assertIn("DENIED", scratch)
+        self.assertIn("done", scratch)
         text = s.context.load()
-        self.assertIn("DENIED", text)
         self.assertIn("original question", text)
-        self.assertIn("done", text)
 
     def test_prune_turn_uses_janitor_provider(self):
         # Separate janitor model handles the prune turn; the main model
         # only sees the resumed normal turn.
         s = self._bloated_session()
         main = MockProvider([{"content": "all good"}])
-        janitor = MockProvider([
-            {"content": None, "tool_calls": [
-                {"id": "p1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("fresh start")}}]},
-            {"content": "PRUNED"},
-        ])
+        janitor = MockProvider(self._curate_history_script(s))
         loop = Loop(main, Budget(hard=2000, soft=1000),
                     prune_provider=janitor)
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         self.assertEqual(len(janitor.calls), 2)  # prune chats
         self.assertEqual(len(main.calls), 1)     # resumed normal chat
-        self.assertEqual(janitor.calls[0]["tools"], ["write", "edit"])
+        # Curation turns are edit-only now.
+        self.assertEqual(janitor.calls[0]["tools"], ["edit"])
 
     def test_model_edit_backs_up_context(self):
         # Model edits must snapshot too: every edit reversible via a
@@ -270,16 +280,20 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "hi"), "curated")
-        self.assertIn("DENIED", s.context.load())
-        self.assertIn("harness-owned", s.context.load())
-        # No backup: nothing changed (only the denial appended).
+        # The denial lives in scratch (tool results go there now).
+        scratch = (s.dir / "scratch.md").read_text(encoding="utf-8")
+        self.assertIn("DENIED", scratch)
+        self.assertIn("harness-owned", scratch)
+        # No backup: nothing changed.
         self.assertEqual(len(glob.glob(str(s.dir / "*.pre-edit-*.bak"))), 0)
-        self.assertTrue(s.context.load().startswith(before))
+        # history.md still holds the original user message, stamped.
+        history = (s.dir / "history.md").read_text(encoding="utf-8")
+        self.assertIn("## user t0001", history)
+        self.assertIn("hi", history)
 
     def test_noop_and_other_files_no_backup(self):
         # Edits elsewhere never mint a .bak, and identical edit is no-op.
         s = make_session()
-        s.context.save(render_user("stable"))
         script = [
             {"content": None, "tool_calls": [
                 {"id": "w2", "name": "write",
@@ -289,8 +303,9 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(glob.glob(str(s.dir / "context.pre-*.bak")), [])
-        self.assertIn("stable", s.context.load())
+        self.assertEqual(glob.glob(str(s.dir / "*.pre-*.bak")), [])
+        self.assertEqual((Path(s.workdir) / "elsewhere.txt")
+                         .read_text(encoding="utf-8"), "unrelated")
 
     def test_prune_provider_defaults_to_main(self):
         main = MockProvider([])
@@ -298,49 +313,52 @@ class TestLoop(unittest.TestCase):
         self.assertIs(loop.prune_provider, main)
 
     def test_prune_backs_up_context_first(self):
+        # T6: the pre-prune backup covers scratch.md (the working trace
+        # the deterministic ladder operates on).
         import glob
         s = self._bloated_session()
-        script = [
-            {"content": None, "tool_calls": [
-                {"id": "p1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("fresh start")}}]},
-            {"content": "PRUNED"},
+        scratch_p = s.dir / "scratch.md"
+        scratch_p.write_text("## assistant\nprior episode notes\n",
+                             encoding="utf-8")
+        script = self._curate_history_script(s) + [
             {"content": "all good"},
         ]
         loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
-        before = s.context.load()
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
-        baks = glob.glob(str(s.dir / "context.pre-prune-*.bak"))
+        baks = glob.glob(str(s.dir / "scratch.pre-prune-*.bak"))
         self.assertEqual(len(baks), 1)
-        # backup is taken at prune time, i.e. after the user msg appends
         self.assertEqual(open(baks[0], encoding="utf-8").read(),
-                         before + "\n" + render_user("hi"))
+                         "## assistant\nprior episode notes\n")
 
     def test_prune_gate_uses_full_tool_measure(self):
-        # The transcript can be UNDER by the prune-tools measure while OVER
-        # by the full-tools measure (3 extra schemas). The gate must use
+        # The assembly can be UNDER by the prune-tools measure while OVER
+        # by the full-tools measure (4 extra schemas). The gate must use
         # the full measure, or prune_turn returns True instantly, the main
         # check stays over, and the loop burns all MAX_STEPS on OVER lines.
-        from harness.loop import SYSTEM_PROMPT
+        from harness.assembly import assemble, load_prompt
         s = make_session()
         prov = MockProvider([])
         loop = Loop(prov, Budget(hard=100000, soft=80000))
-        system = SYSTEM_PROMPT.format(ctx_path="x", hard=100000, soft=80000)
-        s.context.save("".join(render_user("x" * 200) for _ in range(12)))
-        messages = parse_transcript(s.context.load())
+        system = load_prompt(s.dir, ctx_path="x", hard=100000, soft=80000)
+        big = "".join(render_history_user("x" * 200, i)
+                      for i in range(1, 13))
+        (s.dir / "history.md").write_text(big, encoding="utf-8")
+        messages = parse_transcript(assemble(s.dir))
         full = loop._measure(prov, system, messages, loop._tools)["total"]
         small = loop._measure(prov, system, messages,
                               loop._prune_tools)["total"]
         self.assertGreater(full - small, 200)  # the gap is real
         hard = (full + small) // 2
 
+        hist = s.dir / "history.md"
         main = MockProvider([{"content": "done"}])
         janitor = MockProvider([
             {"content": None, "tool_calls": [
-                {"id": "p1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("fresh start")}}]},
+                {"id": "p1", "name": "edit",
+                 "arguments": {"path": str(hist),
+                               "old_text": big,
+                               "new_text": render_history_user(
+                                   "fresh start", 1)}}]},
             {"content": "PRUNED"},
         ])
         loop2 = Loop(main, Budget(hard=hard, soft=hard - 500),
@@ -348,7 +366,8 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(loop2.run_turn(s, "hi"), "done")
         # Old code: gate passed instantly, janitor never called.
         self.assertGreaterEqual(len(janitor.calls), 1)
-        self.assertIn("fresh start", s.context.load())
+        self.assertIn("fresh start",
+                      hist.read_text(encoding="utf-8"))
 
     def test_estimate_counts_tool_schemas(self):
         tools = [{"name": "exec", "description": "d" * 400,

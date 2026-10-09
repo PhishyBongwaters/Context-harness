@@ -40,7 +40,11 @@ short; code follows the spec, not the other way around.
 ### Phase 3 — Scratch lifecycle
 - **T6 — Tool traces to scratch.** Tool calls/results append to `scratch.md`,
   not inline in the assembled context. Same `## tool <id>` section format so
-  existing parsing/dedupe logic carries over.
+  existing parsing/dedupe logic carries over. Also pulls forward the spec
+  §7 prune rework (was slated T7/T9): run_turn assembles per step, the
+  deterministic ladder runs on scratch.md, and prune turns are edit-only
+  curation turns on history.md/sats (no gate bypass). User messages are
+  stamped into history.md via the harness-owned turn counter.
 - **T7 — Episode close.** Assistant reply with no further tool calls closes
   the episode: harness archives `scratch.md` to `archive/<date>-<turn>.md`,
   clears scratch, records the archive path as a pointer in history.

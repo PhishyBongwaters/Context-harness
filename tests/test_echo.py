@@ -24,10 +24,13 @@ class TestEchoSanitize(unittest.TestCase):
         out = loop.run_turn(s, "well hello")
         self.assertNotIn("## user", out)
         self.assertIn("Well hello", out)
-        # Stored transcript parses back to exactly user + assistant.
-        msgs = parse_transcript(s.context.load())
-        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
-        self.assertNotIn("##", msgs[1]["content"])
+        # The stored reply (in scratch) parses back clean: the echoed
+        # ## headers were stripped before storing.
+        from harness.assembly import assemble
+        msgs = parse_transcript(assemble(s.dir))
+        assistants = [m for m in msgs if m["role"] == "assistant"]
+        self.assertTrue(assistants)
+        self.assertNotIn("##", assistants[-1]["content"])
 
     def test_fenced_echo_stripped(self):
         s = make_session()

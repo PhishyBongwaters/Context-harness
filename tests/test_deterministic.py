@@ -95,24 +95,25 @@ class TestLadder(unittest.TestCase):
         self.assertLessEqual(rep["tokens_after"], rep["tokens_before"])
 
     def test_prune_turn_prefers_deterministic(self):
+        # T6: the deterministic ladder runs on scratch.md; bloat there
+        # is handled without the janitor.
         s = test_session()
         dup = "z" * 1500
-        s.context.save(render_user("task")
-                       + tool_sec("c1", dup) + tool_sec("c2", dup)
-                       + tool_sec("c3", dup))
+        (s.dir / "scratch.md").write_text(
+            tool_sec("c1", dup) + tool_sec("c2", dup) + tool_sec("c3", dup),
+            encoding="utf-8")
         main = MockProvider([{"content": "done"}])
         janitor = MockProvider([])
         loop = Loop(main, Budget(hard=10 ** 9, soft=10 ** 9),
                     prune_provider=janitor)
         # force deterministic with a low target, agent never needed
-        from harness.loop import SYSTEM_PROMPT
         loop.prune_target = 1
         loop.prune_keep_tools = 1
-        s.context.append(render_user("go"))
         self.assertTrue(loop.prune_turn(s))
         self.assertEqual(janitor.calls, [])
-        self.assertIn("## tool c3", s.context.load())
-        self.assertNotIn("## tool c1", s.context.load())
+        scratch = (s.dir / "scratch.md").read_text(encoding="utf-8")
+        self.assertIn("## tool c3", scratch)
+        self.assertNotIn("## tool c1", scratch)
 
     def test_archive_oldest_half_when_way_over(self):
         import tempfile, os
