@@ -39,6 +39,18 @@ def assemble(sdir: str | Path) -> str:
     return "\n".join(parts)
 
 
+# Guidance appended at load time when the on-disk prompt predates it
+# (old sessions keep their prompt.md verbatim; the effective prompt
+# stays current). Keep in sync with SYSTEM_PROMPT in loop.py.
+_PROMPT_ADDENDUM_DELEGATE = (
+    "\n  Heavy curation (large histories, many files to triage): prefer\n"
+    "  `delegate` -- a subagent does the reading and editing in its own\n"
+    "  context; you read back only its result file. The noise never enters\n"
+    "  your transcript.\n"
+)
+_PROMPT_ADDENDUM_MARKER = "prefer\n  `delegate`"
+
+
 def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
                 soft: int, workdir: str | Path | None = None) -> str:
     """Read prompt.md fresh and fill the known template placeholders.
@@ -49,6 +61,8 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
     """
     import platform
     text = _read(Path(sdir) / "prompt.md")
+    if _PROMPT_ADDENDUM_MARKER not in text:
+        text = text.rstrip("\n") + "\n" + _PROMPT_ADDENDUM_DELEGATE
     return (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))

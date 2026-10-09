@@ -90,7 +90,19 @@ class TestAssembly(unittest.TestCase):
     def test_load_prompt_formats_placeholders(self):
         sdir = make_session()
         out = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
-        self.assertEqual(out, "SYS CTX 1000 800")
+        self.assertTrue(out.startswith("SYS CTX 1000 800"),
+                        f"placeholders not substituted: {out!r}")
+
+    def test_load_prompt_appends_delegate_addendum(self):
+        from harness.assembly import _PROMPT_ADDENDUM_MARKER
+        sdir = make_session()  # prompt lacks the marker
+        out = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
+        self.assertIn("delegate", out)
+        # idempotent: prompt already containing the marker is untouched
+        (sdir / "prompt.md").write_text(
+            "SYS {ctx_path} prefer\n  `delegate` x", encoding="utf-8")
+        out2 = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
+        self.assertEqual(out2, "SYS CTX prefer\n  `delegate` x")
 
     def test_load_prompt_fills_os_and_workdir(self):
         import platform

@@ -62,6 +62,11 @@ new_text, which must match exactly once):
   sats/facts.md, sats/decisions.md, sats/tasks.md -- one-line facts,
     decisions with reasons, open tasks
 
+  Heavy curation (large histories, many files to triage): prefer
+  `delegate` -- a subagent does the reading and editing in its own
+  context; you read back only its result file. The noise never enters
+  your transcript.
+
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
 session sources -- use edit. Read is rejected on {ctx_path}: the
