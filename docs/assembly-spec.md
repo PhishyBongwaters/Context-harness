@@ -138,12 +138,14 @@ Tool calls are working memory with a TTL, not durable state.
   condition). On close the harness:
   1. moves `scratch.md` → `archive/<YYYYMMDD-HHMMSS>-episode-t<NNNN>.md`,
   2. truncates `scratch.md` to empty,
-  3. appends the archive path to `index.md` under an episode entry,
-  4. appends a one-line pointer to `history.md`
-     (e.g. `## assistant t0043` body: `…(episode archived:
-     archive/20261009-093012-episode-t0042.md)` — exact format in T7).
-- Anything the model wants to keep from an episode it writes to
-  `history.md`/`sats/` via `edit` **before** the closing reply.
+  3. appends a cheap pointer to `history.md`
+     (`## episode t<NNNN>` with archive path, turn range, tool-call
+     count),
+  4. **records the closing reply to `history.md` itself**
+     (`## assistant t<NNNN>`) — H1. The model is never asked to decide
+     what is durable; the conversation record is complete by
+     construction,
+  5. runs **history windowing** (H2) — see §6b.
 - **Lookback:** the model may `read` any `archive/` file by path
   (discovered via `index.md`). Deliberate, visible cost — no silent
   bloat.
@@ -151,8 +153,21 @@ Tool calls are working memory with a TTL, not durable state.
 - Existing deterministic stages are re-homed, not removed:
   `dedupe_exact` runs on `scratch.md` after each tool result (as
   `_auto_dedupe` does today); `evict_oldest_tools` and `cap_sections`
-  apply to `scratch.md` only. History and sats are model-curated; the
-  harness never truncates them silently.
+  apply to `scratch.md` only.
+
+## 6b. History windowing (H2, deterministic)
+
+`history.md` is bounded by the harness, not by model summarization.
+After every episode close, `window_history(sdir, cap_tokens)` groups
+history sections by turn stamp; while the file exceeds the cap it
+moves the oldest whole turns to
+`archive/history-<date>-t<NNNN>-t<NNNN>.md` and leaves a
+`## history-archive` pointer (archive path, turn range) in their
+place. The newest turn is never archived; at least one stamped turn
+is kept. Default cap: half the soft budget (`Loop(history_cap=...)`
+overrides). No model calls, no judgment — windowing with lookback,
+mirroring the episode design. The curation turn therefore never needs
+to "summarize old history"; its remaining job is sats hygiene.
 
 ## 7. Budget and prune turns, reworked
 

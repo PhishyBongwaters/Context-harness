@@ -4,8 +4,9 @@ from pathlib import Path
 
 from harness.context import (Budget, count_tokens, parse_transcript,
                              render_assistant, render_tool, render_user)
-from harness.deterministic import (cap_sections, dedupe_exact,
-                                   evict_oldest_tools, prune_deterministic)
+from harness.deterministic import (_strip_line_numbers, cap_sections,
+                                   dedupe_exact, evict_oldest_tools,
+                                   prune_deterministic)
 from harness.loop import Loop, Session
 from harness.providers import MockProvider
 
@@ -30,6 +31,18 @@ class TestDedupe(unittest.TestCase):
         # newest duplicate (c2) survives, oldest (c1) goes
         self.assertIn("## tool c2", new)
         self.assertNotIn("## tool c1", new)
+
+    def test_strip_matches_read_tool_format(self):
+        # read_tool numbers lines as f"{n:6d}  {line}". The strip must
+        # handle that exact shape (issue #3).
+        body = "/p  [lines 1-2 of 10]\n     1  hello\n     2  world"
+        self.assertEqual(_strip_line_numbers(body),
+                         "/p  [lines 1-2 of 10]\nhello\nworld")
+
+    def test_strip_leaves_genuine_numbered_content(self):
+        # Content that merely looks numbered must survive (issue #3).
+        body = "1: hello\n2: world"
+        self.assertEqual(_strip_line_numbers(body), body)
 
     def test_user_sections_never_touched(self):
         text = render_user("same") + render_user("same")

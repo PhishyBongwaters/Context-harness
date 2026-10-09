@@ -18,6 +18,7 @@ Returns (new_text, report). Pure functions; the caller measures.
 from __future__ import annotations
 
 import json
+import re
 
 from .context import (_FENCE_CLOSE, _FENCE_OPEN, _split_sections,
                       count_tokens)
@@ -42,15 +43,16 @@ def _split_preamble(text: str) -> tuple[str, str]:
 
 
 def _strip_line_numbers(body: str) -> str:
-    """Remove leading 'N: ' line-number prefixes for dedupe comparison.
+    """Remove read-tool line-number prefixes for dedupe comparison.
 
-    The read tool returns line-numbered output; two reads of similar
-    content differ only in numbers. Stripping them lets dedupe catch
-    the semantic duplicate.
+    The read tool numbers lines as f"{n:6d}  {line}" (right-aligned in
+    6 chars, two spaces). Stripping that exact shape lets dedupe catch
+    overlapping reads of the same file at different offsets. Anything
+    else -- including genuine "1: foo" content -- is left alone.
+    Comparison-only; the kept section retains its original text.
     """
-    import re
     lines = body.splitlines()
-    stripped = [re.sub(r"^\d+:\s?", "", ln) for ln in lines]
+    stripped = [re.sub(r"^ {0,5}\d{1,6}  ", "", ln) for ln in lines]
     return "\n".join(stripped).strip()
 
 
@@ -261,3 +263,81 @@ def _archive_oldest_half(text: str) -> tuple[str, str | None]:
     old = sections[:half]
     new = sections[half:]
     return _render(new, pre), _render(old, pre)
+
+
+_TURN_LABEL_RE = re.compile(r"^t(\d+)$")
+# Pointer size margin subtracted from the cap when deciding how many
+# turns to move; the real pointer is ~30 tokens.
+_POINTER_MARGIN = 100
+
+
+def window_history(sdir, cap_tokens: int, min_turns: int = 1) -> dict:
+    """Deterministically bound history.md (H2).
+
+    Groups history sections by turn stamp. While the file exceeds
+    cap_tokens, moves the oldest whole turns to
+    archive/history-<date>-t<NNNN>-t<NNNN>.md and leaves a
+    ## history-archive pointer in their place. The newest turn is never
+    archived; at least min_turns stamped turns are kept. No model calls,
+    no summarization -- just windowing with lookback.
+
+    Returns {"windowed": bool, "turns": "t0001-t0002" (or ""),
+             "archive": "archive/..." (or None)}.
+    """
+    import datetime as _dt
+    from pathlib import Path
+    sdir = Path(sdir)
+    hp = sdir / "history.md"
+    if not hp.exists():
+        return {"windowed": False, "turns": "", "archive": None}
+    text = hp.read_text(encoding="utf-8", errors="replace")
+    if count_tokens(text) <= cap_tokens:
+        return {"windowed": False, "turns": "", "archive": None}
+
+    pre, _ = _split_preamble(text)
+    # Group sections by turn stamp. Unstamped sections (shouldn't
+    # happen -- the harness stamps everything) sort last and are never
+    # archived.
+    groups: dict = {}
+    for sec in _split_sections(text):
+        _role, label, _h, _b = sec
+        m = _TURN_LABEL_RE.match(label or "")
+        turn = int(m.group(1)) if m else float("inf")
+        groups.setdefault(turn, []).append(sec)
+    ordered = sorted(groups.items(), key=lambda kv: kv[0])
+
+    def rendered(grps) -> str:
+        secs = [s for _, ss in grps for s in ss]
+        return _render(secs, pre)
+
+    stamped = lambda grps: [g for g in grps if g[0] != float("inf")]
+    kept = list(ordered)
+    archived = []
+    while (len(stamped(kept)) > min_turns
+           and count_tokens(rendered(kept)) > cap_tokens - _POINTER_MARGIN):
+        archived.append(kept.pop(0))
+    if not archived:
+        return {"windowed": False, "turns": "", "archive": None}
+
+    first, last = archived[0][0], archived[-1][0]
+    tag = f"t{first:04d}-t{last:04d}"
+    stamp = _dt.datetime.now().strftime("%Y%m%d")
+    adir = sdir / "archive"
+    adir.mkdir(parents=True, exist_ok=True)
+    dest = adir / f"history-{stamp}-{tag}.md"
+    n = 2
+    while dest.exists():
+        dest = adir / f"history-{stamp}-{tag}-{n}.md"
+        n += 1
+    dest.write_text(
+        _render([s for _, ss in archived for s in ss], ""),
+        encoding="utf-8")
+
+    ptr = ("history-archive", None, "## history-archive",
+           f"archive: archive/{dest.name}\n"
+           f"turns: t{first:04d}-t{last:04d}\n")
+    kept_secs = [ptr] + [s for _, ss in kept for s in ss]
+    hp.write_text(_render(kept_secs, pre), encoding="utf-8")
+    return {"windowed": True,
+            "turns": f"t{first:04d}-t{last:04d}",
+            "archive": f"archive/{dest.name}"}

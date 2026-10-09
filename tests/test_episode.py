@@ -125,6 +125,36 @@ class TestEpisodeClose(unittest.TestCase):
         self.assertIn("## episode t0001", history)
         self.assertIn("## episode t0002", history)
 
+    def test_closing_reply_recorded_in_history(self):
+        # H1: the harness records the closing reply deterministically;
+        # the model is never asked to "move durable things" itself.
+        s = make_session()
+        loop = Loop(MockProvider([{"content": "hello there"}]),
+                    Budget(100000, 80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "hello there")
+        history = (s.dir / "history.md").read_text(encoding="utf-8")
+        self.assertIn("## assistant t0001", history)
+        self.assertIn("hello there", history)
+
+    def test_history_order_user_episode_assistant(self):
+        s = make_session()
+        loop = Loop(MockProvider(tool_script()), Budget(100000, 80000))
+        loop.run_turn(s, "do the thing")
+        history = (s.dir / "history.md").read_text(encoding="utf-8")
+        iu = history.index("## user t0001")
+        ie = history.index("## episode t0001")
+        ia = history.index("## assistant t0001")
+        self.assertLess(iu, ie)
+        self.assertLess(ie, ia)
+
+    def test_empty_reply_not_recorded(self):
+        s = make_session()
+        loop = Loop(MockProvider([{"content": None}]),
+                    Budget(100000, 80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "")
+        history = (s.dir / "history.md").read_text(encoding="utf-8")
+        self.assertNotRegex(history, r"(?m)^## assistant t\d+\n")
+
     def test_episode_close_emits_event(self):
         s = make_session()
         events = []

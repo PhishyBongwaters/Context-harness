@@ -42,7 +42,10 @@ class TestScratchTraces(unittest.TestCase):
         self.assertIn("42", archived)
         history = (s.dir / "history.md").read_text(encoding="utf-8")
         self.assertNotIn("## tool", history)
-        self.assertNotRegex(history, r"(?m)^## assistant t\d+\n")
+        # H1: the closing reply is recorded (stamped); working-trace
+        # assistant sections (unstamped) never leak into history.
+        self.assertRegex(history, r"(?m)^## assistant t0001\n")
+        self.assertNotRegex(history, r"(?m)^## assistant\n")
 
     def test_scratch_cleared_after_close(self):
         s = make_session()

@@ -49,8 +49,9 @@ it is rebuilt every turn -- do not try to edit it.
 CURATION (your standing permission -- edits here never need approval):
 you curate the durable sources with your edit tool (exact old_text /
 new_text, which must match exactly once):
-  history.md -- the conversation record; keep user messages, fold in
-    what mattered from each turn
+  history.md -- the conversation record (the harness records every
+    turn and archives old turns automatically; correct mistakes, don't
+    manage size)
   sats/facts.md, sats/decisions.md, sats/tasks.md -- one-line facts,
     decisions with reasons, open tasks
 
@@ -60,10 +61,10 @@ session sources -- use edit.
 
 EPISODES: your replies and tool results accumulate in the episode's
 working notes. When you reply without calling tools, the episode
-closes: the notes are archived and only a pointer remains in history.
-Move anything durable into history.md or the sats BEFORE your closing
-reply, or it leaves active context. You can re-read an archived
-episode by its path when you truly need the detail.
+closes: the notes are archived, your reply is recorded in history,
+and old history is archived automatically the same way. Nothing you
+need to do -- the harness handles it. You can re-read anything
+archived by its path when you truly need the detail.
 
 TOOLS: Use the native function-calling tools provided by the API
 (read, write, edit, exec, tokens). Call them directly -- do NOT emit
@@ -96,10 +97,11 @@ You may ONLY use the edit tool, and ONLY on these files:
   {sats_dir}/facts.md, {sats_dir}/decisions.md, {sats_dir}/tasks.md
     -- durable one-liners
 
-Compress ruthlessly: summarize old history sections into fewer lines,
-distill working notes into sat one-liners, drop what no longer serves
-the task. Each edit needs old_text matching exactly once -- include
-enough surrounding context. Keep the `## ` section format parseable.
+History size is harness-managed (old turns archive automatically);
+do not summarize it. If the sats have grown unbounded, trim them to
+one-liners and drop what no longer serves the task. Each edit needs
+old_text matching exactly once -- include enough surrounding context.
+Keep the `## ` section format parseable.
 Do not attempt the user's task now -- just curate.
 Reply with one line (PRUNED) only after your edits have actually shrunk
 the assembled context -- the harness re-measures, and an unchanged
@@ -161,7 +163,8 @@ class Loop:
                  project: str | None = None,
                  prune_target: int | None = None,
                  prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
-                 prune_section_cap: int = DEFAULT_SECTION_CAP):
+                 prune_section_cap: int = DEFAULT_SECTION_CAP,
+                 history_cap: int | None = None):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -176,6 +179,10 @@ class Loop:
         self.prune_target = prune_target  # None -> soft budget
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
+        # H2: history token cap; oldest turns archive deterministically.
+        # None -> half the soft budget.
+        self.history_cap = (history_cap if history_cap is not None
+                            else budget.soft // 2)
         self._turn_seq = 0
         self._stop_event = threading.Event()
         self._tools = tool_definitions()
@@ -328,13 +335,17 @@ class Loop:
         except OSError:
             return None  # best effort: never block a turn on a backup
 
-    def _close_episode(self, session: Session, turn_no: int) -> None:
+    def _close_episode(self, session: Session, turn_no: int,
+                       reply: str = "") -> None:
         """Archive scratch.md, clear it, record the pointer (T7).
 
         Runs when the assistant replies with no more tool calls. The
         full episode trace moves to archive/<date>-t<NNNN>.md; history
         keeps a cheap `## episode t<NNNN>` pointer (archive path, turn
-        range, tool-call count). Best effort: never block a turn.
+        range, tool-call count). H1: the closing reply is recorded to
+        history deterministically (stamped) -- the model is never asked
+        to decide what is durable. Then history is windowed (H2).
+        Best effort: never block a turn.
         """
         import datetime as _dt
         import re as _re
@@ -360,6 +371,14 @@ class Loop:
                        f"turns: {tag}-{tag}\n"
                        f"tool_calls: {tool_calls}\n")
             self._append_source(session, "history.md", pointer)
+            # H1: the closing reply joins history, stamped. Empty
+            # replies record nothing.
+            if reply.strip():
+                self._append_source(
+                    session, "history.md",
+                    f"## assistant {tag}\n{reply.strip()}\n")
+            # H2: deterministic history windowing.
+            self._window_history(session)
             # Refresh the inspectable artifact so it reflects the
             # closed episode, not the pre-close assembly.
             write_assembled(session.dir, assemble(session.dir))
@@ -368,6 +387,17 @@ class Loop:
                                          "tool_calls": tool_calls})
         except OSError:
             pass  # best effort: never block a turn on archiving
+
+    def _window_history(self, session: Session) -> None:
+        """Deterministic history bounding (H2)."""
+        from .deterministic import window_history
+        try:
+            rep = window_history(session.dir,
+                                 cap_tokens=self.history_cap)
+            if rep.get("windowed"):
+                self._emit("history-window", rep)
+        except OSError:
+            pass  # best effort
 
     def _execute_tool(self, session: Session, tc: dict) -> str:
         """Gate-checked, approval-gated tool run.
@@ -645,8 +675,9 @@ class Loop:
                     self._stop_event.clear()
                     self._auto_dedupe(session)
                     # T7: the episode closes -- archive the trace, clear
-                    # scratch, record the pointer.
-                    self._close_episode(session, turn_no)
+                    # scratch, record the pointer. H1: the closing reply
+                    # is recorded to history by the harness.
+                    self._close_episode(session, turn_no, content or "")
                     return content or ""
                 for tc in tool_calls:
                     self._check_stop()

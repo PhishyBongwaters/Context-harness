@@ -89,7 +89,8 @@ Sections start with a `## ` header: `## user`, `## assistant`,
 """
 
 _HEADER_RE = re.compile(
-    r"^##[ \t]+(user|assistant|tool|sat|episode)(?:[ \t]+(\S+))?.*$")
+    r"^##[ \t]+(user|assistant|tool|sat|episode|history-archive)"
+    r"(?:[ \t]+(\S+))?.*$")
 _FENCE_OPEN = "```tool-calls"
 _FENCE_CLOSE = "```"
 
@@ -276,6 +277,10 @@ def parse_transcript(text: str) -> list[dict]:
             # Episode pointer (T7): `## episode t<NNNN>` in history.md.
             # Cheap archive pointer, sent as a plain user-role message
             # (Rob's decision 2026-10-09).
+            messages.append({"role": "user", "content": body})
+        elif role == "history-archive":
+            # History windowing pointer (H2): names the archive file
+            # holding moved turns. Same cheap-pointer treatment.
             messages.append({"role": "user", "content": body})
     return messages
 
