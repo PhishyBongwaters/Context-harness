@@ -563,7 +563,8 @@ class Loop:
         sub_session = Session(id=f"sub-{sid}", dir=sdir,
                               workdir=session.workdir)
         allowlist = args.get("tools") or ["read", "edit", "exec",
-                                          "tokens"]
+                                          "tokens", "list_dir",
+                                          "search"]
         # Provider/model for the subagent: per-call model arg wins,
         # then the delegate_model config, else inherit the parent's.
         provider = self.provider

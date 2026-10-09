@@ -15,6 +15,37 @@ def make_session(workdir: str | None = None) -> Session:
     return Session(id="t", dir=Path(d), workdir=workdir or d)
 
 
+def prune_test_budget(s: Session) -> Budget:
+    """Hard budget strictly between the bloated and pruned full-measures.
+
+    Tool schemas grow over time; a fixed budget goes stale. Measuring
+    both states guarantees prune triggers on the bloat and one curation
+    edit gets under hard, regardless of schema size.
+    """
+    from harness.assembly import assemble, load_prompt
+    probe = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+    prov = MockProvider([])
+    system = load_prompt(s.dir, ctx_path="x", hard=100000, soft=80000)
+    full_big = probe._measure(
+        prov, system, parse_transcript(assemble(s.dir)),
+        probe._tools)["total"]
+    hist_p = s.dir / "history.md"
+    big = hist_p.read_text(encoding="utf-8")
+    hist_p.write_text(render_history_user("fresh start", 1),
+                      encoding="utf-8")
+    try:
+        full_small = probe._measure(
+            prov, system, parse_transcript(assemble(s.dir)),
+            probe._tools)["total"]
+    finally:
+        hist_p.write_text(big, encoding="utf-8")
+    hard = (full_big + full_small) // 2
+    assert full_small < hard < full_big, (
+        f"budget {hard} not between pruned {full_small} and "
+        f"bloated {full_big}")
+    return Budget(hard=hard, soft=hard - 500)
+
+
 class TestLoop(unittest.TestCase):
     def test_simple_turn_no_tools(self):
         events = []
@@ -93,7 +124,7 @@ class TestLoop(unittest.TestCase):
             {"content": "all good"},
         ]
         events = []
-        loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000),
+        loop = Loop(MockProvider(script), prune_test_budget(s),
                     on_event=lambda k, v: events.append(k))
         out = loop.run_turn(s, "hi")
         self.assertEqual(out, "all good")
@@ -117,7 +148,7 @@ class TestLoop(unittest.TestCase):
             {"content": "all good"},
         ]
         events = []
-        loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000),
+        loop = Loop(MockProvider(script), prune_test_budget(s),
                     on_event=lambda k, v: events.append(k))
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         self.assertIn("fresh start",
@@ -223,7 +254,7 @@ class TestLoop(unittest.TestCase):
         s = self._bloated_session()
         main = MockProvider([{"content": "all good"}])
         janitor = MockProvider(self._curate_history_script(s))
-        loop = Loop(main, Budget(hard=2000, soft=1000),
+        loop = Loop(main, prune_test_budget(s),
                     prune_provider=janitor)
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         self.assertEqual(len(janitor.calls), 2)  # prune chats
@@ -327,7 +358,7 @@ class TestLoop(unittest.TestCase):
         script = self._curate_history_script(s) + [
             {"content": "all good"},
         ]
-        loop = Loop(MockProvider(script), Budget(hard=2000, soft=1000))
+        loop = Loop(MockProvider(script), prune_test_budget(s))
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         baks = glob.glob(str(s.dir / "scratch.pre-prune-*.bak"))
         self.assertEqual(len(baks), 1)
@@ -352,7 +383,9 @@ class TestLoop(unittest.TestCase):
         small = loop._measure(prov, system, messages,
                               loop._prune_tools)["total"]
         self.assertGreater(full - small, 200)  # the gap is real
-        hard = (full + small) // 2
+        # Robust budget: between pruned and bloated full-measures (the
+        # old (full+small)//2 breaks as schemas grow).
+        budget = prune_test_budget(s)
 
         hist = s.dir / "history.md"
         main = MockProvider([{"content": "done"}])
@@ -365,8 +398,7 @@ class TestLoop(unittest.TestCase):
                                    "fresh start", 1)}}]},
             {"content": "PRUNED"},
         ])
-        loop2 = Loop(main, Budget(hard=hard, soft=hard - 500),
-                     prune_provider=janitor)
+        loop2 = Loop(main, budget, prune_provider=janitor)
         self.assertEqual(loop2.run_turn(s, "hi"), "done")
         # Old code: gate passed instantly, janitor never called.
         self.assertGreaterEqual(len(janitor.calls), 1)

@@ -104,6 +104,40 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
                 },
             },
         },
+        {
+            "name": "list_dir",
+            "description": ("List a directory's entries (name, type, size). "
+                            "Cross-platform; prefer over exec ls/dir."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "Directory (default: working dir)."},
+                    "recursive": {"type": "boolean",
+                                  "description": "Recurse into subdirs."},
+                },
+            },
+        },
+        {
+            "name": "search",
+            "description": ("Search file contents for text. Returns "
+                            "file, line number, matched line. "
+                            "Cross-platform; prefer over exec grep/findstr."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "Directory to search (default: working dir)."},
+                    "pattern": {"type": "string",
+                                "description": "Text to find."},
+                    "regex": {"type": "boolean",
+                              "description": "Pattern is a regex (default: literal)."},
+                    "file_pattern": {"type": "string",
+                                     "description": "Glob filter, e.g. '*.py'."},
+                },
+                "required": ["pattern"],
+            },
+        },
     ]
     if include_delegation:
         tools.extend(_delegation_definitions())
@@ -300,6 +334,84 @@ def write_tool(args: dict, workdir: str) -> str:
     return f"Wrote {p} ({len(args.get('content') or '')} chars)"
 
 
+def list_dir_tool(args: dict, workdir: str) -> str:
+    """List directory entries: type, name, size. Read-only."""
+    import time
+    p = _resolve(args.get("path") or ".", workdir)
+    recursive = bool(args.get("recursive"))
+    try:
+        if not p.is_dir():
+            return f"ERROR: not a directory: {p}"
+        paths = sorted(p.rglob("*") if recursive else p.iterdir())
+    except OSError as e:
+        return f"ERROR listing {p}: {e}"
+    lines = []
+    for q in paths:
+        try:
+            if q.is_dir():
+                lines.append(f"dir   {q.name}/")
+            else:
+                size = q.stat().st_size
+                mtime = time.strftime("%Y-%m-%d %H:%M",
+                                      time.localtime(q.stat().st_mtime))
+                lines.append(f"file  {q.name}  {size}B  {mtime}")
+        except OSError:
+            lines.append(f"????  {q.name}  (unreadable)")
+    body = "\n".join(lines) if lines else "(empty)"
+    return f"{p}  [{len(lines)} entries]\n{body}"
+
+
+def search_tool(args: dict, workdir: str) -> str:
+    """Grep a directory tree. Returns file:line: text. Read-only."""
+    import fnmatch
+    import re
+    root = _resolve(args.get("path") or ".", workdir)
+    pattern = args.get("pattern") or ""
+    use_regex = bool(args.get("regex"))
+    file_pat = args.get("file_pattern") or "*"
+    if not pattern:
+        return "ERROR: pattern is required"
+    try:
+        if use_regex:
+            rx = re.compile(pattern)
+            match = lambda line: rx.search(line) is not None
+        else:
+            match = lambda line: pattern in line
+    except re.error as e:
+        return f"ERROR: bad regex: {e}"
+    try:
+        files = sorted(root.rglob("*"))
+    except OSError as e:
+        return f"ERROR searching {root}: {e}"
+    hits: list[str] = []
+    scanned = 0
+    for q in files:
+        if not q.is_file():
+            continue
+        if not fnmatch.fnmatch(q.name, file_pat):
+            continue
+        if q.stat().st_size > 1_000_000:  # skip large/binary-ish files
+            continue
+        try:
+            text = q.read_text(encoding="utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable: skip silently
+        scanned += 1
+        for i, line in enumerate(text.splitlines(), 1):
+            if match(line):
+                rel = q.relative_to(root)
+                hits.append(f"{rel}:{i}: {line.strip()[:200]}")
+                if len(hits) >= 100:
+                    break
+        if len(hits) >= 100:
+            break
+    if not hits:
+        return f"no matches for {pattern!r} in {root} ({scanned} files)"
+    more = "\n... (100-hit cap)" if len(hits) >= 100 else ""
+    return (f"{len(hits)} matches for {pattern!r} in {root}:\n" +
+            "\n".join(hits) + more)
+
+
 def edit_tool(args: dict, workdir: str) -> str:
     """Replace-only edit with an exactly-once contract (T4).
 
@@ -349,6 +461,8 @@ EXECUTORS = {
     "write": write_tool,
     "edit": edit_tool,
     "tokens": tokens_tool,
+    "list_dir": list_dir_tool,
+    "search": search_tool,
 }
 
 
