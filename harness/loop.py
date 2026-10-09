@@ -556,7 +556,12 @@ class Loop:
             provider=provider,
             budget=Budget(hard=sub_hard, soft=sub_soft,
                           window=self.budget.window),
-            on_event=self.on_event,
+            # Subagent internals stay out of the parent's UI: its
+            # request/response/tool events go nowhere. The parent only
+            # sees subagent-spawn / subagent-done (emitted below via
+            # the parent's own on_event). Full audit trail lives in
+            # the subagent's session dir.
+            on_event=lambda kind, data: None,
             approver=self.approver,
             exec_timeout=self.exec_timeout,
             exec_timeout_max=self.exec_timeout_max,
