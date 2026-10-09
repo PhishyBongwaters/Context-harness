@@ -296,6 +296,46 @@ if _HAS:
                 pass
 
 
+    class SubagentScreen(ModalScreen):
+        """Inspect the subagent's session: result.md + history.md trace."""
+
+        BINDINGS = [("escape", "close", "Close")]
+
+        CSS = ("SubagentScreen { align: center middle; } "
+               "#sub-box { width: 96; height: 32; "
+               "border: thick $primary; background: $surface; padding: 1 2; } "
+               "#sub-log { height: 1fr; }")
+
+        def __init__(self, sdir, task, status):
+            super().__init__()
+            from pathlib import Path as _P
+            self._sdir = _P(sdir)
+            self._task = task
+            self._status = status
+
+        def compose(self) -> "ComposeResult":
+            with Vertical(id="sub-box"):
+                yield Label(f"[subagent] {self._task} ({self._status})",
+                            id="sub-title")
+                yield Log(id="sub-log")
+                yield Label("esc=close", id="sub-hint")
+
+        def on_mount(self) -> None:
+            log = self.query_one("#sub-log", Log)
+            for name in ("result.md", "history.md"):
+                log.write_line(f"=== {name} ===")
+                p = self._sdir / name
+                try:
+                    log.write_line(p.read_text(encoding="utf-8",
+                                               errors="replace"))
+                except OSError as e:
+                    log.write_line(f"(unreadable: {e})")
+                log.write_line("")
+
+        def action_close(self) -> None:
+            self.app.pop_screen()
+
+
     class ProviderScreen(ModalScreen):
         """Step 1: registry entries (+ add row); legacy kinds when empty.
 
@@ -687,6 +727,7 @@ if _HAS:
                     # so the provider/model picker lives on ctrl+o.
                     ("ctrl+o", "pick_provider", "Provider/model"),
                     ("ctrl+e", "export_transcript", "Export log"),
+                    ("ctrl+g", "view_subagent", "Subagent"),
                     # Newline in the task box. Plain ctrl combos are the
                     # only reliably-delivered "modified enter": terminals
                     # swallow ctrl+enter and merge shift+enter into enter.
@@ -1323,6 +1364,18 @@ if _HAS:
 
         def action_open_sessions(self) -> None:
             self._open_session_picker()
+
+        def action_view_subagent(self) -> None:
+            sub = getattr(self._agent_loop, "_subagent", None)
+            if sub is None or sub.get("sdir") is None:
+                self.notify("No subagent has been delegated yet.")
+                return
+            thread = sub.get("thread")
+            status = ("running" if (thread is not None
+                                    and thread.is_alive())
+                      else "done")
+            task = (sub.get("task") or "subagent").splitlines()[0][:80]
+            self.push_screen(SubagentScreen(sub["sdir"], task, status))
 
         def action_pick_provider(self) -> None:
             self._open_provider_picker()
