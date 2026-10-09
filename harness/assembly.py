@@ -46,9 +46,19 @@ _PROMPT_ADDENDUM_DELEGATE = (
     "\n  Heavy curation (large histories, many files to triage): prefer\n"
     "  `delegate` -- a subagent does the reading and editing in its own\n"
     "  context; you read back only its result file. The noise never enters\n"
-    "  your transcript.\n"
+    "  your transcript. This is not laziness, it is the architecture: your\n"
+    "  active context is the scarce resource, and spending a fraction of\n"
+    "  budget on a subagent to keep it clean is the win. Never apologize\n"
+    "  for delegating; apologize for bloating your own context instead.\n"
 )
 _PROMPT_ADDENDUM_MARKER = "prefer\n  `delegate`"
+_PROMPT_NUDGE_MARKER = "This is not laziness"
+_PROMPT_NUDGE_LINES = (
+    "  This is not laziness, it is the architecture: your\n"
+    "  active context is the scarce resource, and spending a fraction of\n"
+    "  budget on a subagent to keep it clean is the win. Never apologize\n"
+    "  for delegating; apologize for bloating your own context instead.\n"
+)
 
 
 def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
@@ -63,6 +73,9 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
     text = _read(Path(sdir) / "prompt.md")
     if _PROMPT_ADDENDUM_MARKER not in text:
         text = text.rstrip("\n") + "\n" + _PROMPT_ADDENDUM_DELEGATE
+    elif _PROMPT_NUDGE_MARKER not in text:
+        # Has the base guidance but predates the nudge: append it.
+        text = text.rstrip("\n") + "\n" + _PROMPT_NUDGE_LINES
     return (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))

@@ -65,7 +65,10 @@ new_text, which must match exactly once):
   Heavy curation (large histories, many files to triage): prefer
   `delegate` -- a subagent does the reading and editing in its own
   context; you read back only its result file. The noise never enters
-  your transcript.
+  your transcript. This is not laziness, it is the architecture: your
+  active context is the scarce resource, and spending a fraction of
+  budget on a subagent to keep it clean is the win. Never apologize
+  for delegating; apologize for bloating your own context instead.
 
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
