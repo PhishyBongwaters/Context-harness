@@ -104,6 +104,60 @@ def header_segments(title: str, width: int, phase: int = 0,
     return segs
 
 
+def _charm_stream(n: int = 256) -> str:
+    """Deterministic pseudo-random hex for the charm data stream."""
+    x = 123456789
+    out = []
+    for _ in range(n):
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        out.append("0123456789ABCDEF"[x % 16])
+    return "".join(out)
+
+
+_CHARM_STREAM = _charm_stream()
+
+
+def charms_segments(width: int, tick: int = 0,
+                    stardate: str = "") -> list[tuple[str, str, str]]:
+    """(text, bg, fg) segments for the LCARS charm strip.
+
+    Left: SYS/DIA pills + four blinkenlights on different periods.
+    Middle: ticking stardate + scrolling hex diagnostic stream.
+    Right: COM/NAV pills (dropped on narrow screens). Deterministic
+    in (width, tick, stardate); total width never exceeds `width`.
+    """
+    segs: list[tuple[str, str, str]] = []
+    segs.append((" SYS ", LCARS["orange"], _FG))
+    segs.append((" ", LCARS["black"], _FG))
+    segs.append((" DIA ", LCARS["mauve"], _FG))
+    segs.append((" ", LCARS["black"], _FG))
+    for i, color in enumerate((LCARS["red"], LCARS["orange"],
+                               LCARS["ice"], LCARS["periwinkle"])):
+        on = (tick // (2 + i)) % 2 == 0
+        bg = color if on else _dim(color, 0.3)
+        segs.append(("  ", bg, _FG))
+        segs.append((" ", LCARS["black"], _FG))
+    segs.append((f" {stardate} ", LCARS["sky"], _FG))
+    segs.append((" ", LCARS["black"], _FG))
+    right = [(" ", LCARS["black"], _FG),
+             (" COM ", LCARS["periwinkle"], _FG),
+             (" ", LCARS["black"], _FG),
+             (" NAV ", LCARS["peach"], _FG)]
+    left_w = sum(len(t) for t, _, _ in segs)
+    right_w = sum(len(t) for t, _, _ in right)
+    if width - left_w - right_w >= 8:
+        stream_w = width - left_w - right_w
+        tail = right
+    else:  # cramped: stream only, drop the right pills
+        stream_w = max(0, width - left_w)
+        tail = []
+    start = tick % len(_CHARM_STREAM)
+    stream = (_CHARM_STREAM * 2)[start:start + stream_w]
+    segs.append((stream, LCARS["black"], _dim(LCARS["ice"], 0.7)))
+    segs.extend(tail)
+    return segs
+
+
 def _binding_pills(bindings) -> list[tuple[str, str, str]]:
     """(key, description, action) triples from App.BINDINGS, hidden ones
     skipped.
@@ -238,6 +292,31 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 flash=now < self._flash_until,
                 turn_flash=now < self._turn_flash_until,
                 marquee=self._marquee))
+
+    class LcarsCharms(Static):
+        """LCARS charm strip under the header: decorative pills,
+        blinkenlights, a ticking stardate, and a scrolling diagnostic
+        data stream. Pure eye candy, zero chrome cost."""
+
+        def __init__(self, **k) -> None:
+            super().__init__(**k)
+            self._tick = 0
+
+        def on_mount(self) -> None:
+            self.set_interval(0.5, self._advance)
+
+        def _advance(self) -> None:
+            self._tick += 1
+            self.refresh()
+
+        def _stardate(self) -> str:
+            sd = 41300.0 + (self._tick * 0.7) % 100
+            return f"SD {sd:.1f}"
+
+        def render(self) -> "Text":
+            width = self.size.width or 80
+            return _to_text(charms_segments(width, self._tick,
+                                            self._stardate()))
 
     class LcarsPill(Static):
         """One clickable LCARS pill: key hint + label, runs an app action.

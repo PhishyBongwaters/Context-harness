@@ -132,7 +132,8 @@ if _HAS:
     from .approvals import TUIApprover, approval_brief
     from .bridge import run_turn_in_thread
     from . import commands
-    from .lcars import LcarsFooter, LcarsHeader, _binding_pills, lcars_theme
+    from .lcars import (LcarsCharms, LcarsFooter, LcarsHeader,
+                        _binding_pills, lcars_theme)
     from .widgets import (DEBUG_TAIL_LINES, BudgetBar, BudgetGauge,
                            DebugPanel, InputHistory, MessageWidget,
                            SystemPanel, TaskInput, TranscriptContainer,
@@ -660,7 +661,7 @@ if _HAS:
                "#debug { height: 8; display: none; } "
                "#system { height: 5; } "
                "#gauge { height: 1; } #budget { height: 1; } "
-               "#chrome-top { height: 1; } #chrome-bottom { height: 1; } "
+               "#chrome-top { height: auto; } #chrome-bottom { height: 1; } "
                "#main { height: 1fr; } "
                "#transcript { scrollbar-size-horizontal: 0; } "
                ".message-user { background: #1d2b3a; padding: 0 1; "
@@ -778,14 +779,15 @@ if _HAS:
         def _chrome_widgets(self, lcars: bool):
             if lcars:
                 return (
-                    LcarsHeader(title=self._title or "harness",
-                                id="lcars-header"),
-                    LcarsFooter(pills=_binding_pills(self.BINDINGS),
-                                id="lcars-footer"),
+                    [LcarsHeader(title=self._title or "harness",
+                                 id="lcars-header"),
+                     LcarsCharms(id="lcars-charms")],
+                    [LcarsFooter(pills=_binding_pills(self.BINDINGS),
+                                 id="lcars-footer")],
                 )
-            return (Header(id="std-header"),
-                    _ButtonFooter(pills=_binding_pills(self.BINDINGS),
-                                  id="std-footer"))
+            return ([Header(id="std-header")],
+                    [_ButtonFooter(pills=_binding_pills(self.BINDINGS),
+                                   id="std-footer")])
 
         async def _apply_chrome(self, lcars: bool) -> None:
             """Swap the top/bottom chrome for the current theme."""
@@ -794,12 +796,12 @@ if _HAS:
                 bottom = self.query_one("#chrome-bottom", Vertical)
             except Exception:
                 return
-            for container, widget in (
+            for container, widgets in (
                     (top, self._chrome_widgets(lcars)[0]),
                     (bottom, self._chrome_widgets(lcars)[1])):
                 for child in list(container.children):
                     await child.remove()
-                await container.mount(widget)
+                await container.mount(*widgets)
 
         async def watch_theme(self, old: str, new: str) -> None:
             # Theme changes (e.g. via the command palette) swap the
