@@ -16,6 +16,8 @@ def _app_with_subagent(tmp=None):
     sdir.mkdir(parents=True)
     (sdir / "history.md").write_text("## turn 1\nhello from sub\n",
                                      encoding="utf-8")
+    (sdir / "scratch.md").write_text("## tool x\nlive tool trace\n",
+                                     encoding="utf-8")
     (sdir / "result.md").write_text("# Subagent result\n- status: completed\n",
                                     encoding="utf-8")
     thread = MagicMock()
@@ -62,6 +64,8 @@ class TestSubagentButton(unittest.IsolatedAsyncioTestCase):
                 for line in getattr(log, "_lines", []))
             combined = text + rendered
             self.assertIn("hello from sub", combined)
+            self.assertIn("live tool trace", combined)
+            self.assertIn("scratch.md", combined)
             # escape closes
             await pilot.press("escape")
             await pilot.pause()

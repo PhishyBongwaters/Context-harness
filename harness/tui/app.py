@@ -321,15 +321,27 @@ if _HAS:
                 yield Label("esc=close", id="sub-hint")
 
         def on_mount(self) -> None:
-            log = self.query_one("#sub-log", Log)
-            for name in ("result.md", "history.md"):
+            self._refresh()
+            # Live console: re-read while the subagent runs.
+            self.set_interval(1.0, self._refresh)
+
+        def _refresh(self) -> None:
+            try:
+                log = self.query_one("#sub-log", Log)
+            except Exception:
+                return
+            log.clear()
+            # scratch.md first: the live tool trace. Then history
+            # (closed episodes) and result.md (when finished).
+            for name in ("scratch.md", "history.md", "result.md"):
                 log.write_line(f"=== {name} ===")
                 p = self._sdir / name
                 try:
-                    log.write_line(p.read_text(encoding="utf-8",
-                                               errors="replace"))
-                except OSError as e:
-                    log.write_line(f"(unreadable: {e})")
+                    text = p.read_text(encoding="utf-8",
+                                       errors="replace").strip()
+                    log.write_line(text if text else "(empty)")
+                except OSError:
+                    log.write_line("(not yet written)")
                 log.write_line("")
 
         def action_close(self) -> None:
