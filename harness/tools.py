@@ -152,8 +152,11 @@ def _delegation_definitions() -> list[dict]:
             "name": "delegate",
             "description": (
                 "Run a subtask in a background subagent. Returns the "
-                "result file path immediately; read it after wait_subagent "
-                "says done. One subagent at a time."
+                "result file path and the subagent's session_dir "
+                "immediately; read the result after wait_subagent says "
+                "done. If the result looks wrong, read "
+                "<session_dir>/history.md to see what the subagent did. "
+                "One subagent at a time."
             ),
             "parameters": {
                 "type": "object",
@@ -191,7 +194,9 @@ def _delegation_definitions() -> list[dict]:
             "name": "wait_subagent",
             "description": (
                 "Block until the subagent finishes (or timeout). Returns "
-                "the result path -- read the file; content is NOT inlined."
+                "the result path and session_dir -- read the result file; "
+                "content is NOT inlined. On failure, check "
+                "<session_dir>/history.md for the trace."
             ),
             "parameters": {
                 "type": "object",

@@ -625,7 +625,8 @@ class Loop:
                    {"id": sid, "task": task[:120],
                     "result_path": result_path})
         return json.dumps({"status": "running",
-                           "result_path": result_path})
+                           "result_path": result_path,
+                           "session_dir": str(sdir)})
 
     def _wait_subagent(self, args: dict) -> str:
         import json
@@ -646,7 +647,8 @@ class Loop:
             alive = thread.is_alive()
         if alive:
             return json.dumps({"status": "running",
-                               "result_path": slot["result_path"]})
+                               "result_path": slot["result_path"],
+                               "session_dir": str(slot["sdir"])})
         # Thread finished: result.md was written in its finally path.
         try:
             import re
@@ -656,9 +658,11 @@ class Loop:
             status = m.group(1) if m else "completed"
         except OSError:
             status = "completed"
-        out = {"status": status, "result_path": slot["result_path"]}
+        out = {"status": status, "result_path": slot["result_path"],
+               "session_dir": str(slot["sdir"])}
         if status == "failed":
-            out["error"] = "see result.md for details"
+            out["error"] = ("see result.md; for the full trace read "
+                            f"{slot['sdir']}/history.md")
         return json.dumps(out)
 
     def _cancel_subagent(self) -> str:
