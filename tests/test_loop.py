@@ -183,15 +183,13 @@ class TestLoop(unittest.TestCase):
         seen = [m for m in loop2.provider.calls[0]["messages"]
                 if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
-        # T6: turn 2 assembles sats (3 user) + history (2 users) +
-        # scratch (assistant, tool, assistant). The trailing harness
-        # note is filtered above.
-        self.assertEqual(roles,
-                         ["user", "user", "user",
-                          "user", "user",
-                          "assistant", "tool", "assistant"])
-        tool_msgs = [m for m in seen if m["role"] == "tool"]
-        self.assertIn("42", tool_msgs[0]["content"])
+        # T7: turn 2 assembles sats (3 user) + history (2 users +
+        # 1 episode pointer as user). The tool trace is archived, not
+        # in hot context. The trailing harness note is filtered above.
+        self.assertEqual(roles, ["user"] * 6)
+        self.assertFalse(any(m["role"] == "tool" for m in seen))
+        self.assertTrue(any("archive/" in (m.get("content") or "")
+                            for m in seen))
 
     def test_model_prunes_file_mid_turn(self):
         # T5: mid-turn transcript rewrites are gate-denied -- the model
@@ -207,11 +205,13 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "original question"), "done")
-        # The denial lives in scratch (tool results); the assembled
-        # artifact picks it up on the next assembly.
-        scratch = (s.dir / "scratch.md").read_text(encoding="utf-8")
-        self.assertIn("DENIED", scratch)
-        self.assertIn("done", scratch)
+        # The denial lives in the archived episode (tool results go to
+        # scratch during the turn, archive at close).
+        archived = "".join(
+            p.read_text(encoding="utf-8")
+            for p in (s.dir / "archive").glob("*.md"))
+        self.assertIn("DENIED", archived)
+        self.assertIn("done", archived)
         text = s.context.load()
         self.assertIn("original question", text)
 
@@ -280,10 +280,12 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "hi"), "curated")
-        # The denial lives in scratch (tool results go there now).
-        scratch = (s.dir / "scratch.md").read_text(encoding="utf-8")
-        self.assertIn("DENIED", scratch)
-        self.assertIn("harness-owned", scratch)
+        # The denial lives in the archived episode.
+        archived = "".join(
+            p.read_text(encoding="utf-8")
+            for p in (s.dir / "archive").glob("*.md"))
+        self.assertIn("DENIED", archived)
+        self.assertIn("harness-owned", archived)
         # No backup: nothing changed.
         self.assertEqual(len(glob.glob(str(s.dir / "*.pre-edit-*.bak"))), 0)
         # history.md still holds the original user message, stamped.

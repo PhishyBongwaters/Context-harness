@@ -89,7 +89,7 @@ Sections start with a `## ` header: `## user`, `## assistant`,
 """
 
 _HEADER_RE = re.compile(
-    r"^##[ \t]+(user|assistant|tool|sat)(?:[ \t]+(\S+))?.*$")
+    r"^##[ \t]+(user|assistant|tool|sat|episode)(?:[ \t]+(\S+))?.*$")
 _FENCE_OPEN = "```tool-calls"
 _FENCE_CLOSE = "```"
 
@@ -271,6 +271,11 @@ def parse_transcript(text: str) -> list[dict]:
             # Assembled satellite content (T3): satellite files wrapped
             # by the harness as `## sat <name>`. Sent as user-role so
             # the model sees curated state as conversation context.
+            messages.append({"role": "user", "content": body})
+        elif role == "episode":
+            # Episode pointer (T7): `## episode t<NNNN>` in history.md.
+            # Cheap archive pointer, sent as a plain user-role message
+            # (Rob's decision 2026-10-09).
             messages.append({"role": "user", "content": body})
     return messages
 

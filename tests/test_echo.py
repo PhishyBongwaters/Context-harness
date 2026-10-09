@@ -24,10 +24,12 @@ class TestEchoSanitize(unittest.TestCase):
         out = loop.run_turn(s, "well hello")
         self.assertNotIn("## user", out)
         self.assertIn("Well hello", out)
-        # The stored reply (in scratch) parses back clean: the echoed
-        # ## headers were stripped before storing.
-        from harness.assembly import assemble
-        msgs = parse_transcript(assemble(s.dir))
+        # The stored reply (archived at episode close) parses back
+        # clean: the echoed ## headers were stripped before storing.
+        archived = "".join(
+            p.read_text(encoding="utf-8")
+            for p in (s.dir / "archive").glob("*.md"))
+        msgs = parse_transcript(archived)
         assistants = [m for m in msgs if m["role"] == "assistant"]
         self.assertTrue(assistants)
         self.assertNotIn("##", assistants[-1]["content"])

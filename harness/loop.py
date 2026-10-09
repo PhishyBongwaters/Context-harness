@@ -58,6 +58,13 @@ Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
 session sources -- use edit.
 
+EPISODES: your replies and tool results accumulate in the episode's
+working notes. When you reply without calling tools, the episode
+closes: the notes are archived and only a pointer remains in history.
+Move anything durable into history.md or the sats BEFORE your closing
+reply, or it leaves active context. You can re-read an archived
+episode by its path when you truly need the detail.
+
 TOOLS: Use the native function-calling tools provided by the API
 (read, write, edit, exec, tokens). Call them directly -- do NOT emit
 tool calls as text, XML, or JSON blocks in your reply.
@@ -320,6 +327,47 @@ class Loop:
             return backup
         except OSError:
             return None  # best effort: never block a turn on a backup
+
+    def _close_episode(self, session: Session, turn_no: int) -> None:
+        """Archive scratch.md, clear it, record the pointer (T7).
+
+        Runs when the assistant replies with no more tool calls. The
+        full episode trace moves to archive/<date>-t<NNNN>.md; history
+        keeps a cheap `## episode t<NNNN>` pointer (archive path, turn
+        range, tool-call count). Best effort: never block a turn.
+        """
+        import datetime as _dt
+        import re as _re
+        try:
+            scratch_p = session.dir / "scratch.md"
+            content = (scratch_p.read_text(encoding="utf-8",
+                                           errors="replace")
+                       if scratch_p.exists() else "")
+            tool_calls = len(_re.findall(r"(?m)^## tool \S+", content))
+            archive_dir = session.dir / "archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            stamp = _dt.datetime.now().strftime("%Y%m%d")
+            dest = archive_dir / f"{stamp}-t{turn_no:04d}.md"
+            n = 2
+            while dest.exists():
+                dest = archive_dir / f"{stamp}-t{turn_no:04d}-{n}.md"
+                n += 1
+            dest.write_text(content, encoding="utf-8")
+            scratch_p.write_text("", encoding="utf-8")
+            tag = f"t{turn_no:04d}"
+            pointer = (f"## episode {tag}\n"
+                       f"archive: archive/{dest.name}\n"
+                       f"turns: {tag}-{tag}\n"
+                       f"tool_calls: {tool_calls}\n")
+            self._append_source(session, "history.md", pointer)
+            # Refresh the inspectable artifact so it reflects the
+            # closed episode, not the pre-close assembly.
+            write_assembled(session.dir, assemble(session.dir))
+            self._emit("episode-close", {"turn": turn_no,
+                                         "archive": f"archive/{dest.name}",
+                                         "tool_calls": tool_calls})
+        except OSError:
+            pass  # best effort: never block a turn on archiving
 
     def _execute_tool(self, session: Session, tc: dict) -> str:
         """Gate-checked, approval-gated tool run.
@@ -596,6 +644,9 @@ class Loop:
                     # leak into and kill the next turn.
                     self._stop_event.clear()
                     self._auto_dedupe(session)
+                    # T7: the episode closes -- archive the trace, clear
+                    # scratch, record the pointer.
+                    self._close_episode(session, turn_no)
                     return content or ""
                 for tc in tool_calls:
                     self._check_stop()
