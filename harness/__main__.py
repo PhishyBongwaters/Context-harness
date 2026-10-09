@@ -309,6 +309,7 @@ def _latest_project_session(cfg, name: str, workdir: str):
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
              "/open <id>  switch session (id prefix ok)\n"
              "/project [name]  show/switch project\n"
+             "/goal \"text\"  add a goal to sats/goals.md\n"
              "/list        list sessions (* = current)\n"
              "/usage [N]   ledger totals + last N calls (default 5)\n"
              "/config      show effective config (redacted)\n"
@@ -928,6 +929,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Assemble the session transcript and report token "
                          "costs vs budgets without creating a provider or "
                          "making any model calls. Writes nothing.")
+    ap.add_argument("--goal", default=None, metavar="TEXT",
+                    help="Add a goal to sats/goals.md in the session "
+                         "(--session or current), then exit.")
     ap.add_argument("--config", action="store_true",
                     help="Write an example config file.")
     ap.add_argument("--provider",
@@ -1082,6 +1086,17 @@ def main(argv: list[str] | None = None) -> int:
     stamp(box["session"])
     if getattr(args, "dry_run", False):
         return _dry_run(cfg, args, box["session"])
+    if getattr(args, "goal", None):
+        from .session import add_goal
+        res = add_goal(box["session"].dir, args.goal)
+        if res == "added":
+            print(f"[goal added to {box['session'].id}: {args.goal}]")
+        elif res == "exists":
+            print(f"[goal already active in {box['session'].id}]")
+        else:
+            print("error: empty goal text", file=sys.stderr)
+            return 2
+        return 0
     attach()
     if _restore_session_model(box, cfg, args):
         # Restore retargeted behind attach()'s back: repaint so the

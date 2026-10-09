@@ -208,6 +208,39 @@ def init_layout(sdir: str | Path, prompt_text: str) -> dict:
     return paths
 
 
+def add_goal(sdir: str | Path, text: str) -> str:
+    """Append a user goal to sats/goals.md.
+
+    Returns "added", "exists" (already active), or "empty". A goal
+    marked [done] is re-activated rather than duplicated. Creates the
+    sat (and its dir) in old sessions that lack it.
+    """
+    text = text.strip()
+    if (len(text) >= 2 and text[0] == text[-1]
+            and text[0] in ("\"", "'")):
+        text = text[1:-1].strip()
+    if not text:
+        return "empty"
+    sats = Path(sdir) / "sats"
+    sats.mkdir(parents=True, exist_ok=True)
+    p = sats / "goals.md"
+    if not p.exists():
+        p.write_text(SAT_FILES["goals"], encoding="utf-8")
+    body = p.read_text(encoding="utf-8", errors="replace")
+    active_line = f"- [active] {text}"
+    if active_line in body:
+        return "exists"
+    done_line = f"- [done] {text}"
+    if done_line in body:
+        body = body.replace(done_line, active_line, 1)
+        p.write_text(body, encoding="utf-8")
+        return "added"
+    if not body.endswith("\n"):
+        body += "\n"
+    p.write_text(body + active_line + "\n", encoding="utf-8")
+    return "added"
+
+
 def load_state(sdir: str | Path) -> dict:
     """Read the harness-owned counters. Corrupt/missing -> zeros."""
     try:

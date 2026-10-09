@@ -1079,6 +1079,19 @@ if _HAS:
                     self._log_lines(self._control.do_project(rest))
                     self._sync_state()
                 return True
+            if cmd == "goal":
+                if not rest:
+                    self._log('usage: /goal "goal text"')
+                else:
+                    from ..session import add_goal
+                    res = add_goal(self._session.dir, rest)
+                    if res == "added":
+                        self._log(f"[goal added: {rest}]")
+                    elif res == "exists":
+                        self._log(f"[goal already active: {rest}]")
+                    else:
+                        self._log('usage: /goal "goal text"')
+                return True
             if cmd == "models":
                 self._fetch_models()
                 return True

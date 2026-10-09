@@ -24,7 +24,8 @@ deliberately.
 There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
-1. **satellites** — `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`
+1. **satellites** — `sats/current.md`, `sats/goals.md`,
+   `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`
    (durable one-liners, sent as `## sat <name>` sections)
 2. **history** — `history.md` (stamped conversation record plus episode
    pointers)
@@ -48,6 +49,9 @@ management is deterministic harness behavior, not model judgment.
 once):
 - `history.md` — the conversation record (`## user t<NNNN>`,
   `## episode t<NNNN>`)
+- `sats/current.md` — the active task (update when it changes)
+- `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
+  add one with `/goal "text"` or `--goal "text"`
 - `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
   facts, decisions with reasons, open tasks
 
@@ -101,7 +105,8 @@ implemented from scratch for interactive use.
   state.json       turn/section counters (harness-owned, unreadable)
   index.md         pointer map (harness-owned)
   history.md       stamped conversation record (model-editable)
-  sats/            facts.md, decisions.md, tasks.md (model-editable)
+  sats/            current.md, goals.md, facts.md, decisions.md,
+                   tasks.md (model-editable)
   scratch.md       current episode working notes (harness-owned)
   archive/         closed episodes, one file per turn (harness-owned)
   context.md       assembled artifact for inspection (rebuilt every turn)
