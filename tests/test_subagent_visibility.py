@@ -35,6 +35,17 @@ class TestSubagentVisibility(unittest.TestCase):
         self.assertTrue(Path(out["session_dir"]).is_dir())
         self.assertIn("subagents", out["session_dir"])
 
+    def test_delegate_tracks_model(self):
+        loop = _loop()
+        sess = _session()
+        with patch("threading.Thread"):
+            out = json.loads(loop._delegate(sess, {"task": "x"}))
+        # model label in the response...
+        self.assertIn("model", out)
+        self.assertIn("/", out["model"])  # provider/model format
+        # ...and in the slot
+        self.assertEqual(loop._subagent["model"], out["model"])
+
     def test_wait_returns_session_dir(self):
         loop = _loop()
         sess = _session()

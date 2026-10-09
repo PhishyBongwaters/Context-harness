@@ -425,8 +425,8 @@ class Loop:
                 lines = ["subagents:"]
                 for c in self._completed_subagents:
                     lines.append(
-                        f"  - {c['id']}: \"{c['task']}\" -> {c['status']} "
-                        f"({c['result_path']})")
+                        f"  - {c['id']}: \"{c['task']}\" [{c['model']}] -> "
+                        f"{c['status']} ({c['result_path']})")
                 pointer += "\n".join(lines) + "\n"
                 self._completed_subagents.clear()
             self._append_source(session, "history.md", pointer)
@@ -650,9 +650,13 @@ class Loop:
             tools_allowlist=allowlist,
         )
         result_path = str(sdir / "result.md")
+        prov = getattr(sub_loop, "provider", None)
+        model_label = (f"{getattr(prov, 'name', '?')}/"
+                       f"{getattr(prov, 'model', '?')}")
         slot = {"thread": None, "sdir": sdir, "id": sid,
                 "result_path": result_path, "loop": sub_loop,
-                "cancelled": False, "task": task}
+                "cancelled": False, "task": task,
+                "model": model_label}
         self._subagent = slot
 
         def _run():
@@ -677,7 +681,8 @@ class Loop:
                     "result_path": result_path})
         return json.dumps({"status": "running",
                            "result_path": result_path,
-                           "session_dir": str(sdir)})
+                           "session_dir": str(sdir),
+                           "model": slot["model"]})
 
     def _wait_subagent(self, args: dict) -> str:
         import json
@@ -699,7 +704,8 @@ class Loop:
         if alive:
             return json.dumps({"status": "running",
                                "result_path": slot["result_path"],
-                               "session_dir": str(slot["sdir"])})
+                               "session_dir": str(slot["sdir"]),
+                               "model": slot.get("model", "?")})
         # Thread finished: result.md was written in its finally path.
         try:
             import re
@@ -710,7 +716,8 @@ class Loop:
         except OSError:
             status = "completed"
         out = {"status": status, "result_path": slot["result_path"],
-               "session_dir": str(slot["sdir"])}
+               "session_dir": str(slot["sdir"]),
+               "model": slot.get("model", "?")}
         if status == "failed":
             out["error"] = ("see result.md; for the full trace read "
                             f"{slot['sdir']}/history.md")
@@ -718,6 +725,7 @@ class Loop:
         self._completed_subagents.append({
             "id": slot["id"],
             "task": (slot["task"].splitlines() or [""])[0][:120],
+            "model": slot.get("model", "?"),
             "status": status,
             "result_path": slot["result_path"],
             "session_dir": str(slot["sdir"]),
@@ -743,6 +751,7 @@ class Loop:
             f"# Subagent result — {slot['id']}",
             "",
             f"- task: {task_first}",
+            f"- model: {slot.get('model', '?')}",
             f"- status: {status}",
             f"- ended: {datetime.datetime.now().astimezone().isoformat()}",
             "",

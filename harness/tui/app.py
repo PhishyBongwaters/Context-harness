@@ -306,16 +306,18 @@ if _HAS:
                "border: thick $primary; background: $surface; padding: 1 2; } "
                "#sub-log { height: 1fr; }")
 
-        def __init__(self, sdir, task, status):
+        def __init__(self, sdir, task, status, model="?"):
             super().__init__()
             from pathlib import Path as _P
             self._sdir = _P(sdir)
             self._task = task
             self._status = status
+            self._model = model
 
         def compose(self) -> "ComposeResult":
             with Vertical(id="sub-box"):
-                yield Label(f"[subagent] {self._task} ({self._status})",
+                yield Label(f"[subagent] {self._task} ({self._status}) "
+                            f"[{self._model}]",
                             id="sub-title")
                 yield Log(id="sub-log")
                 yield Label("esc=close", id="sub-hint")
@@ -1431,7 +1433,8 @@ if _HAS:
                                     and thread.is_alive())
                       else "done")
             task = (sub.get("task") or "subagent").splitlines()[0][:80]
-            self.push_screen(SubagentScreen(sub["sdir"], task, status))
+            self.push_screen(SubagentScreen(sub["sdir"], task, status,
+                                            model=sub.get("model", "?")))
 
         def action_pick_provider(self) -> None:
             self._open_provider_picker()

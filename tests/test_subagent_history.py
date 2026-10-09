@@ -46,6 +46,8 @@ class TestSubagentHistory(unittest.TestCase):
         self.assertIn("curate the history", hist)
         self.assertIn("completed", hist)
         self.assertIn("result.md", hist)
+        # model tracked in the history record
+        self.assertIn(loop._subagent["model"], hist)
         # drained
         self.assertEqual(loop._completed_subagents, [])
 
