@@ -230,10 +230,11 @@ class Loop:
         # Completed subagents, drained into history.md at episode close
         # so the model retains a durable record of what it delegated.
         self._completed_subagents: list[dict] = []
-        # Circuit breaker: (tool name, args key) -> consecutive
-        # denial/error count. Stops the model spamming a call the
-        # harness keeps refusing.
-        self._denial_counts: dict[tuple[str, str], int] = {}
+        # Circuit breaker: tool name -> consecutive denial/error
+        # count. Stops the model spamming calls the harness keeps
+        # refusing (keyed on tool, not args: varying the command
+        # after a denial is still spamming).
+        self._denial_counts: dict[str, int] = {}
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -466,12 +467,10 @@ class Loop:
         Denied calls return a DENIED message the model must respect.
         """
         from .tools import source_gate
-        import json as _json
         name, args = tc["name"], tc.get("arguments") or {}
-        key = (name, _json.dumps(args, sort_keys=True, default=str))
 
         def _failed(result: str) -> str:
-            self._denial_counts[key] = self._denial_counts.get(key, 0) + 1
+            self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
             return result
 
         def _done(result: str) -> str:
@@ -480,16 +479,15 @@ class Loop:
             if (result.startswith("ERROR") or "DENIED" in result
                     or '"status": "error"' in result):
                 return _failed(result)
-            self._denial_counts.pop(key, None)
+            self._denial_counts.pop(name, None)
             return result
 
-        # Circuit breaker: stop accepting a call the harness keeps
+        # Circuit breaker: stop accepting a tool the harness keeps
         # refusing. The model must try something else, not spam.
-        if self._denial_counts.get(key, 0) >= 3:
-            msg = (f"CIRCUIT BREAKER: '{name}' with these arguments has "
-                   f"been denied or failed 3 times. Stop calling it -- "
-                   f"try a different approach, different arguments, or "
-                   f"ask the user.")
+        if self._denial_counts.get(name, 0) >= 3:
+            msg = (f"CIRCUIT BREAKER: '{name}' has been denied or failed "
+                   f"3 times in a row. Stop calling it -- try a different "
+                   f"tool, or ask the user.")
             self._emit("tool", {"name": name, "args": args,
                                 "result": msg, "denied": True})
             return msg

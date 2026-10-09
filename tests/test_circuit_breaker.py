@@ -57,13 +57,30 @@ class TestCircuitBreaker(unittest.TestCase):
         r = loop._execute_tool(sess, tc)
         self.assertIn("CIRCUIT BREAKER", r)
 
-    def test_different_args_not_grouped(self):
+    def test_different_args_still_grouped(self):
+        # Varying the arguments after a denial is still spamming: the
+        # breaker keys on tool name, not args.
         loop = _loop()
         sess = _session()
         for i in range(3):
             tc = {"name": "bogus_tool", "arguments": {"n": i}}
             r = loop._execute_tool(sess, tc)
             self.assertNotIn("CIRCUIT BREAKER", r)
+        r = loop._execute_tool(sess, {"name": "bogus_tool",
+                                      "arguments": {"n": 99}})
+        self.assertIn("CIRCUIT BREAKER", r)
+
+    def test_different_tool_not_blocked(self):
+        loop = _loop()
+        sess = _session()
+        for _ in range(3):
+            loop._execute_tool(sess, {"name": "bogus_a",
+                                      "arguments": {}})
+        # bogus_b is unaffected
+        r = loop._execute_tool(sess, {"name": "bogus_b",
+                                      "arguments": {}})
+        self.assertNotIn("CIRCUIT BREAKER", r)
+        self.assertIn("ERROR", r)
 
 
 if __name__ == "__main__":
