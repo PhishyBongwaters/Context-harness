@@ -94,6 +94,20 @@ def _has_rich():
         return False
 
 
+@unittest.skipUnless(__import__("harness.tui", fromlist=["has_tui"]).has_tui(),
+                     "textual extra missing")
+class TestApprovalCSS(unittest.TestCase):
+    def test_css_parses_without_keyframes(self):
+        # Regression: @keyframes is not valid Textual CSS and broke
+        # the approval modal (black screen). This must not raise.
+        from textual.css.stylesheet import Stylesheet
+        from harness.tui.app import ApprovalScreen
+        self.assertNotIn("@keyframes", ApprovalScreen.CSS)
+        ss = Stylesheet()
+        ss.add_source(ApprovalScreen.CSS, read_from="test",
+                      scope="ApprovalScreen")
+
+
 @unittest.skipUnless(_has_rich(), "rich missing")
 class TestGaugeSweep(unittest.TestCase):
     def _data(self):

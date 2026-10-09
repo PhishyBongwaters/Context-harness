@@ -155,13 +155,9 @@ if _HAS:
                     ("escape", "deny", "Deny")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
-               "@keyframes approval-pulse { "
-               "0% { opacity: 1; } 50% { opacity: 0.88; } "
-               "100% { opacity: 1; } } "
                "#approval-box { width: 62; height: auto; "
                "border: thick $primary; "
-               "background: $surface; padding: 1 2; "
-               "animation: approval-pulse 1.5s infinite; } "
+               "background: $surface; padding: 1 2; } "
                "#approval-title { text-style: bold; } "
                "#approval-count { color: $warning; }")
 
@@ -194,6 +190,18 @@ if _HAS:
         def on_mount(self) -> None:
             self._show_count()
             self.set_interval(1.0, self._tick)
+            # Gentle attention pulse on the dialog box (Textual's CSS
+            # has no @keyframes, so this is programmatic).
+            self._pulse_on = True
+            self.set_interval(0.75, self._pulse_box)
+
+        def _pulse_box(self) -> None:
+            self._pulse_on = not self._pulse_on
+            try:
+                self.query_one("#approval-box").styles.opacity = (
+                    1.0 if self._pulse_on else 0.9)
+            except Exception:
+                pass
 
         def _show_count(self) -> None:
             self.query_one("#approval-count", Label).update(
