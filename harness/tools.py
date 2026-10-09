@@ -68,8 +68,13 @@ def tool_definitions() -> list[dict]:
         },
         {
             "name": "edit",
-            "description": ("Replace the first exact occurrence of old_text "
-                            "with new_text in a file."),
+            "description": ("Replace old_text with new_text in a file. "
+                            "old_text must match EXACTLY ONCE: zero matches "
+                            "is an error, and two or more matches is an "
+                            "error -- include more surrounding context so "
+                            "the match is unique. This is the way to edit "
+                            "files; do not read a file and rewrite it "
+                            "whole."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -152,14 +157,27 @@ def write_tool(args: dict, workdir: str) -> str:
 
 
 def edit_tool(args: dict, workdir: str) -> str:
+    """Replace-only edit with an exactly-once contract (T4).
+
+    old_text must match exactly once: zero matches is an error naming
+    the file, two or more is an error telling the caller to widen the
+    match with surrounding context. The file is never touched unless
+    the match is unique.
+    """
     p = _resolve(args["path"], workdir)
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return f"ERROR reading {p}: {e}"
     old, new = args["old_text"], args["new_text"]
-    if old not in text:
+    if not old:
+        return f"ERROR: old_text must not be empty ({p})"
+    n = text.count(old)
+    if n == 0:
         return f"ERROR: old_text not found in {p}"
+    if n > 1:
+        return (f"ERROR: old_text matches {n} times in {p} -- include "
+                f"more surrounding context so it matches exactly once")
     p.write_text(text.replace(old, new, 1), encoding="utf-8")
     return f"Edited {p} (1 occurrence replaced)"
 

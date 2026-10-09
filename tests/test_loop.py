@@ -217,10 +217,49 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(janitor.calls[0]["tools"], ["write", "edit"])
 
     def test_model_edit_backs_up_context(self):
-        # Mid-turn curation (model write/edit on context.md during a
-        # NORMAL turn) must snapshot too: every model edit reversible.
+        # Model edits must snapshot too: every edit reversible via a
+        # pre-edit backup plus a mechanical diff.
+        # NOTE (T4): the edit targets a plain file, not the live
+        # transcript -- under the exactly-once contract a transcript
+        # self-edit is ambiguous by construction (old_text matches its
+        # own echo in the tool-calls fence), so curation moves to
+        # source files (see T5). _execute_tool is driven directly to
+        # keep the transcript echo out of the picture.
+        from harness.context import ContextFile
+        s = make_session()
+        target = s.dir / "notes.md"
+        target.write_text("keep me\n", encoding="utf-8")
+        s.context = ContextFile(target)
+        diffs = []
+        loop = Loop(MockProvider([]), Budget(100000, 80000),
+                    on_event=lambda k, v: diffs.append(v)
+                    if k == "context-diff" else None)
+        result = loop._execute_tool(
+            s, {"id": "e1", "name": "edit",
+                "arguments": {"path": str(target),
+                              "old_text": "keep me\n",
+                              "new_text": "keep me (summarized)\n"}})
+        self.assertIn("1 occurrence replaced", result)
+        # NOTE: _backup_context hardcodes the "context." prefix today;
+        # T5 gives source backups their source's name.
+        baks = glob.glob(str(s.dir / "context.pre-edit-*.bak"))
+        self.assertEqual(len(baks), 1)
+        bak = open(baks[0], encoding="utf-8").read()
+        self.assertIn("keep me", bak)
+        # The backup is taken pre-edit; after the edit the file changes.
+        self.assertNotEqual(bak, target.read_text(encoding="utf-8"))
+        self.assertIn("(summarized)", target.read_text(encoding="utf-8"))
+        self.assertEqual(len(diffs), 1)
+
+    def test_transcript_self_edit_fails_loudly(self):
+        # T4: under exactly-once, editing the live transcript is
+        # ambiguous by construction -- the tool-calls fence appended
+        # before execution echoes old_text, so the match count is never
+        # 1. The edit must fail loudly and leave the file untouched
+        # (T5 gates retire transcript self-edits entirely).
         s = make_session()
         s.context.save(render_user("keep me"))
+        before = s.context.load()
         script = [
             {"content": None, "tool_calls": [
                 {"id": "e1", "name": "edit",
@@ -231,13 +270,14 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "hi"), "curated")
-        baks = glob.glob(str(s.dir / "context.pre-edit-*.bak"))
-        self.assertEqual(len(baks), 1)
-        bak = open(baks[0], encoding="utf-8").read()
-        self.assertIn("keep me", bak)
-        # The backup is taken pre-edit; after the edit the file changes.
-        self.assertNotEqual(bak, s.context.load())
-        self.assertIn("(summarized)", s.context.load())
+        self.assertIn("ERROR", s.context.load())
+        self.assertIn("exactly once", s.context.load())
+        # No backup: nothing changed (only the tool result appended).
+        self.assertEqual(len(glob.glob(str(s.dir / "*.pre-edit-*.bak"))), 0)
+        # The edit never applied: the original user section is intact.
+        # ("(summarized)" still shows inside the tool-calls echo -- that
+        # is the would-be new_text, not an applied edit.)
+        self.assertTrue(s.context.load().startswith(before))
 
     def test_noop_and_other_files_no_backup(self):
         # Edits elsewhere never mint a .bak, and identical edit is no-op.
