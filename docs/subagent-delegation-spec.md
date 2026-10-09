@@ -248,18 +248,15 @@ configured `workdir`. (The parent side needs no changes — §7.)
   `read` the result file, confirm the parent's transcript never saw
   the subagent's tool noise.
 
-## 12. Open questions
+## 12. Decided (2026-10-09)
 
-1. **Wall-clock timeout?** The old spec had one (default 300s). A
-   hung model call blocks `wait_subagent` indefinitely. Add
-   `timeout_s` to `delegate` (default: none) or leave it to the
-   parent to `cancel_subagent`? Leaning: leave it out; the parent is
+1. **No wall-clock timeout on `delegate`.** A hung subagent is the
+   parent's problem to notice and `cancel_subagent`. The parent is
    the timeout.
-2. **TUI visibility.** Show `SUBAGENT: running…` in the charm strip
-   while active. Cheap, high-value — do it in Phase 2.
-3. **Retry helper?** If a subagent fails, the parent re-delegates
-   manually with a narrower task. No auto-retry — the parent is the
-   retry policy.
+2. **TUI shows subagent status.** While a subagent runs, the charm
+   strip shows `SUBAGENT: running…` (Phase 2 work, cheap).
+3. **No auto-retry.** If a subagent fails, the parent re-delegates
+   with a narrower task. The parent is the retry policy.
 
 ## 13. Explicit non-goals
 
