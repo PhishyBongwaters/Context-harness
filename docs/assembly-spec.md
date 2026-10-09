@@ -164,8 +164,8 @@ Tool calls are working memory with a TTL, not durable state.
      `history.md`/`sats/*.md` until the next assembled request fits.
      Same loud-failure contract as today's prune turn
      (`MAX_PRUNE_ATTEMPTS`, no silent truncation).
-- `prune_turn` in `loop.py` is reworked to this shape in T7/T9, not
-  deleted in one go.
+- `prune_turn` in `loop.py` is reworked to this shape (landed in T6,
+  pulled forward from the T7/T9 slot).
 
 ## 8. Index format (holy, harness-owned)
 

@@ -1,33 +1,98 @@
 # context-harness
 
-Daily-driver agent loop where the model treats its context as a file.
+Daily-driver agent loop with deterministic, blank-slate context assembly.
 
-`context.md` **is** the transcript — `## user` / `## assistant` /
-`## tool <id>` sections, tool calls in a fenced `tool-calls` JSON block.
-The harness reads it before every model call and appends new turns at the
-end. The model restructures the rest with plain write/edit tools: delete
-stale sections, summarize old output, reorder. No hidden transcript, no
-special compact tool.
+There is no accumulating transcript. Every turn the harness assembles
+the model's context from sources, in fixed order:
+
+1. **satellites** — `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`
+   (durable one-liners, sent as `## sat <name>` sections)
+2. **history** — `history.md` (stamped conversation record plus episode
+   pointers)
+3. **scratch** — `scratch.md` (the current episode's working notes:
+   assistant replies and tool results)
+
+The prompt loads fresh from `prompt.md` through the API system parameter
+each turn. The assembled text is written to `context.md` as an
+inspectable build artifact — rebuilt every turn, never edited by the
+model. No hidden transcript, no special compact tool.
+
+## Who owns what
+
+**The harness owns:** prompt loading, assembly order, turn/section
+counters (`state.json`), the episode lifecycle, archive pointers,
+source-gate enforcement, pre-edit backups, and verification. Context
+management is deterministic harness behavior, not model judgment.
+
+**The model may edit** (exact `old_text`/`new_text`, must match exactly
+once):
+- `history.md` — the conversation record (`## user t<NNNN>`,
+  `## episode t<NNNN>`)
+- `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
+  facts, decisions with reasons, open tasks
+
+`write` is rejected on all session sources — use `edit`.
+
+**Harness-owned (model read-only):** `prompt.md`, `state.json`,
+`index.md`, `scratch.md`, `archive/`, `context.md`. `state.json`
+can't even be read. Denied calls return a `DENIED` tool result the
+model must respect.
+
+## Episodes
+
+Tool calls and their results accumulate in `scratch.md` during a turn.
+When the assistant replies with no more tool calls, the episode closes:
+the harness archives scratch to `archive/<date>-t<NNNN>.md`, clears it,
+and appends a `## episode t<NNNN>` pointer to history (archive path,
+turn range, tool-call count). Archived detail stays out of hot context
+but can be re-read deliberately by path — visible cost, no silent bloat.
+Move anything durable into `history.md` or the sats *before* the
+closing reply, or it leaves active context.
+
+## Budget
 
 A token budget meter shows every turn. Soft breach warns; hard breach
-gives the model a prune-only turn (write/edit on `context.md` only).
+gives the model a curation turn. Deterministic stages run first
+(exact-dupe collapse, oldest-tool eviction, per-section caps — all on
+`scratch.md`, milliseconds, no model calls); if still over, the model
+gets edit-only curation turns on `history.md`/`sats/*.md` until the
+next assembled request fits.
 Enforcement sits at 50% of the model's context window so pruning starts
 early and the prune request itself always fits; soft warns at 80% of
 hard. The header shows both numbers, e.g. `window=135,168 [live]
 prune-at=67,584` — the window is the context, the prune trigger is not.
-Pruning fails repeatedly → loud error, never silent truncation. Every
-prune turn and any model edit of `context.md` backs up the file first
-(`context.pre-prune-<ts>.bak` / `context.pre-edit-<ts>.bak`), so all
-model curation is reversible. The prune
-turn can run on a separate janitor model — cheaper/smaller, even local
-while the main model is cloud (see `prune_*` config).
+Curation fails repeatedly → loud error, never silent truncation. Every
+source edit backs up the file first
+(`history.pre-edit-<ts>.bak`), so all model curation is reversible. The
+curation turn can run on a separate janitor model — cheaper/smaller, even
+local while the main model is cloud (see `prune_*` config).
 
-Every model edit of the transcript prints a mechanical diff: which
-sections were removed/added and how many tokens were recovered. You always
+Every model edit of a source prints a mechanical diff: which sections
+were removed/added and how many tokens were recovered. You always
 see what the model threw away.
 
 Design follows the Context Language Models paper (arXiv:2609.37725),
 implemented from scratch for interactive use.
+
+## Session layout
+
+```
+<sessions>/<id>/
+  prompt.md        system prompt (harness-owned; loaded fresh each turn)
+  state.json       turn/section counters (harness-owned, unreadable)
+  index.md         pointer map (harness-owned)
+  history.md       stamped conversation record (model-editable)
+  sats/            facts.md, decisions.md, tasks.md (model-editable)
+  scratch.md       current episode working notes (harness-owned)
+  archive/         closed episodes, one file per turn (harness-owned)
+  context.md       assembled artifact for inspection (rebuilt every turn)
+```
+
+Old single-file sessions migrate automatically on open: user sections
+become stamped history, each turn's assistant/tool run becomes an
+archived episode, the turn counter is seeded, and the original is kept
+as `context.md.pre-migration-<ts>.bak`. Ambiguous transcripts refuse
+to migrate loudly instead of guessing.
 
 ## Run
 
@@ -185,8 +250,10 @@ model's chat template; results vary.)
 
 ## Layout
 
-`harness/loop.py` — agent loop, budget enforcement, prune turns ·
-`harness/context.py` — transcript render/parse, token counting ·
+`harness/loop.py` — agent loop, budget enforcement, curation turns ·
+`harness/context.py` — section render/parse, token counting ·
+`harness/session.py` — session layout, counters, migration ·
+`harness/assembly.py` — blank-slate assembly (sats → history → scratch) ·
 `harness/providers.py` — OpenAI, Anthropic, Mock ·
 `harness/tools.py` — exec / read / write / edit / tokens ·
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
@@ -202,14 +269,14 @@ widgets, commands, modal approvals (needs `requirements-tui.txt`)
 `tests/` — 225 unittest tests; the Textual pilots skip cleanly when
 the extra is missing. `python -m unittest discover -s tests`
 
-## Deterministic prune
+## Deterministic stages
 
-Before the janitor turn fires, model-free stages run (milliseconds, no
-prefill): exact-dupe collapse (newest wins, user sections exempt),
+Before the janitor turn fires, model-free stages run on `scratch.md`
+(milliseconds, no prefill): exact-dupe collapse (newest wins),
 oldest-tool eviction (newest K kept), per-section caps (head+tail).
 Evicted tool ids are scrubbed from `tool-calls` fences so strict
-servers never see dangling calls. The agent turn is the last resort,
-over a much smaller file. Knobs: `prune_target` (default soft),
+servers never see dangling calls. The agent curation turn is the last
+resort, over a much smaller file. Knobs: `prune_target` (default soft),
 `prune_keep_tools` (5), `prune_section_cap` (8000).
 
 ## Projects
@@ -263,8 +330,9 @@ The TUI shows the same decision as an in-app modal with a countdown,
 same keys and same default-deny.
 Session approvals persist in `<session-dir>/approvals.json`, so "approved
 for this session" survives across turns and restarts; turn approvals
-clear every `run_turn`. The model's own `context.md` curation never
-prompts. Denials return a `DENIED` tool result the model must respect.
+clear every `run_turn`. The model's source curation (`history.md`,
+`sats/*.md`) never prompts. Denials return a `DENIED` tool result the
+model must respect.
 
 Never allowed (no prompt): destructive shell (`rm -rf /`, `mkfs`,
 `dd of=/dev`, fork bombs, power commands, `curl|sh`) and writes under
