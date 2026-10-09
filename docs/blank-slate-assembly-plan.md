@@ -5,6 +5,14 @@ per-turn assembly. The harness builds the model's context from sources every
 turn; the model edits sources via replace-only edits; tool traces live in a
 harness-owned scratch file with per-episode archival.
 
+**Status (2026-10-09): all tasks T0–T12 landed on
+`feat/blank-slate-assembly`, each pushed and verified on origin.
+Suite: 367 passed, 31 skipped; the only 3 failures are pre-existing
+`test_tui_bridge` cases that fail identically on `main` (env-specific:
+`rich` not installed here, so ANSI formatting falls back to plain
+text). The spec §7 prune rework landed in T6 (pulled forward from its
+T7/T9 slot).
+
 This kills the system-prompt/transcript recursive-dupe class by construction:
 the prompt is never stored in the transcript.
 
