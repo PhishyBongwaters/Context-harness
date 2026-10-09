@@ -609,7 +609,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 project=project,
                 prune_target=cfg.prune_target,
                 prune_keep_tools=cfg.prune_keep_tools,
-                prune_section_cap=cfg.prune_section_cap)
+                prune_section_cap=cfg.prune_section_cap,
+                subagent_budget_fraction=cfg.subagent_budget_fraction)
 
 
 def _candidate_for(cfg, name: str) -> SimpleNamespace:

@@ -170,7 +170,10 @@ if _HAS:
 
         def compose(self) -> "ComposeResult":
             brief = approval_brief(self._info.get("args"))
-            title = f"[approval needed] {self._info.get('tool', '?')}"
+            sub = (" [subagent]" if self._info.get("subagent_id")
+                   else "")
+            title = (f"[approval needed]{sub} "
+                     f"{self._info.get('tool', '?')}")
             if brief:
                 title += f" {brief}"
             # Truncate long titles: the modal border fragments when

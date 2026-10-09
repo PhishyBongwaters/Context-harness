@@ -172,7 +172,11 @@ class Loop:
                  prune_target: int | None = None,
                  prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
                  prune_section_cap: int = DEFAULT_SECTION_CAP,
-                 history_cap: int | None = None):
+                 history_cap: int | None = None,
+                 is_subagent: bool = False,
+                 subagent_id: str | None = None,
+                 tools_allowlist: list[str] | None = None,
+                 subagent_budget_fraction: float = 0.25):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -193,7 +197,17 @@ class Loop:
                             else budget.soft // 2)
         self._turn_seq = 0
         self._stop_event = threading.Event()
-        self._tools = tool_definitions()
+        self.is_subagent = is_subagent
+        self.subagent_id = subagent_id
+        self._subagent_budget_fraction = subagent_budget_fraction
+        self._tools = tool_definitions(
+            include_delegation=not is_subagent)
+        if tools_allowlist is not None:
+            allowed = set(tools_allowlist)
+            self._tools = [t for t in self._tools
+                           if t["name"] in allowed]
+        # One subagent slot per parent loop (spec: one at a time).
+        self._subagent: dict | None = None
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -417,6 +431,13 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+        if self.is_subagent:
+            sub_denial = self._subagent_gate(session, name, args)
+            if sub_denial is not None:
+                self._emit("tool", {"name": name, "args": args,
+                                    "result": sub_denial,
+                                    "denied": True})
+                return sub_denial
         gate_denial = source_gate(session.dir, name,
                                   args.get("path") or "",
                                   session.workdir)
@@ -427,7 +448,9 @@ class Loop:
             return gate_denial
         if self.approver is not None:
             ok, denial = self.approver.resolve(
-                self._policy(session), name, args)
+                self._policy(session), name, args,
+                subagent_id=(self.subagent_id
+                             if self.is_subagent else None))
             if not ok:
                 self._emit("tool", {"name": name, "args": args,
                                     "result": denial,
@@ -436,6 +459,11 @@ class Loop:
         if name == "exec":
             args = clamp_exec_timeout(args, self.exec_timeout,
                                       self.exec_timeout_max)
+        if name in ("delegate", "wait_subagent", "cancel_subagent"):
+            result = self._dispatch_delegation(session, name, args)
+            self._emit("tool", {"name": name, "args": args,
+                                "result": result})
+            return result
         target = self._source_target(session, name, args)
         before = (target.read_text(encoding="utf-8", errors="replace")
                   if target is not None else None)
@@ -449,6 +477,192 @@ class Loop:
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
         return result
+
+    # --- subagent delegation (one at a time) ---
+
+    def _subagent_gate(self, session: Session, name: str,
+                       args: dict) -> str | None:
+        """Deny a subagent any access to the parent session dir outside
+        its own subdir. The subagent's world: its own session dir +
+        the workdir."""
+        if name not in ("read", "write", "edit"):
+            return None
+        path = args.get("path") or ""
+        if not path:
+            return None
+        from .tools import _resolve
+        try:
+            target = _resolve(path, session.workdir).resolve()
+        except Exception:
+            return None
+        parent = session.dir.parent.parent.resolve()
+        own = session.dir.resolve()
+        try:
+            target.relative_to(parent)
+        except ValueError:
+            return None  # not under the parent session dir: fine
+        try:
+            target.relative_to(own)
+            return None  # inside the subagent's own dir: fine
+        except ValueError:
+            pass
+        return ("DENIED: subagents cannot access the parent session "
+                "directory.")
+
+    def _dispatch_delegation(self, session: Session, name: str,
+                             args: dict) -> str:
+        if name == "delegate":
+            return self._delegate(session, args)
+        if name == "wait_subagent":
+            return self._wait_subagent(args)
+        if name == "cancel_subagent":
+            return self._cancel_subagent()
+        return f"ERROR: unknown delegation tool '{name}'"
+
+    def _delegate(self, session: Session, args: dict) -> str:
+        import json
+        import threading
+        task = (args.get("task") or "").strip()
+        if not task:
+            return json.dumps({"status": "error",
+                               "message": "task is required"})
+        cur = self._subagent
+        if cur is not None and cur["thread"].is_alive():
+            return json.dumps({
+                "status": "error",
+                "message": ("a subagent is already running -- wait for it "
+                            "with wait_subagent or stop it with "
+                            "cancel_subagent first"),
+            })
+        from .session import init_subagent_session
+        from .context import Budget
+        sub_hard = int(args.get("budget_hard") or
+                       self.budget.hard * self._subagent_budget_fraction)
+        sub_soft = int(sub_hard * 0.8)
+        paths = init_subagent_session(session.dir, task)
+        sdir, sid = paths["dir"], paths["id"]
+        sub_session = Session(id=f"sub-{sid}", dir=sdir,
+                              workdir=session.workdir)
+        allowlist = args.get("tools") or ["read", "edit", "exec",
+                                          "tokens"]
+        provider = self.provider
+        model_override = (args.get("model") or "").strip()
+        if model_override and hasattr(self, "_make_provider"):
+            try:
+                provider = self._make_provider(model=model_override)
+            except Exception:
+                pass
+        sub_loop = Loop(
+            provider=provider,
+            budget=Budget(hard=sub_hard, soft=sub_soft,
+                          window=self.budget.window),
+            on_event=self.on_event,
+            approver=self.approver,
+            exec_timeout=self.exec_timeout,
+            exec_timeout_max=self.exec_timeout_max,
+            usage_tracker=None,  # independent metering
+            usage_note=False,
+            project=self.project,
+            is_subagent=True,
+            subagent_id=sid,
+            tools_allowlist=allowlist,
+        )
+        result_path = str(sdir / "result.md")
+        slot = {"thread": None, "sdir": sdir, "id": sid,
+                "result_path": result_path, "loop": sub_loop,
+                "cancelled": False, "task": task}
+        self._subagent = slot
+
+        def _run():
+            output, status, error = "", "completed", None
+            try:
+                output = sub_loop.run_turn(sub_session, task) or ""
+            except Exception as e:  # never let a thread die silent
+                status, error = "failed", f"{type(e).__name__}: {e}"
+            if slot["cancelled"]:
+                status = "cancelled"
+            self._write_subagent_result(slot, status, output, error)
+            self._emit("subagent-done",
+                       {"id": sid, "status": status,
+                        "result_path": result_path})
+
+        thread = threading.Thread(target=_run, daemon=True,
+                                  name=f"subagent-{sid}")
+        slot["thread"] = thread
+        thread.start()
+        self._emit("subagent-spawn",
+                   {"id": sid, "task": task[:120],
+                    "result_path": result_path})
+        return json.dumps({"status": "running",
+                           "result_path": result_path})
+
+    def _wait_subagent(self, args: dict) -> str:
+        import json
+        import time
+        slot = self._subagent
+        if slot is None:
+            return json.dumps({"status": "error",
+                               "message": "no subagent has been delegated"})
+        timeout = args.get("timeout")
+        timeout = 120 if timeout is None else int(timeout)
+        thread = slot["thread"]
+        if timeout <= 0:
+            alive = thread.is_alive()
+        else:
+            deadline = time.monotonic() + timeout
+            while thread.is_alive() and time.monotonic() < deadline:
+                thread.join(timeout=0.5)
+            alive = thread.is_alive()
+        if alive:
+            return json.dumps({"status": "running",
+                               "result_path": slot["result_path"]})
+        # Thread finished: result.md was written in its finally path.
+        try:
+            import re
+            text = open(slot["result_path"],
+                        encoding="utf-8").read()
+            m = re.search(r"^- status: (\w+)", text, re.M)
+            status = m.group(1) if m else "completed"
+        except OSError:
+            status = "completed"
+        out = {"status": status, "result_path": slot["result_path"]}
+        if status == "failed":
+            out["error"] = "see result.md for details"
+        return json.dumps(out)
+
+    def _cancel_subagent(self) -> str:
+        import json
+        slot = self._subagent
+        if slot is None:
+            return json.dumps({"status": "error",
+                               "message": "no subagent has been delegated"})
+        slot["cancelled"] = True
+        slot["loop"].request_stop()
+        return json.dumps({"status": "cancelled",
+                           "result_path": slot["result_path"]})
+
+    def _write_subagent_result(self, slot: dict, status: str,
+                               output: str, error: str | None) -> None:
+        import datetime
+        task_first = (slot["task"].splitlines() or [""])[0][:120]
+        lines = [
+            f"# Subagent result — {slot['id']}",
+            "",
+            f"- task: {task_first}",
+            f"- status: {status}",
+            f"- ended: {datetime.datetime.now().astimezone().isoformat()}",
+            "",
+        ]
+        if status == "failed":
+            lines += ["## Error", "", error or "unknown error", ""]
+        else:
+            lines += ["## Findings", "",
+                      output.strip() or "(no output)", ""]
+        try:
+            Path(slot["result_path"]).write_text(
+                "\n".join(lines), encoding="utf-8")
+        except OSError:
+            pass
 
     def _transcript_messages(self, session: Session) -> tuple[str, list[dict]]:
         """Assemble the per-turn transcript from sources (T6).

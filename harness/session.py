@@ -208,6 +208,44 @@ def init_layout(sdir: str | Path, prompt_text: str) -> dict:
     return paths
 
 
+SUBAGENT_PROMPT_PREFIX = """You are a subagent inside a context-as-file harness, working for a
+parent agent. Your task is in sats/current.md. Your final reply will
+be saved to result.md for the parent — be concise, lead with findings,
+skip narration of your process.
+
+"""
+
+
+def init_subagent_session(parent_dir: str | Path,
+                          task: str) -> dict:
+    """Create a subagent session under <parent>/subagents/<uuid>/.
+
+    Blank-slate layout (via init_layout), sats/current.md seeded with
+    the task, sats/goals.md seeded to complete it, prompt.md = the
+    parent's prompt with the subagent prefix. Returns paths plus the
+    subagent "id" and "dir".
+    """
+    import uuid as _uuid
+    parent = Path(parent_dir)
+    sid = _uuid.uuid4().hex[:8]
+    sdir = parent / "subagents" / sid
+    parent_prompt = parent / "prompt.md"
+    if parent_prompt.is_file():
+        base = parent_prompt.read_text(encoding="utf-8",
+                                       errors="replace")
+    else:
+        base = SYSTEM_PROMPT
+    paths = init_layout(sdir, SUBAGENT_PROMPT_PREFIX + base)
+    (sdir / "sats" / "current.md").write_text(
+        f"# Current task\n\n{task.strip()}\n", encoding="utf-8")
+    (sdir / "sats" / "goals.md").write_text(
+        "# Goals\n\n- [active] Complete the task in current.md\n",
+        encoding="utf-8")
+    paths["id"] = sid
+    paths["dir"] = sdir
+    return paths
+
+
 def add_goal(sdir: str | Path, text: str) -> str:
     """Append a user goal to sats/goals.md.
 

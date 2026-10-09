@@ -15,8 +15,8 @@ from pathlib import Path
 MAX_OUTPUT_CHARS = 30_000
 
 
-def tool_definitions() -> list[dict]:
-    return [
+def tool_definitions(include_delegation: bool = True) -> list[dict]:
+    tools = [
         {
             "name": "exec",
             "description": (
@@ -103,6 +103,74 @@ def tool_definitions() -> list[dict]:
                              "description": "Literal text to count."},
                 },
             },
+        },
+    ]
+    if include_delegation:
+        tools.extend(_delegation_definitions())
+    return tools
+
+
+def _delegation_definitions() -> list[dict]:
+    """delegate / wait_subagent / cancel_subagent (parent loops only;
+    never offered to subagents)."""
+    return [
+        {
+            "name": "delegate",
+            "description": (
+                "Run a subtask in a background subagent. Returns the "
+                "result file path immediately; read it after wait_subagent "
+                "says done. One subagent at a time."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Self-contained subtask; becomes the "
+                            "subagent's whole context."),
+                    },
+                    "budget_hard": {
+                        "type": "integer",
+                        "description": (
+                            "Subagent token budget (default: 1/4 of yours)."),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model override (default: yours).",
+                    },
+                    "tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Tool allowlist (default: read, edit, exec, "
+                            "tokens)."),
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+        {
+            "name": "wait_subagent",
+            "description": (
+                "Block until the subagent finishes (or timeout). Returns "
+                "the result path -- read the file; content is NOT inlined."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "Seconds to wait (default 120; 0 = no block)."),
+                    },
+                },
+            },
+        },
+        {
+            "name": "cancel_subagent",
+            "description": "Stop the running subagent (writes result.md).",
+            "parameters": {"type": "object", "properties": {}},
         },
     ]
 

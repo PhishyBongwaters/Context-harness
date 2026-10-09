@@ -42,6 +42,7 @@ DEFAULTS = {
     "budget_soft": 80_000,
     "sessions_dir": None,  # platform default when unset
     "approval_timeout": 120,  # seconds to wait for a human approval
+    "subagent_budget_fraction": 0.25,  # subagent hard budget = this * parent hard
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "usage_note": True,  # ephemeral per-request usage line (never stored)
@@ -406,6 +407,7 @@ class Config:
     sessions_dir: str | None = None
     api_key: str | None = field(default=None, repr=False)
     approval_timeout: int = 120
+    subagent_budget_fraction: float = 0.25
     exec_timeout: int = 60
     exec_timeout_max: int = 300
     usage_note: bool = True

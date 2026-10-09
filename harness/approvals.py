@@ -321,10 +321,12 @@ class Approver:
             return "session"
         return "deny"
 
-    def resolve(self, policy: Policy, name: str, args: dict
+    def resolve(self, policy: Policy, name: str, args: dict,
+                subagent_id: str | None = None
                 ) -> tuple[bool, str | None]:
         """Return (approved, denial_message_or_None)."""
         decision, reason, key = policy.check(name, args or {})
+        sub = {"subagent_id": subagent_id} if subagent_id else {}
         if decision == ALLOW:
             return True, None
         if decision == DENY:
@@ -343,7 +345,7 @@ class Approver:
             return True, None
         self.on_event("approval-wait",
                       {"tool": name, "args": args, "reason": reason,
-                       "timeout": self.approval_timeout})
+                       "timeout": self.approval_timeout, **sub})
         scope = self._prompt(name, args or {}, reason)
         self.on_event("approval-result",
                       {"tool": name, "args": args,
