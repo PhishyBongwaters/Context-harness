@@ -85,7 +85,8 @@ def _dry_run(cfg, args, sess: Session) -> int:
     soft = getattr(args, "budget_soft", None) or cfg.budget_soft
     system = load_prompt(sess.dir,
                          ctx_path=str(sess.dir / "context.md"),
-                         hard=hard, soft=soft)
+                         hard=hard, soft=soft,
+                         workdir=sess.workdir)
     text = assemble(sess.dir)
     sys_toks = count_tokens(system)
     print(f"session: {sess.id}")

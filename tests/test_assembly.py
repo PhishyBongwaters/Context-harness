@@ -78,6 +78,18 @@ class TestAssembly(unittest.TestCase):
         out = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
         self.assertEqual(out, "SYS CTX 1000 800")
 
+    def test_load_prompt_fills_os_and_workdir(self):
+        import platform
+        sdir = make_session()
+        (sdir / "prompt.md").write_text(
+            "os={os_name} workdir={workdir}", encoding="utf-8")
+        out = load_prompt(sdir, ctx_path="CTX", hard=1, soft=1,
+                          workdir="/tmp/w")
+        self.assertIn(f"os={platform.system()}", out)
+        self.assertIn("workdir=/tmp/w", out)
+        self.assertNotIn("{os_name}", out)
+        self.assertNotIn("{workdir}", out)
+
     def test_load_prompt_leaves_other_braces_alone(self):
         sdir = make_session()
         (sdir / "prompt.md").write_text(

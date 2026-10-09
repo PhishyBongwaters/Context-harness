@@ -37,7 +37,10 @@ MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
 
-SYSTEM_PROMPT = """You are an agent running inside a context-as-file harness.
+SYSTEM_PROMPT = """You are a helpful AI assistant running inside a context-as-file harness.
+Answer the user directly and concisely; use tools only when the task
+genuinely needs them. You are on {os_name}; your working directory is
+{workdir}.
 
 Each turn the harness assembles your context from sources, in order:
 satellite files (facts, decisions, tasks -- durable one-liners),
@@ -495,7 +498,8 @@ class Loop:
         # the file and the loop burns all MAX_STEPS on identical OVER lines.
         main_system = load_prompt(session.dir, ctx_path=ctx_path,
                                   hard=self.budget.hard,
-                                  soft=self.budget.soft)
+                                  soft=self.budget.soft,
+                                  workdir=session.workdir)
         gate = lambda msgs: self._measure(
             self.provider, main_system, msgs, self._tools)["total"]
         for attempt in range(MAX_PRUNE_ATTEMPTS):
@@ -575,7 +579,8 @@ class Loop:
     def run_turn(self, session: Session, user_text: str) -> str:
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
-                             hard=self.budget.hard, soft=self.budget.soft)
+                             hard=self.budget.hard, soft=self.budget.soft,
+                             workdir=session.workdir)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()

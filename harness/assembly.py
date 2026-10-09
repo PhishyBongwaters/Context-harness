@@ -39,17 +39,21 @@ def assemble(sdir: str | Path) -> str:
 
 
 def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
-                soft: int) -> str:
+                soft: int, workdir: str | Path | None = None) -> str:
     """Read prompt.md fresh and fill the known template placeholders.
 
     Only the harness-known placeholders are substituted; any other
     braces in a custom prompt are left literal (str.format would blow
     up on them).
     """
+    import platform
     text = _read(Path(sdir) / "prompt.md")
     return (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
-                .replace("{soft}", str(soft)))
+                .replace("{soft}", str(soft))
+                .replace("{os_name}", platform.system())
+                .replace("{workdir}",
+                         str(workdir) if workdir else ""))
 
 
 def write_assembled(sdir: str | Path, text: str) -> Path:
