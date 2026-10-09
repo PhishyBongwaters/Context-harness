@@ -1303,9 +1303,12 @@ if _HAS:
                 if self._cfg is not None else []))
 
         def _open_delegate_picker(self) -> None:
+            # Parse "provider/model" so the picker highlights correctly.
+            delegate = (getattr(self._cfg, "delegate_model", None)
+                        if self._cfg is not None else None) or ""
+            d_provider = delegate.split("/", 1)[0] if "/" in delegate else ""
             self.push_screen(ProviderScreen(
-                current=(getattr(self._cfg, "delegate_model", None)
-                         if self._cfg is not None else None),
+                current=d_provider or None,
                 entries=provider_entry_rows(self._cfg)
                 if self._cfg is not None else [],
                 for_delegate=True))
@@ -1341,7 +1344,17 @@ if _HAS:
                     cand = fn(provider)
                 except Exception:
                     cand = None
-            if cand is not None:
+            if for_delegate:
+                # Current delegate model, not the main one.
+                delegate = (getattr(self._cfg, "delegate_model", None)
+                            if self._cfg is not None else None) or ""
+                if "/" in delegate:
+                    d_prov, d_model = delegate.split("/", 1)
+                    current_model = (d_model if d_prov == provider
+                                     else "")
+                else:
+                    current_model = delegate
+            elif cand is not None:
                 current_model = getattr(cand, "model", "") or ""
             else:
                 providers = (getattr(self._cfg, "providers", None)
