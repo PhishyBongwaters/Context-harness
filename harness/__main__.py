@@ -563,6 +563,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         _apply_provider_override(cfg, args, args.provider)
     if args.model:
         cfg.model = args.model
+    if getattr(args, "delegate_model", None):
+        cfg.delegate_model = args.delegate_model
     if getattr(args, "request_timeout", None):
         cfg.request_timeout = args.request_timeout
     if getattr(args, "budget_hard", None):
@@ -973,6 +975,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Hard token budget override (default from config).")
     ap.add_argument("--budget-soft", type=int, default=None,
                     help="Soft token budget override (default from config).")
+    ap.add_argument("--delegate-model", default=None,
+                    metavar="PROVIDER/MODEL",
+                    help="Subagent model override ('provider/model' or bare "
+                         "'model'; default from config delegate_model).")
     ap.add_argument("--project", default=None,
                     help="Project name: resume it or start it.")
     ap.add_argument("--workdir", default=None,
