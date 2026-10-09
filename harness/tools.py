@@ -112,6 +112,73 @@ def _resolve(path: str, workdir: str) -> Path:
     return p if p.is_absolute() else Path(workdir) / p
 
 
+# Session source kinds (spec section 5, T5). The model may edit
+# history/sat sources (edit-only). Everything else under the session
+# dir is harness-owned.
+def classify_source(session_dir: str | Path, path: str | Path) -> str:
+    """Classify a path against the blank-slate session layout.
+
+    Returns one of: prompt, state, index, history, sat, scratch,
+    archive, assembled, other-session, other.
+    """
+    sdir = Path(session_dir).expanduser().resolve()
+    p = Path(os.path.expanduser(str(path)))
+    if not p.is_absolute():
+        return "other"
+    try:
+        rel = p.resolve().relative_to(sdir)
+    except ValueError:
+        return "other"
+    parts = rel.parts
+    if len(parts) == 1:
+        return {
+            "prompt.md": "prompt",
+            "state.json": "state",
+            "index.md": "index",
+            "history.md": "history",
+            "scratch.md": "scratch",
+            "context.md": "assembled",
+        }.get(parts[0], "other-session")
+    if parts[0] == "sats" and len(parts) == 2 and parts[1].endswith(".md"):
+        return "sat"
+    if parts[0] == "archive":
+        return "archive"
+    return "other-session"
+
+
+def source_gate(session_dir: str | Path, name: str, path: str,
+                workdir: str) -> str | None:
+    """Harness source gates (T5). Returns a DENIED message or None.
+
+    These are harness invariants, not user choices: they run before
+    the approval flow. edit is allowed only on history/sats;
+    write is rejected on every session source; read is denied only
+    for state.json.
+    """
+    if name not in ("read", "write", "edit") or not path:
+        return None
+    try:
+        target = _resolve(path, workdir)
+    except Exception:
+        return None
+    kind = classify_source(session_dir, target)
+    if kind in ("history", "sat"):
+        if name == "write":
+            return (f"DENIED: {target.name} is edit-only -- use edit with "
+                    f"an exact old_text/new_text match, not whole-file "
+                    f"write.")
+        return None
+    if kind in ("prompt", "state", "index", "scratch", "archive",
+                "assembled"):
+        if name in ("edit", "write"):
+            return (f"DENIED: {target.name} is harness-owned and cannot "
+                    f"be modified by the model.")
+        if name == "read" and kind == "state":
+            return "DENIED: state.json is harness-owned and not readable."
+        return None
+    return None
+
+
 def exec_tool(args: dict, workdir: str) -> str:
     cmd = args["command"]
     cwd = args.get("workdir") or workdir

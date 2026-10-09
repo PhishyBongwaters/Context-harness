@@ -265,15 +265,27 @@ class Loop:
                 f"out {t['output']:,} is informational, not budget.]")
         return [{"role": "user", "content": "\n".join(lines)}]
 
-    def _touches_context(self, session: Session, name: str,
-                         args: dict) -> bool:
+    def _source_target(self, session: Session, name: str,
+                         args: dict,
+                         bypass_gates: bool = False) -> Path | None:
+        """Editable file for backup+diff, else None (T5).
+
+        history/sat sources get pre-edit snapshots and mechanical
+        diffs. During prune turns (transitional, until T7/T9 reworks
+        prune_turn) the transcript itself keeps the old treatment.
+        """
         if name not in ("write", "edit"):
-            return False
+            return None
         try:
-            return (_resolve(args.get("path") or "", session.workdir)
-                    == session.context.path)
+            from .tools import classify_source
+            p = _resolve(args.get("path") or "", session.workdir)
+            if bypass_gates and p == session.context.path:
+                return p
+            if classify_source(session.dir, p) in ("history", "sat"):
+                return p
         except Exception:
-            return False
+            pass
+        return None
 
     def _policy(self, session: Session) -> Policy:
         return Policy(session.workdir, session.dir, session.context.path)
@@ -295,19 +307,20 @@ class Loop:
         except Exception:
             pass
 
-    def _backup_context(self, session: Session, content: str,
-                        label: str):
-        """Snapshot pre-edit transcript content (best effort).
+    def _backup_context(self, session: Session, target: Path,
+                        content: str, label: str):
+        """Snapshot pre-edit source content (best effort).
 
         Prune turns label theirs `pre-prune` (historical name kept);
-        ordinary model curation labels `pre-edit`. Collision-safe:
-        same-second edits append a counter. Returns the path or None.
+        ordinary model curation labels `pre-edit`. The backup carries
+        the source file's stem. Collision-safe: same-second edits
+        append a counter. Returns the path or None.
         """
         import datetime as _dt
         try:
             stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-            base = session.context.path.with_name(
-                f"context.pre-{label}-{stamp}.bak")
+            base = target.with_name(
+                f"{target.stem}.pre-{label}-{stamp}.bak")
             backup = base
             n = 1
             while backup.exists():
@@ -319,12 +332,28 @@ class Loop:
         except OSError:
             return None  # best effort: never block a turn on a backup
 
-    def _execute_tool(self, session: Session, tc: dict) -> str:
-        """Approval-gated tool run. If it edits the context file, back
-        up the pre-edit content and emit a mechanical diff of what
-        changed (sections + tokens recovered). Denied calls return a
-        DENIED message the model must respect."""
+    def _execute_tool(self, session: Session, tc: dict, *,
+                        bypass_gates: bool = False) -> str:
+        """Gate-checked, approval-gated tool run.
+
+        Harness source gates (T5) run first: they are invariants, not
+        user choices. Accepted edits to model-editable sources
+        (history, sats) get a pre-edit backup and a mechanical diff.
+        Denied calls return a DENIED message the model must respect.
+        Prune turns bypass the gates (transitional until T7/T9 reworks
+        prune_turn per spec section 7).
+        """
+        from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+        gate_denial = (None if bypass_gates
+                       else source_gate(session.dir, name,
+                                        args.get("path") or "",
+                                        session.workdir))
+        if gate_denial is not None:
+            self._emit("tool", {"name": name, "args": args,
+                                "result": gate_denial,
+                                "denied": True})
+            return gate_denial
         if self.approver is not None:
             ok, denial = self.approver.resolve(
                 self._policy(session), name, args)
@@ -336,16 +365,17 @@ class Loop:
         if name == "exec":
             args = clamp_exec_timeout(args, self.exec_timeout,
                                       self.exec_timeout_max)
-        before = (session.context.load()
-                  if self._touches_context(session, name, args) else None)
+        target = self._source_target(session, name, args,
+                                       bypass_gates=bypass_gates)
+        before = (target.read_text(encoding="utf-8", errors="replace")
+                  if target is not None else None)
         result = run_tool(name, args, session.workdir)
-        if before is not None:
-            after = session.context.load()
+        if target is not None and before is not None:
+            after = target.read_text(encoding="utf-8", errors="replace")
             if after != before:
-                # The model curates its own transcript freely (the
-                # system prompt says prune early and often); the
-                # pre-edit snapshot makes every such edit reversible.
-                self._backup_context(session, before, "edit")
+                # The model curates its sources; the pre-edit snapshot
+                # makes every such edit reversible.
+                self._backup_context(session, target, before, "edit")
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
         return result
@@ -364,7 +394,8 @@ class Loop:
         """
         ctx_path = str(session.context.path)
         system = PRUNE_SYSTEM.format(ctx_path=ctx_path, hard=self.budget.hard)
-        self._backup_context(session, session.context.load(), "prune")
+        self._backup_context(session, session.context.path,
+                             session.context.load(), "prune")
         # Deterministic stages first: free, instant, no model calls. The
         # agent turn fires only if these didn't reach target.
         det_before = session.context.load()
@@ -451,7 +482,10 @@ class Loop:
                         f"on {ctx_path} now.")})
                     continue
                 for tc in resp["tool_calls"]:
-                    result = self._execute_tool(session, tc)
+                    # Prune turns bypass source gates (transitional:
+                    # T7/T9 reworks prune_turn per spec section 7).
+                    result = self._execute_tool(session, tc,
+                                                bypass_gates=True)
                     turn.append({"role": "tool", "tool_call_id": tc["id"],
                                  "content": result})
         raw, messages = self._transcript_messages(session)

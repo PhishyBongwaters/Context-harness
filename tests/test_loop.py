@@ -117,15 +117,20 @@ class TestLoop(unittest.TestCase):
         self.assertIn("fresh start", s.context.load())
 
     def test_model_edit_emits_context_diff(self):
-        # A write targeting context.md produces a context-diff event with
-        # the token delta; a write elsewhere does not.
+        # An edit targeting a model-editable source (history.md)
+        # produces a context-diff event with the token delta; an edit
+        # elsewhere does not.
         s = make_session()
-        s.context.save(render_user("keep me") + render_tool("c9", "x" * 400))
+        hist = s.dir / "history.md"
+        hist.write_text("## user t0001\nkeep me\n"
+                        "## assistant t0001\n" + "verbose\n" * 50,
+                        encoding="utf-8")
         script = [
             {"content": None, "tool_calls": [
-                {"id": "e1", "name": "write",
-                 "arguments": {"path": str(s.context.path),
-                               "content": render_user("keep me")}}]},
+                {"id": "e1", "name": "edit",
+                 "arguments": {"path": str(hist),
+                               "old_text": "verbose\n" * 50,
+                               "new_text": "summary\n"}}]},
             {"content": "pruned"},
         ]
         events = []
@@ -134,8 +139,6 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(loop.run_turn(s, "tidy up"), "pruned")
         diffs = [v for k, v in events if k == "context-diff"]
         self.assertEqual(len(diffs), 1)
-        removed_headers = [r["header"] for r in diffs[0]["removed"]]
-        self.assertIn("## tool c9", removed_headers)
         self.assertGreater(diffs[0]["recovered"], 0)
 
     def test_edit_elsewhere_emits_no_diff(self):
@@ -179,8 +182,9 @@ class TestLoop(unittest.TestCase):
         self.assertIn("42", tool_msgs[0]["content"])
 
     def test_model_prunes_file_mid_turn(self):
-        # The model uses edit on context.md mid-turn; the next iteration
-        # reads the pruned file.
+        # T5: mid-turn transcript rewrites are gate-denied -- the model
+        # curates sources (history.md, sats), not the assembled
+        # transcript. Source curation mid-turn lands with T6/T9.
         s = make_session()
         script = [
             {"content": "pruning", "tool_calls": [
@@ -191,10 +195,9 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "original question"), "done")
-        # The model's rewrite won; the harness then appended the reply.
         text = s.context.load()
-        self.assertIn("kept", text)
-        self.assertNotIn("original question", text)
+        self.assertIn("DENIED", text)
+        self.assertIn("original question", text)
         self.assertIn("done", text)
 
     def test_prune_turn_uses_janitor_provider(self):
@@ -225,11 +228,9 @@ class TestLoop(unittest.TestCase):
         # own echo in the tool-calls fence), so curation moves to
         # source files (see T5). _execute_tool is driven directly to
         # keep the transcript echo out of the picture.
-        from harness.context import ContextFile
         s = make_session()
-        target = s.dir / "notes.md"
-        target.write_text("keep me\n", encoding="utf-8")
-        s.context = ContextFile(target)
+        target = s.dir / "history.md"
+        target.write_text("## user t0001\nkeep me\n", encoding="utf-8")
         diffs = []
         loop = Loop(MockProvider([]), Budget(100000, 80000),
                     on_event=lambda k, v: diffs.append(v)
@@ -240,9 +241,8 @@ class TestLoop(unittest.TestCase):
                               "old_text": "keep me\n",
                               "new_text": "keep me (summarized)\n"}})
         self.assertIn("1 occurrence replaced", result)
-        # NOTE: _backup_context hardcodes the "context." prefix today;
-        # T5 gives source backups their source's name.
-        baks = glob.glob(str(s.dir / "context.pre-edit-*.bak"))
+        # T5: source backups carry the source file's stem.
+        baks = glob.glob(str(s.dir / "history.pre-edit-*.bak"))
         self.assertEqual(len(baks), 1)
         bak = open(baks[0], encoding="utf-8").read()
         self.assertIn("keep me", bak)
@@ -252,11 +252,11 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(len(diffs), 1)
 
     def test_transcript_self_edit_fails_loudly(self):
-        # T4: under exactly-once, editing the live transcript is
-        # ambiguous by construction -- the tool-calls fence appended
-        # before execution echoes old_text, so the match count is never
-        # 1. The edit must fail loudly and leave the file untouched
-        # (T5 gates retire transcript self-edits entirely).
+        # T5: the live transcript is harness-owned -- model edits are
+        # denied by the source gates before exactly-once even runs.
+        # (Under T4's contract alone the edit would also fail: the
+        # tool-calls fence echoes old_text, so the match count is never
+        # 1.) The denial must be loud and leave the file untouched.
         s = make_session()
         s.context.save(render_user("keep me"))
         before = s.context.load()
@@ -270,13 +270,10 @@ class TestLoop(unittest.TestCase):
         ]
         loop = Loop(MockProvider(script), Budget(100000, 80000))
         self.assertEqual(loop.run_turn(s, "hi"), "curated")
-        self.assertIn("ERROR", s.context.load())
-        self.assertIn("exactly once", s.context.load())
-        # No backup: nothing changed (only the tool result appended).
+        self.assertIn("DENIED", s.context.load())
+        self.assertIn("harness-owned", s.context.load())
+        # No backup: nothing changed (only the denial appended).
         self.assertEqual(len(glob.glob(str(s.dir / "*.pre-edit-*.bak"))), 0)
-        # The edit never applied: the original user section is intact.
-        # ("(summarized)" still shows inside the tool-calls echo -- that
-        # is the would-be new_text, not an applied edit.)
         self.assertTrue(s.context.load().startswith(before))
 
     def test_noop_and_other_files_no_backup(self):
