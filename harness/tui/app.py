@@ -754,7 +754,10 @@ if _HAS:
                     ("ctrl+o", "pick_provider", "Provider/model"),
                     ("ctrl+e", "export_transcript", "Export log"),
                     ("ctrl+g", "view_subagent", "Subagent"),
-                    ("ctrl+u", "pick_delegate_model", "Delegate model"),
+                    # Priority: Input swallows ctrl+u (kill-line); the
+                    # app binding must win.
+                    Binding("ctrl+u", "pick_delegate_model",
+                            "Delegate model", priority=True),
                     # Newline in the task box. Plain ctrl combos are the
                     # only reliably-delivered "modified enter": terminals
                     # swallow ctrl+enter and merge shift+enter into enter.
