@@ -465,7 +465,11 @@ class Loop:
                                 "result": gate_denial,
                                 "denied": True})
             return gate_denial
-        if self.approver is not None:
+        # Delegation tools are harness orchestration, not mutations:
+        # spawning/waiting/killing a subagent never needs approval.
+        # (Mutations inside the subagent still go through its approver.)
+        if (self.approver is not None and name not in
+                ("delegate", "wait_subagent", "cancel_subagent")):
             ok, denial = self.approver.resolve(
                 self._policy(session), name, args,
                 subagent_id=(self.subagent_id
