@@ -113,6 +113,19 @@ class TestDelegateFlow(unittest.TestCase):
         out = json.loads(loop._cancel_subagent())
         self.assertEqual(out["status"], "error")
 
+    def test_subagent_cannot_delegate(self):
+        # Recursive delegation is forbidden by spec, even if the model
+        # calls the tool directly.
+        from harness.loop import Loop
+        from harness.context import Budget
+        from unittest.mock import MagicMock
+        sub = Loop(MagicMock(), Budget(hard=100_000, soft=80_000),
+                   is_subagent=True)
+        out = json.loads(sub._dispatch_delegation(
+            None, "delegate", {"task": "x"}))
+        self.assertEqual(out["status"], "error")
+        self.assertIn("cannot delegate", out["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

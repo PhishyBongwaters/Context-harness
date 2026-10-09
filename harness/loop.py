@@ -230,6 +230,10 @@ class Loop:
         # Completed subagents, drained into history.md at episode close
         # so the model retains a durable record of what it delegated.
         self._completed_subagents: list[dict] = []
+        # Circuit breaker: (tool name, args key) -> consecutive
+        # denial/error count. Stops the model spamming a call the
+        # harness keeps refusing.
+        self._denial_counts: dict[tuple[str, str], int] = {}
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -462,14 +466,40 @@ class Loop:
         Denied calls return a DENIED message the model must respect.
         """
         from .tools import source_gate
+        import json as _json
         name, args = tc["name"], tc.get("arguments") or {}
+        key = (name, _json.dumps(args, sort_keys=True, default=str))
+
+        def _failed(result: str) -> str:
+            self._denial_counts[key] = self._denial_counts.get(key, 0) + 1
+            return result
+
+        def _done(result: str) -> str:
+            # ERROR/DENIED results feed the circuit breaker; anything
+            # else resets it.
+            if (result.startswith("ERROR") or "DENIED" in result
+                    or '"status": "error"' in result):
+                return _failed(result)
+            self._denial_counts.pop(key, None)
+            return result
+
+        # Circuit breaker: stop accepting a call the harness keeps
+        # refusing. The model must try something else, not spam.
+        if self._denial_counts.get(key, 0) >= 3:
+            msg = (f"CIRCUIT BREAKER: '{name}' with these arguments has "
+                   f"been denied or failed 3 times. Stop calling it -- "
+                   f"try a different approach, different arguments, or "
+                   f"ask the user.")
+            self._emit("tool", {"name": name, "args": args,
+                                "result": msg, "denied": True})
+            return msg
         if self.is_subagent:
             sub_denial = self._subagent_gate(session, name, args)
             if sub_denial is not None:
                 self._emit("tool", {"name": name, "args": args,
                                     "result": sub_denial,
                                     "denied": True})
-                return sub_denial
+                return _failed(sub_denial)
         gate_denial = source_gate(session.dir, name,
                                   args.get("path") or "",
                                   session.workdir)
@@ -477,7 +507,7 @@ class Loop:
             self._emit("tool", {"name": name, "args": args,
                                 "result": gate_denial,
                                 "denied": True})
-            return gate_denial
+            return _failed(gate_denial)
         # Delegation tools are harness orchestration, not mutations:
         # spawning/waiting/killing a subagent never needs approval.
         # (Mutations inside the subagent still go through its approver.)
@@ -491,7 +521,7 @@ class Loop:
                 self._emit("tool", {"name": name, "args": args,
                                     "result": denial,
                                     "denied": True})
-                return denial
+                return _failed(denial)
         if name == "exec":
             args = clamp_exec_timeout(args, self.exec_timeout,
                                       self.exec_timeout_max)
@@ -499,7 +529,7 @@ class Loop:
             result = self._dispatch_delegation(session, name, args)
             self._emit("tool", {"name": name, "args": args,
                                 "result": result})
-            return result
+            return _done(result)
         target = self._source_target(session, name, args)
         before = (target.read_text(encoding="utf-8", errors="replace")
                   if target is not None else None)
@@ -512,7 +542,7 @@ class Loop:
                 self._backup_context(session, target, before, "edit")
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
-        return result
+        return _done(result)
 
     # --- subagent delegation (one at a time) ---
 
@@ -547,6 +577,12 @@ class Loop:
 
     def _dispatch_delegation(self, session: Session, name: str,
                              args: dict) -> str:
+        import json as _j
+        if self.is_subagent:
+            return _j.dumps({
+                "status": "error",
+                "message": ("subagents cannot delegate: you have no "
+                            "delegate tool; do the work yourself.")})
         if name == "delegate":
             return self._delegate(session, args)
         if name == "wait_subagent":

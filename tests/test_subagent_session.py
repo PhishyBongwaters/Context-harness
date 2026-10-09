@@ -48,6 +48,14 @@ class TestInitSubagentSession(unittest.TestCase):
             self.assertTrue((sdir / "sats" / f"{name}.md").is_file(),
                             name)
 
+    def test_prompt_says_no_delegation(self):
+        # The subagent must not follow the parent's "prefer delegate"
+        # guidance: it has no delegate tool, and trying it loops.
+        paths = init_subagent_session(self.parent, "Do the thing")
+        prompt = (paths["dir"] / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("NO delegate tool", prompt)
+        self.assertIn("cannot spawn subagents", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

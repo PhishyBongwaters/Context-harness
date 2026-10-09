@@ -213,6 +213,11 @@ parent agent. Your task is in sats/current.md. Your final reply will
 be saved to result.md for the parent — be concise, lead with findings,
 skip narration of your process.
 
+You have NO delegate tool and cannot spawn subagents: do the work
+yourself with the tools you have. If the prompt below suggests
+preferring `delegate` for heavy work, that guidance is for the parent
+agent, not you — ignore it.
+
 """
 
 
