@@ -610,7 +610,11 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 prune_target=cfg.prune_target,
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap,
-                subagent_budget_fraction=cfg.subagent_budget_fraction)
+                subagent_budget_fraction=cfg.subagent_budget_fraction,
+                delegate_model=cfg.delegate_model,
+                provider_factory=(
+                    lambda provider=None, model=None: make_provider(
+                        cfg, provider=provider, model=model)))
 
 
 def _candidate_for(cfg, name: str) -> SimpleNamespace:

@@ -160,6 +160,16 @@ class TurnInterrupted(Exception):
     """
 
 
+def _parse_delegate_model(spec: str,
+                          default_provider: str) -> tuple[str, str]:
+    """'provider/model' or bare 'model' -> (provider, model)."""
+    spec = spec.strip()
+    if "/" in spec:
+        provider, model = spec.split("/", 1)
+        return provider.strip(), model.strip()
+    return default_provider, spec
+
+
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
                  on_event=None, prune_provider: Provider | None = None,
@@ -176,7 +186,9 @@ class Loop:
                  is_subagent: bool = False,
                  subagent_id: str | None = None,
                  tools_allowlist: list[str] | None = None,
-                 subagent_budget_fraction: float = 0.25):
+                 subagent_budget_fraction: float = 0.25,
+                 delegate_model: str | None = None,
+                 provider_factory=None):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -200,6 +212,8 @@ class Loop:
         self.is_subagent = is_subagent
         self.subagent_id = subagent_id
         self._subagent_budget_fraction = subagent_budget_fraction
+        self._delegate_model = delegate_model
+        self._provider_factory = provider_factory
         self._tools = tool_definitions(
             include_delegation=not is_subagent)
         if tools_allowlist is not None:
@@ -545,13 +559,19 @@ class Loop:
                               workdir=session.workdir)
         allowlist = args.get("tools") or ["read", "edit", "exec",
                                           "tokens"]
+        # Provider/model for the subagent: per-call model arg wins,
+        # then the delegate_model config, else inherit the parent's.
         provider = self.provider
-        model_override = (args.get("model") or "").strip()
-        if model_override and hasattr(self, "_make_provider"):
+        model_spec = ((args.get("model") or "").strip()
+                      or (self._delegate_model or "").strip())
+        if model_spec and self._provider_factory is not None:
+            prov_name, model_name = _parse_delegate_model(
+                model_spec, self.provider.name)
             try:
-                provider = self._make_provider(model=model_override)
+                provider = self._provider_factory(provider=prov_name,
+                                                  model=model_name)
             except Exception:
-                pass
+                pass  # fall back to the parent's provider
         sub_loop = Loop(
             provider=provider,
             budget=Budget(hard=sub_hard, soft=sub_soft,

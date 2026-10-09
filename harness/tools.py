@@ -137,7 +137,10 @@ def _delegation_definitions() -> list[dict]:
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model override (default: yours).",
+                        "description": (
+                            "Model override: 'provider/model' or bare "
+                            "'model'. Default: delegate_model config, "
+                            "else yours."),
                     },
                     "tools": {
                         "type": "array",
