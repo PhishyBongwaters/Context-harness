@@ -72,6 +72,38 @@ def _new_session(cfg, workdir: str) -> Session:
     return Session(id=sid, dir=sdir, workdir=workdir)
 
 
+def _dry_run(cfg, args, sess: Session) -> int:
+    """Report what the next turn would cost (S8).
+
+    Assembles the transcript and system prompt, prints per-section
+    token counts against the budgets. No provider is created, no model
+    calls are made, nothing is written.
+    """
+    from .assembly import assemble, load_prompt
+    from .context import _split_sections, count_tokens
+    hard = getattr(args, "budget_hard", None) or cfg.budget_hard
+    soft = getattr(args, "budget_soft", None) or cfg.budget_soft
+    system = load_prompt(sess.dir,
+                         ctx_path=str(sess.dir / "context.md"),
+                         hard=hard, soft=soft)
+    text = assemble(sess.dir)
+    sys_toks = count_tokens(system)
+    print(f"session: {sess.id}")
+    print(f"system prompt: {sys_toks:,} tokens")
+    print("transcript sections:")
+    for _role, _label, header, body in _split_sections(text):
+        sec_toks = count_tokens(f"{header}\n{body}")
+        print(f"  {header.strip()}: {sec_toks:,} tokens")
+    total = count_tokens(text)
+    turn_total = sys_toks + total
+    print(f"transcript total: {total:,} tokens")
+    print(f"turn total (system + transcript): {turn_total:,} tokens")
+    print(f"budgets: soft={soft:,} hard={hard:,}")
+    print("verdict: "
+          + ("fits" if turn_total <= hard else "OVER HARD BUDGET"))
+    return 0
+
+
 def _open_session(cfg, sid: str | None, workdir: str) -> Session:
     sessions = _sessions(cfg)
     sid = sid or _current_id(sessions)
@@ -891,6 +923,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--new", action="store_true", help="Start a new session.")
     ap.add_argument("--session", help="Open a specific session id.")
     ap.add_argument("--list", action="store_true", help="List sessions.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Assemble the session transcript and report token "
+                         "costs vs budgets without creating a provider or "
+                         "making any model calls. Writes nothing.")
     ap.add_argument("--config", action="store_true",
                     help="Write an example config file.")
     ap.add_argument("--provider",
@@ -1042,6 +1078,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         box["session"] = _open_session(cfg, None, _workdir(args))
     stamp(box["session"])
+    if getattr(args, "dry_run", False):
+        return _dry_run(cfg, args, box["session"])
     attach()
     if _restore_session_model(box, cfg, args):
         # Restore retargeted behind attach()'s back: repaint so the
