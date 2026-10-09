@@ -22,6 +22,12 @@ class TestFormatEvent(unittest.TestCase):
         self.assertEqual(format_event("assistant", "hi"),
                          "\x1b[1m\x1b[32massistant\x1b[0m\nhi")
 
+    def test_assistant_custom_name(self):
+        # Configurable display name for the assistant role.
+        line = format_event("assistant", "hi", assistant_name="Data")
+        self.assertIn("Data", line)
+        self.assertNotIn("assistant\n", line.replace("Data", ""))
+
     def test_tool(self):
         line = format_event("tool", {"name": "exec",
                                      "args": {"command": "ls"},

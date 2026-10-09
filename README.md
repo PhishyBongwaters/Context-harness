@@ -2,6 +2,25 @@
 
 Daily-driver agent loop with deterministic, blank-slate context assembly.
 
+## Why
+
+Every agent harness fights the same enemy: context bloat. Transcripts
+accumulate — the system prompt echoed back, tool outputs piling up,
+old turns lingering — until the window fills, inference slows, costs
+climb, and the model loses the thread.
+
+The usual fixes are bad. Naive truncation silently drops information.
+Model-driven summarization is a guess dressed as strategy: a janitor
+model can't tell what's load-bearing.
+
+This harness takes the other path: **the context is rebuilt from
+scratch every turn, deterministically, by the harness — never by the
+model.** Tool traces live exactly one turn, then are archived. History
+is bounded by automatic windowing. What stays in context is a
+mechanical decision, not a judgment call. A 50k-token working turn
+collapses to ~2k the next turn, and anything archived can be re-read
+deliberately.
+
 There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
@@ -45,10 +64,9 @@ Tool calls and their results accumulate in `scratch.md` during a turn.
 When the assistant replies with no more tool calls, the episode closes:
 the harness archives scratch to `archive/<date>-t<NNNN>.md`, clears it,
 and appends a `## episode t<NNNN>` pointer to history (archive path,
-turn range, tool-call count). Archived detail stays out of hot context
-but can be re-read deliberately by path — visible cost, no silent bloat.
-Move anything durable into `history.md` or the sats *before* the
-closing reply, or it leaves active context.
+turn range, tool-call count). The closing reply is recorded to history
+automatically. Archived detail stays out of hot context but can be
+re-read deliberately by path — visible cost, no silent bloat.
 
 ## Budget
 

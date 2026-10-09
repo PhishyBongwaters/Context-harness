@@ -1014,7 +1014,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if is_tui:
         from .tui.bridge import TuiBridge
-        box["bridge"] = TuiBridge()
+        box["bridge"] = TuiBridge(user_name=cfg.user_name,
+                                  assistant_name=cfg.assistant_name)
 
     def _disp_cfg():
         # CLI overrides applied for display (header parity with attach).

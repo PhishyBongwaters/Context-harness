@@ -30,12 +30,16 @@ class TuiBridge:
     (may be None for quiet events).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, user_name: str = "me",
+                 assistant_name: str = "assistant") -> None:
         self.queue: queue.Queue = queue.Queue()
+        self.user_name = user_name
+        self.assistant_name = assistant_name
 
     def __call__(self, kind: str, data) -> None:
         try:
-            line = format_event(kind, data)
+            line = format_event(kind, data, user_name=self.user_name,
+                                assistant_name=self.assistant_name)
         except Exception:
             line = None
         self.queue.put((kind, data, line))

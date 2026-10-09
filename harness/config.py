@@ -57,6 +57,8 @@ DEFAULTS = {
     "providers": {},  # named registry: name -> {kind, base_url, model,
     #   api_key_env}; "provider" names a registry entry when it matches,
     #   else a legacy kind (openai/anthropic/nvidia)
+    "user_name": "me",  # display name for the user role in the UI
+    "assistant_name": "assistant",  # display name for the assistant role
 }
 
 # Last-resort registry of published context windows (tokens). Used ONLY
@@ -420,6 +422,9 @@ class Config:
     prune_base_url: str | None = None
     prune_api_key_env: str | None = None
     providers: dict = field(default_factory=dict)
+    # Display names for the two conversation roles in the UI.
+    user_name: str = "me"
+    assistant_name: str = "assistant"
 
     def __post_init__(self):
         if not self.sessions_dir:
@@ -787,6 +792,8 @@ def write_example_config(path: str | Path | None = None) -> Path:
         "prune_keep_tools": 5,
         "prune_section_cap": 8000,
         "providers": {},
+        "user_name": "me",
+        "assistant_name": "assistant",
         "_notes": (
             "API key is read from the api_key_env environment variable; "
             "never put secrets in this file. base_url may point at any "

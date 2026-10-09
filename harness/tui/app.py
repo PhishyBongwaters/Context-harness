@@ -1343,7 +1343,8 @@ if _HAS:
             self._log("[interrupt requested]")
 
         def _submit(self, text: str) -> None:
-            self._log(f"{_ansi('me',1,34)}\n{text}", kind="user")
+            uname = getattr(self._cfg, "user_name", "me") or "me"
+            self._log(f"{_ansi(uname,1,34)}\n{text}", kind="user")
             if self._handle_slash(text):
                 return
             self._turn_start = time.monotonic()

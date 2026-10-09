@@ -123,14 +123,15 @@ def _panel(line: str, width: int) -> str:
         return line[:-4] + pad + "\x1b[0m"
     return line + pad + "\x1b[0m"
 
-def format_event(kind: str, data) -> str | None:
+def format_event(kind: str, data, *, user_name: str = "me",
+                 assistant_name: str = "assistant") -> str | None:
     """Render one loop event as a transcript line. None = not shown."""
     if kind == "assistant":
         txt = data if isinstance(data, str) else str(data)
         if txt:
             # green bold assistant label; fenced code blocks highlighted.
             # Background is a CSS class on MessageWidget, not ANSI.
-            return (f"{_ansi('assistant',1,32)}\n"
+            return (f"{_ansi(assistant_name,1,32)}\n"
                     f"{highlight_fenced_code(txt)}")
         return None
     if kind == "tool":
