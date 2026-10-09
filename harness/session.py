@@ -47,14 +47,133 @@ def _write_if_missing(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def init_layout(sdir: str | Path, prompt_text: str) -> dict[str, Path]:
+class MigrationError(Exception):
+    """Old transcript is structurally ambiguous; migrate by hand."""
+
+
+def is_old_layout(sdir: str | Path) -> bool:
+    """True when sdir holds an old single-file session.
+
+    Old layout: context.md exists (accumulating transcript) but the
+    blank-slate state.json was never created.
+    """
+    sdir = Path(sdir)
+    return (sdir / "context.md").is_file() and not (sdir / "state.json").exists()
+
+
+def migrate_session(sdir: str | Path) -> dict | None:
+    """Migrate an old single-file session to the blank-slate layout (T10).
+
+    ## user sections become stamped history; each turn's assistant/tool
+    run becomes an archived episode (archive/migrated-t<NNNN>.md) with a
+    ## episode pointer in history. The turn counter is seeded so new
+    turns continue monotonically. The original file is kept as
+    context.md.pre-migration-<stamp>.bak -- never deleted.
+
+    Returns a report dict, or None when sdir is not an old layout.
+    Raises MigrationError on structural ambiguity: loud, never lossy.
+    Nothing is written before the transcript validates.
+    """
+    from .context import _split_sections, _split_tool_calls
+    import datetime as _dt
+
+    sdir = Path(sdir)
+    if not is_old_layout(sdir):
+        return None
+
+    raw = (sdir / "context.md").read_text(encoding="utf-8",
+                                          errors="replace")
+    sections = _split_sections(raw)
+
+    turn_no = 0
+    history_blocks: list[str] = []
+    archive_writes: list[tuple[str, str]] = []
+    dropped_orphans = 0
+    # Current episode under construction.
+    ep_turn = 0
+    ep_sections: list[tuple[str, str | None, str, str]] = []
+    ep_fence_ids: set[str] = set()
+
+    def flush_episode() -> None:
+        if not ep_sections:
+            return
+        tag = f"t{ep_turn:04d}"
+        tool_count = sum(1 for r, _, _, _ in ep_sections if r == "tool")
+        name = f"migrated-{tag}.md"
+        body = "".join(f"{h}\n{b.strip()}\n"
+                       for _, _, h, b in ep_sections)
+        archive_writes.append((name, body))
+        history_blocks.append(
+            f"## episode {tag}\n"
+            f"archive: archive/{name}\n"
+            f"turns: {tag}-{tag}\n"
+            f"tool_calls: {tool_count}\n")
+
+    for role, label, header, body in sections:
+        if role == "user":
+            flush_episode()
+            turn_no += 1
+            ep_turn = turn_no
+            ep_sections = []
+            ep_fence_ids = set()
+            history_blocks.append(
+                f"## user t{turn_no:04d}\n{body.strip()}\n")
+        elif role == "assistant":
+            if turn_no == 0:
+                raise MigrationError(
+                    f"assistant section before any user message ({header})")
+            _, tool_calls = _split_tool_calls(body.strip())
+            for tc in tool_calls or []:
+                if isinstance(tc, dict) and tc.get("id"):
+                    ep_fence_ids.add(tc["id"])
+            ep_sections.append((role, label, header, body))
+        elif role == "tool":
+            if turn_no == 0:
+                raise MigrationError(
+                    f"tool section before any user message ({header})")
+            if label not in ep_fence_ids:
+                # Orphans were never sent to the provider; drop loudly.
+                dropped_orphans += 1
+                continue
+            ep_sections.append((role, label, header, body))
+        else:
+            # sat/episode sections cannot appear in old transcripts.
+            raise MigrationError(
+                f"unexpected section in old transcript ({header})")
+    flush_episode()
+
+    if turn_no == 0:
+        raise MigrationError("no user sections in old context.md")
+
+    # All validated: write. Archive + history + state first, original
+    # renamed to .bak last.
+    archive_dir = sdir / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for name, body in archive_writes:
+        _write_if_missing(archive_dir / name, body)
+    _write_if_missing(sdir / "history.md",
+                      HISTORY_TEMPLATE + "".join(history_blocks))
+    save_state(sdir, {"turn": turn_no, "section_seq": 0})
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    (sdir / "context.md").rename(
+        sdir / f"context.md.pre-migration-{stamp}.bak")
+
+    return {"turns": turn_no,
+            "episodes": len(archive_writes),
+            "dropped_orphans": dropped_orphans}
+
+
+def init_layout(sdir: str | Path, prompt_text: str) -> dict:
     """Create the blank-slate session layout.
 
     Idempotent: existing files are never clobbered, so re-opening a
     session keeps its history, satellites, and counters.
+    Old single-file sessions are migrated first (T10); the report (or
+    None) is returned under the "migration" key.
     Returns the key paths.
     """
     sdir = Path(sdir)
+    migration = migrate_session(sdir)
     sats = sdir / "sats"
     archive = sdir / "archive"
     sats.mkdir(parents=True, exist_ok=True)
@@ -78,6 +197,7 @@ def init_layout(sdir: str | Path, prompt_text: str) -> dict[str, Path]:
         p = sats / f"{name}.md"
         _write_if_missing(p, header)
         paths[name] = p
+    paths["migration"] = migration
     return paths
 
 
