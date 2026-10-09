@@ -57,7 +57,8 @@ Each turn the harness:
    prompt text so the model cannot echo or duplicate it. Revisit only
    if a provider mishandles large system blocks.)
 2. Assembles the transcript in fixed order:
-   `sats/` (facts, decisions, tasks) → `history.md` → `scratch.md`.
+   `sats/` (current, goals, facts, decisions, tasks) → `history.md`
+   → `scratch.md`.
    Rationale: stable knowledge first (primacy), working memory last
    (recency), conversation in the middle.
 3. Writes the assembled text to `context.md` (inspectable artifact).
@@ -191,6 +192,8 @@ to "summarize old history"; its remaining job is sats hygiene.
 # Index
 
 ## satellites
+- sats/current.md
+- sats/goals.md
 - sats/facts.md
 - sats/decisions.md
 - sats/tasks.md

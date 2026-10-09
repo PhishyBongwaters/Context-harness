@@ -22,7 +22,8 @@ class TestSessionLayout(unittest.TestCase):
             for key in ("prompt", "state", "index", "history",
                         "scratch"):
                 self.assertTrue(paths[key].is_file(), key)
-            for key in ("facts", "decisions", "tasks"):
+            for key in ("current", "goals", "facts", "decisions",
+                        "tasks"):
                 self.assertTrue(paths[key].is_file(), key)
             self.assertTrue(paths["archive"].is_dir())
 

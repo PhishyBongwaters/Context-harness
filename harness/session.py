@@ -16,6 +16,11 @@ from pathlib import Path
 from .context import stamp
 
 SAT_FILES = {
+    "current": ("# Current task\n\nWhat you are actively working on right "
+                "now, one line. Update it when the task changes or "
+                "completes.\n"),
+    "goals": ("# Goals\n\nEnduring objectives, one per line: "
+              "`- [active] ...` / `- [done] ...`.\n"),
     "facts": "# Facts\n\nDiscovered truths about the world, one line each.\n",
     "decisions": "# Decisions\n\nChoices made and why, one line each.\n",
     "tasks": "# Tasks\n\nOpen work items, one line each.\n",
@@ -27,6 +32,8 @@ Harness-owned pointer map. The model reads this file; only the harness
 writes it.
 
 ## satellites
+- sats/current.md
+- sats/goals.md
 - sats/facts.md
 - sats/decisions.md
 - sats/tasks.md

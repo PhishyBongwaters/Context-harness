@@ -1,6 +1,7 @@
 """Blank-slate assembly (T3): build the per-turn transcript from sources.
 
-Fixed order: sats (facts, decisions, tasks) -> history -> scratch.
+Fixed order: sats (current, goals, facts, decisions, tasks)
+-> history -> scratch.
 Satellite files carry no `##` transcript headers of their own, so each
 is wrapped in a `## sat <name>` section the parser maps to a user-role
 message. Pure functions; the caller (T6/T7/T9) decides when to assemble.
@@ -11,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SAT_ORDER = ("facts", "decisions", "tasks")
+SAT_ORDER = ("current", "goals", "facts", "decisions", "tasks")
 
 
 def _read(path: Path) -> str:

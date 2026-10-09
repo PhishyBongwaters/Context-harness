@@ -43,10 +43,10 @@ genuinely needs them. You are on {os_name}; your working directory is
 {workdir}.
 
 Each turn the harness assembles your context from sources, in order:
-satellite files (facts, decisions, tasks -- durable one-liners),
-history.md (the conversation record), and scratch.md (this episode's
-working notes: recent replies and tool results). There is no other
-memory. The assembled text below IS your context -- it is also saved
+satellite files (current task, goals, facts, decisions, tasks --
+durable one-liners), history.md (the conversation record), and
+scratch.md (this episode's working notes: recent replies and tool
+results). There is no other memory. The assembled text below IS your context -- it is also saved
 to {ctx_path}, but never read that file: it duplicates what you can
 already see, doubling your context for nothing.
 
@@ -56,6 +56,9 @@ new_text, which must match exactly once):
   history.md -- the conversation record (the harness records every
     turn and archives old turns automatically; correct mistakes, don't
     manage size)
+  sats/current.md -- what you are actively working on; update it
+    when the task changes or completes
+  sats/goals.md -- enduring objectives (`- [active]` / `- [done]`)
   sats/facts.md, sats/decisions.md, sats/tasks.md -- one-line facts,
     decisions with reasons, open tasks
 
@@ -99,8 +102,8 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
-  {sats_dir}/facts.md, {sats_dir}/decisions.md, {sats_dir}/tasks.md
-    -- durable one-liners
+  {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to

@@ -45,6 +45,20 @@ class TestAssembly(unittest.TestCase):
                                          encoding="utf-8")
         self.assertEqual(assemble(sdir), assemble(sdir))
 
+    def test_sat_order_current_goals_first(self):
+        sdir = make_session()
+        (sdir / "sats" / "current.md").write_text(
+            "# Current task\n\nwriting tests\n", encoding="utf-8")
+        (sdir / "sats" / "goals.md").write_text(
+            "# Goals\n\n- [active] ship it\n", encoding="utf-8")
+        (sdir / "sats" / "facts.md").write_text(
+            "# Facts\n\nsky is blue\n", encoding="utf-8")
+        text = assemble(sdir)
+        self.assertLess(text.index("writing tests"),
+                        text.index("ship it"))
+        self.assertLess(text.index("ship it"),
+                        text.index("sky is blue"))
+
     def test_fresh_layout_assembles(self):
         sdir = make_session()
         text = assemble(sdir)
