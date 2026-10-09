@@ -92,8 +92,25 @@ _FENCE_OPEN = "```tool-calls"
 _FENCE_CLOSE = "```"
 
 
+def stamp(turn: int) -> str:
+    """Header stamp for harness-owned turn numbers, e.g. 't0042'.
+
+    Stamps ride in `## ` headers (`## user t0042`); the parser strips
+    them on the wire (spec decision 4).
+    """
+    return f"t{int(turn):04d}"
+
+
 def render_user(content: str) -> str:
     return f"## user\n{content.rstrip()}\n"
+
+
+def render_history_user(content: str, turn: int) -> str:
+    return f"## user {stamp(turn)}\n{content.rstrip()}\n"
+
+
+def render_history_assistant(content: str, turn: int) -> str:
+    return f"## assistant {stamp(turn)}\n{content.rstrip()}\n"
 
 
 def render_assistant(content: str | None,

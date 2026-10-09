@@ -118,6 +118,10 @@ class Session:
     satellites: dict = field(init=False)
 
     def __post_init__(self):
+        # Blank-slate layout (T1): prompt, state, index, history, sats,
+        # scratch, archive. Idempotent -- re-opening keeps everything.
+        from .session import init_layout
+        init_layout(self.dir, SYSTEM_PROMPT)
         self.context = ContextFile(self.dir / "context.md")
         # Satellite layer: curated one-liners the prune agent maintains.
         # Working file gets purged aggressively; these keep what matters.
