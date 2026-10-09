@@ -1038,6 +1038,18 @@ if _HAS:
                 header.set_alert(alert)
             except Exception:
                 pass
+            # Charm strip: show the running subagent's task, if any.
+            try:
+                charms = self.query_one("#lcars-charms", LcarsCharms)
+                sub = getattr(self._agent_loop, "_subagent", None)
+                if (sub is not None
+                        and sub.get("thread") is not None
+                        and sub["thread"].is_alive()):
+                    charms.set_subagent(sub.get("task") or "working")
+                else:
+                    charms.set_subagent(None)
+            except Exception:
+                pass
 
         # --- slash parity with the CLI REPL ---
 

@@ -118,13 +118,17 @@ _CHARM_STREAM = _charm_stream()
 
 
 def charms_segments(width: int, tick: int = 0,
-                    stardate: str = "") -> list[tuple[str, str, str]]:
+                    stardate: str = "",
+                    subagent: str | None = None
+                    ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS charm strip.
 
     Left: SYS/DIA pills + four blinkenlights on different periods.
-    Middle: ticking stardate + scrolling hex diagnostic stream.
+    Middle: ticking stardate + scrolling hex diagnostic stream, or a
+    SUBAGENT label when a subagent is running.
     Right: COM/NAV pills (dropped on narrow screens). Deterministic
-    in (width, tick, stardate); total width never exceeds `width`.
+    in (width, tick, stardate, subagent); total width never exceeds
+    `width`.
     """
     segs: list[tuple[str, str, str]] = []
     segs.append((" SYS ", LCARS["orange"], _FG))
@@ -151,9 +155,19 @@ def charms_segments(width: int, tick: int = 0,
     else:  # cramped: stream only, drop the right pills
         stream_w = max(0, width - left_w)
         tail = []
-    start = tick % len(_CHARM_STREAM)
-    stream = (_CHARM_STREAM * 2)[start:start + stream_w]
-    segs.append((stream, LCARS["black"], _dim(LCARS["ice"], 0.7)))
+    if subagent:
+        text = f"SUBAGENT: {subagent.strip()}"
+        if len(text) + 2 > stream_w:
+            text = text[:max(8, stream_w - 3)] + "…"
+        label = f" {text} ".ljust(stream_w)[:stream_w]
+        # Blink the label on the tick so it's clearly live.
+        bg = (LCARS["orange"] if tick % 2 == 0
+              else _dim(LCARS["orange"], 0.75))
+        segs.append((label, bg, _FG))
+    else:
+        start = tick % len(_CHARM_STREAM)
+        stream = (_CHARM_STREAM * 2)[start:start + stream_w]
+        segs.append((stream, LCARS["black"], _dim(LCARS["ice"], 0.7)))
     segs.extend(tail)
     return segs
 
@@ -301,6 +315,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         def __init__(self, **k) -> None:
             super().__init__(**k)
             self._tick = 0
+            self._subagent: str | None = None
 
         def on_mount(self) -> None:
             self.set_interval(0.5, self._advance)
@@ -309,14 +324,21 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
             self._tick += 1
             self.refresh()
 
+        def set_subagent(self, text: str | None) -> None:
+            """Show a running subagent's task in the strip (None hides)."""
+            if self._subagent != text:
+                self._subagent = text
+                self.refresh()
+
         def _stardate(self) -> str:
             sd = 41300.0 + (self._tick * 0.7) % 100
             return f"SD {sd:.1f}"
 
         def render(self) -> "Text":
             width = self.size.width or 80
-            return _to_text(charms_segments(width, self._tick,
-                                            self._stardate()))
+            return _to_text(charms_segments(
+                width, self._tick, self._stardate(),
+                subagent=self._subagent))
 
     class LcarsPill(Static):
         """One clickable LCARS pill: key hint + label, runs an app action.

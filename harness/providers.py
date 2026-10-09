@@ -18,6 +18,7 @@ Provider.chat() returns:
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -29,6 +30,24 @@ class ProviderError(Exception):
         self.body = body
 
 
+# 429 (rate-limited) retries: attempts beyond the first, with
+# exponential backoff. Honors Retry-After when the server sends one.
+_POST_RETRIES = 3
+_POST_BACKOFF_BASE = 1.0  # seconds; attempt n waits base * 2**n
+_POST_RETRY_AFTER_CAP = 60.0
+
+
+def _retry_delay(headers, attempt: int) -> float:
+    """Seconds to wait before retrying a 429 (0-indexed attempt)."""
+    try:
+        retry_after = float(headers.get("Retry-After", ""))
+        if retry_after >= 0:
+            return min(retry_after, _POST_RETRY_AFTER_CAP)
+    except (TypeError, ValueError):
+        pass
+    return _POST_BACKOFF_BASE * (2 ** attempt)
+
+
 def _post(url: str, headers: dict, payload: dict, timeout: int = 120) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -36,21 +55,31 @@ def _post(url: str, headers: dict, payload: dict, timeout: int = 120) -> dict:
         headers={"Content-Type": "application/json", **headers},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")
-        raise ProviderError(f"HTTP {e.code} from {url}: {body[:500]}",
-                            status=e.code, body=body) from e
-    except urllib.error.URLError as e:
-        raise ProviderError(f"Connection failed to {url}: {e}") from e
-    except TimeoutError as e:
-        # Raw socket timeouts (e.g. mid-response read stalls on a loaded
-        # local server) escape urlopen unwrapped — convert, never crash.
-        raise ProviderError(
-            f"Request to {url} timed out: {e}. The server may still be "
-            f"evaluating (long prompt, slow model); retry the turn.") from e
+    for attempt in range(_POST_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            if e.code == 429 and attempt < _POST_RETRIES:
+                time.sleep(_retry_delay(e.headers, attempt))
+                continue
+            raise ProviderError(
+                f"HTTP {e.code} from {url}: {body[:500]}",
+                status=e.code, body=body) from e
+        except urllib.error.URLError as e:
+            raise ProviderError(f"Connection failed to {url}: {e}") from e
+        except TimeoutError as e:
+            # Raw socket timeouts (e.g. mid-response read stalls on a
+            # loaded local server) escape urlopen unwrapped — convert,
+            # never crash.
+            raise ProviderError(
+                f"Request to {url} timed out: {e}. The server may still "
+                f"be evaluating (long prompt, slow model); retry the "
+                f"turn.") from e
+    # Unreachable: the loop either returns or raises.
+    raise ProviderError(f"HTTP 429 from {url}: retries exhausted",
+                        status=429)
 
 
 class Provider:
