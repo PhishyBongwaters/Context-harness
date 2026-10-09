@@ -208,12 +208,13 @@ Red-first per task, existing suite stays green throughout:
 - `tests/test_scratch.py` — episode close archives + truncates +
   indexes; lookback read works; dedupe/evict/cap re-homed to scratch.
 
-## 11. Open questions (decisions needed before T3/T7)
+## 11. Decisions (resolved 2026-10-09, Rob)
 
-1. Prompt as system param vs first assembled section — spec decides
-   system param (§3); overturn requires a reason, not a feeling.
-2. May the model ever edit `prompt.md` (e.g. approval-gated
-   self-modification)? Default: no.
-3. Episode-close pointer exact format in `history.md` (T7).
-4. Whether `## ` stamps are stripped or surfaced on the wire (T3;
-   default stripped).
+1. Prompt rides the system parameter (§3). Overturn requires a reason,
+   not a feeling.
+2. The model never edits `prompt.md`. Harness-owned, full stop.
+3. Episode-close pointer: a `## episode t<NNNN>` section in
+   `history.md` holding the archive path, turn range, and tool-call
+   count, wired to the model as a plain user-role message.
+4. Stamps are stripped on the wire. Harness bookkeeping only; recency
+   is communicated by section order.
