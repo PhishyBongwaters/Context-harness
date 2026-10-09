@@ -37,7 +37,8 @@ Non-goals: provider plumbing, TUI, prompt wording. Those are untouched.
     <stamp>-episode-t<NNNN>.md   # HARNESS-OWNED. Closed episodes.
   context.md           # HARNESS-OWNED build artifact: the assembled
                        # context, written fresh each turn for inspection.
-                       # Model may read it; model edits are rejected.
+                       # The model neither reads nor edits it: the content
+                       # is already its injected messages.
 ```
 
 `state.json`, `index.md`, `scratch.md`, `archive/` are created by the

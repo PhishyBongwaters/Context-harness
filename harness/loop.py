@@ -43,8 +43,9 @@ Each turn the harness assembles your context from sources, in order:
 satellite files (facts, decisions, tasks -- durable one-liners),
 history.md (the conversation record), and scratch.md (this episode's
 working notes: recent replies and tool results). There is no other
-memory. The assembled text is written to {ctx_path} for reference, but
-it is rebuilt every turn -- do not try to edit it.
+memory. The assembled text below IS your context -- it is also saved
+to {ctx_path}, but never read that file: it duplicates what you can
+already see, doubling your context for nothing.
 
 CURATION (your standing permission -- edits here never need approval):
 you curate the durable sources with your edit tool (exact old_text /
@@ -57,7 +58,8 @@ new_text, which must match exactly once):
 
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
-session sources -- use edit.
+session sources -- use edit. Read is rejected on {ctx_path}: the
+assembled text is already your conversation below.
 
 EPISODES: your replies and tool results accumulate in the episode's
 working notes. When you reply without calling tools, the episode

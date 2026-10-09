@@ -73,10 +73,17 @@ class TestSourceGates(unittest.TestCase):
         self.assertIsNotNone(denial)
         self.assertIn("DENIED", denial)
 
+    def test_read_denied_on_assembled_context(self):
+        # The assembled transcript is injected as the model's messages;
+        # reading context.md would duplicate the entire context.
+        td, sdir = make_session()
+        denial = source_gate(sdir, "read", str(sdir / "context.md"), td)
+        self.assertIsNotNone(denial)
+        self.assertIn("DENIED", denial)
+
     def test_read_allowed_on_other_sources(self):
         td, sdir = make_session()
-        for name in ("prompt.md", "index.md", "history.md", "scratch.md",
-                     "context.md"):
+        for name in ("prompt.md", "index.md", "history.md", "scratch.md"):
             self.assertIsNone(source_gate(sdir, "read",
                                           str(sdir / name), td), name)
         self.assertIsNone(source_gate(sdir, "read",

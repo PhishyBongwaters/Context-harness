@@ -14,8 +14,9 @@ the model's context from sources, in fixed order:
 
 The prompt loads fresh from `prompt.md` through the API system parameter
 each turn. The assembled text is written to `context.md` as an
-inspectable build artifact — rebuilt every turn, never edited by the
-model. No hidden transcript, no special compact tool.
+inspectable build artifact — rebuilt every turn. The model neither
+reads nor edits it: the assembled text is already its injected
+messages. No hidden transcript, no special compact tool.
 
 ## Who owns what
 

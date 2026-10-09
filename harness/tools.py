@@ -1,8 +1,8 @@
 """Tool definitions (provider-agnostic) and executors.
 
-The four v1 tools: exec, read, write, edit. The model's context file
-(context.md) is an ordinary file -- it is curated with write/edit,
-no special tool required.
+The four v1 tools: exec, read, write, edit. context.md is the
+harness-written assembly artifact: the model neither reads nor edits
+it (its content is already the model's injected messages).
 """
 from __future__ import annotations
 
@@ -152,8 +152,10 @@ def source_gate(session_dir: str | Path, name: str, path: str,
 
     These are harness invariants, not user choices: they run before
     the approval flow. edit is allowed only on history/sats;
-    write is rejected on every session source; read is denied only
-    for state.json.
+    write is rejected on every session source; read is denied for
+    state.json and for context.md (the assembled transcript is already
+    injected as the model's messages -- reading it would duplicate the
+    entire context).
     """
     if name not in ("read", "write", "edit") or not path:
         return None
@@ -175,6 +177,10 @@ def source_gate(session_dir: str | Path, name: str, path: str,
                     f"be modified by the model.")
         if name == "read" and kind == "state":
             return "DENIED: state.json is harness-owned and not readable."
+        if name == "read" and kind == "assembled":
+            return ("DENIED: context.md is the assembled transcript the "
+                    "harness already injected as your messages -- reading "
+                    "it would duplicate your entire context.")
         return None
     return None
 
