@@ -362,15 +362,19 @@ if _HAS:
                "#prov-box { width: 64; height: auto; "
                "border: thick $primary; background: $surface; padding: 1 2; }")
 
-        def __init__(self, current: str | None = None, entries=None):
+        def __init__(self, current: str | None = None, entries=None,
+                     for_delegate: bool = False):
             super().__init__()
             self._current = current
             self._entries = entries  # None = legacy kind list
+            self._for_delegate = for_delegate
 
         def compose(self) -> "ComposeResult":
             with Vertical(id="prov-box"):
-                yield Label("[provider] enter=next, esc=close",
-                            id="prov-title")
+                title = ("[delegate model] enter=next, esc=close"
+                         if self._for_delegate else
+                         "[provider] enter=next, esc=close")
+                yield Label(title, id="prov-title")
                 yield OptionList(id="providers")
 
         def _row_options(self):
@@ -428,7 +432,7 @@ if _HAS:
                 return
             run = getattr(self.app, "_provider_chosen", None)
             if callable(run):
-                run(pid)
+                run(pid, for_delegate=self._for_delegate)
             # _provider_chosen pushes ModelScreen (which replaces us).
 
         def on_option_list_option_selected(
@@ -573,7 +577,8 @@ if _HAS:
                "border: thick $primary; background: $surface; padding: 1 2; }")
 
         def __init__(self, provider: str, current_model: str = "",
-                     control=None, cfg=None, candidate=None):
+                     control=None, cfg=None, candidate=None,
+                     for_delegate: bool = False):
             super().__init__()
             self._provider = provider
             self._current_model = current_model or ""
@@ -582,12 +587,14 @@ if _HAS:
             # Candidate endpoint: the model list must come from the
             # endpoint about to be selected, never the live cfg.
             self._candidate = candidate
+            self._for_delegate = for_delegate
 
         def compose(self) -> "ComposeResult":
             base = (getattr(self._candidate, "base_url", None)
                     if self._candidate is not None else None)
-            title = (f"[models: {self._provider} @ {base}]" if base
-                     else f"[models: {self._provider}]")
+            prefix = "[delegate models" if self._for_delegate else "[models"
+            title = (f"{prefix}: {self._provider} @ {base}]" if base
+                     else f"{prefix}: {self._provider}]")
             with Vertical(id="model-box"):
                 yield Label(title, id="model-title")
                 yield Label("fetching models...", id="model-status")
@@ -663,9 +670,14 @@ if _HAS:
                     model = self._current_model
             if not model:
                 return
-            run = getattr(self.app, "_retarget_provider_model", None)
-            if callable(run):
-                run(self._provider, model)
+            if self._for_delegate:
+                run = getattr(self.app, "_set_delegate_model", None)
+                if callable(run):
+                    run(self._provider, model)
+            else:
+                run = getattr(self.app, "_retarget_provider_model", None)
+                if callable(run):
+                    run(self._provider, model)
             try:
                 self.app.pop_screen()  # model screen
                 # Also drop the provider screen underneath, if present.
@@ -740,6 +752,7 @@ if _HAS:
                     ("ctrl+o", "pick_provider", "Provider/model"),
                     ("ctrl+e", "export_transcript", "Export log"),
                     ("ctrl+g", "view_subagent", "Subagent"),
+                    ("ctrl+u", "pick_delegate_model", "Delegate model"),
                     # Newline in the task box. Plain ctrl combos are the
                     # only reliably-delivered "modified enter": terminals
                     # swallow ctrl+enter and merge shift+enter into enter.
@@ -1284,7 +1297,37 @@ if _HAS:
                 entries=provider_entry_rows(self._cfg)
                 if self._cfg is not None else []))
 
-        def _provider_chosen(self, provider: str) -> None:
+        def _open_delegate_picker(self) -> None:
+            self.push_screen(ProviderScreen(
+                current=(getattr(self._cfg, "delegate_model", None)
+                         if self._cfg is not None else None),
+                entries=provider_entry_rows(self._cfg)
+                if self._cfg is not None else [],
+                for_delegate=True))
+
+        def _set_delegate_model(self, provider: str, model: str) -> None:
+            """Set the subagent model live and persist to config."""
+            value = f"{provider}/{model}" if provider else model
+            if self._cfg is not None:
+                self._cfg.delegate_model = value
+                try:
+                    from ..config import config_path
+                    import json
+                    p = config_path()
+                    raw = (json.loads(p.read_text(encoding="utf-8"))
+                           if p.exists() else {})
+                    raw["delegate_model"] = value
+                    p.write_text(json.dumps(raw, indent=2) + "\n",
+                                 encoding="utf-8")
+                except Exception as e:  # noqa: BLE001 - show, don't crash
+                    self._log(f"[delegate model] save failed: {e}")
+            loop = getattr(self, "_agent_loop", None)
+            if loop is not None:
+                loop._delegate_model = value
+            self._log(f"[delegate model] -> {value}")
+
+        def _provider_chosen(self, provider: str,
+                             for_delegate: bool = False) -> None:
             cand = None
             fn = (getattr(self._control, "candidate_for", None)
                   if self._control is not None else None)
@@ -1305,7 +1348,8 @@ if _HAS:
                 current_model = current_model or self._model
             self.push_screen(ModelScreen(
                 provider, current_model,
-                control=self._control, cfg=self._cfg, candidate=cand))
+                control=self._control, cfg=self._cfg, candidate=cand,
+                for_delegate=for_delegate))
 
         def _provider_add(self) -> None:
             self.push_screen(ProviderTemplateScreen())
@@ -1391,6 +1435,9 @@ if _HAS:
 
         def action_pick_provider(self) -> None:
             self._open_provider_picker()
+
+        def action_pick_delegate_model(self) -> None:
+            self._open_delegate_picker()
 
         # --- debug tail toggle (best-effort, never breaks the turn) ---
 
