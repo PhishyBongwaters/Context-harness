@@ -1027,6 +1027,12 @@ def main(argv: list[str] | None = None) -> int:
                          "a JSON manifest sidecar (same basename, .json). "
                          "Runs as a subprocess: JSON args on stdin, JSON "
                          "{result, files} on stdout.")
+    ap.add_argument("--serve", action="store_true",
+                    help="Run as a persistent HTTP server for integrations "
+                         "(Discord bot, etc.). Holds a Loop per session in "
+                         "memory. POST /turn {session, message}.")
+    ap.add_argument("--port", type=int, default=8080,
+                    help="Port for --serve (default 8080, localhost only).")
     ap.add_argument("--delegate-model", default=None,
                     metavar="PROVIDER/MODEL",
                     help="Subagent model override ('provider/model' or bare "
@@ -1069,6 +1075,17 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
         print(export_transcript(sdir))
+        return 0
+
+    if getattr(args, "serve", False):
+        from .serve import run_serve
+        from pathlib import Path
+        port = getattr(args, "port", 8080) or 8080
+        sessions_root = Path(cfg.sessions_path) / "serve"
+        sessions_root.mkdir(parents=True, exist_ok=True)
+        def make_loop():
+            return _build_loop(cfg, args)
+        run_serve(make_loop, sessions_root, port)
         return 0
 
     from .debug import DebugLog
