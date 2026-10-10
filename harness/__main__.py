@@ -935,6 +935,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--new", action="store_true", help="Start a new session.")
     ap.add_argument("--session", help="Open a specific session id.")
     ap.add_argument("--list", action="store_true", help="List sessions.")
+    ap.add_argument("--export-transcript", metavar="SESSION",
+                    help="Export full transcript markdown for a session "
+                         "(eval evidence). Prints to stdout.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Assemble the session transcript and report token "
                          "costs vs budgets without creating a provider or "
@@ -1012,6 +1015,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         _list_sessions(cfg)
+        return 0
+
+    if getattr(args, "export_transcript", None):
+        from .session import export_transcript
+        from pathlib import Path
+        sessions_dir = Path(cfg.sessions_path)
+        sdir = sessions_dir / args.export_transcript
+        if not sdir.is_dir():
+            print(f"Session not found: {args.export_transcript}",
+                  file=sys.stderr)
+            return 1
+        print(export_transcript(sdir))
         return 0
 
     from .debug import DebugLog

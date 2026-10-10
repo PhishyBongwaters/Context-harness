@@ -329,3 +329,56 @@ def next_section(sdir: str | Path) -> int:
 def turn_stamp(sdir: str | Path) -> str:
     """Current turn as a header stamp, e.g. 't0042' (no increment)."""
     return stamp(load_state(sdir)["turn"])
+
+
+def export_transcript(sdir: str | Path) -> str:
+    """Export a clean full-transcript markdown for eval evidence.
+
+    Combines archive episodes (oldest first) + history.md + current
+    context, with a metadata header. For "don't take my word for it"
+    review — the whole thing, not just summaries.
+    """
+    import datetime as _dt
+    sdir = Path(sdir)
+    lines = []
+    lines.append("# Session Transcript Export")
+    lines.append("")
+    lines.append(f"Exported: {_dt.datetime.now().isoformat()}")
+    lines.append(f"Session: {sdir.name}")
+    try:
+        state = load_state(sdir)
+        lines.append(f"Turn: {state.get('turn', '?')}")
+    except Exception:
+        pass
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # Archive episodes, oldest first.
+    archive_dir = sdir / "archive"
+    if archive_dir.is_dir():
+        episodes = sorted(archive_dir.glob("*.md"))
+        for ep in episodes:
+            lines.append(f"## Archive: {ep.name}")
+            lines.append("")
+            try:
+                lines.append(ep.read_text(encoding="utf-8",
+                                          errors="replace"))
+            except OSError:
+                lines.append("(unreadable)")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+    # Main history.
+    hist = sdir / "history.md"
+    if hist.exists():
+        lines.append("## History")
+        lines.append("")
+        try:
+            lines.append(hist.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            lines.append("(unreadable)")
+        lines.append("")
+
+    return "\n".join(lines)
