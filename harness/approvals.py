@@ -139,6 +139,12 @@ class Policy:
             if self.in_roots(target):
                 return ALLOW, "read inside allowed roots", key
             return ASK, f"read outside allowed roots: {target}", key
+        if name == "list_dir":
+            target = self.resolve(args.get("path") or ".")
+            key = f"list_dir:{target}"
+            if self.in_roots(target):
+                return ALLOW, "list inside allowed roots", key
+            return ASK, f"list outside allowed roots: {target}", key
         if name == "tokens":
             if not args.get("path"):
                 return ALLOW, "counting literal text", "tokens:<literal>"
