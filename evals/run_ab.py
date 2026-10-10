@@ -119,6 +119,9 @@ def main():
     ap.add_argument("--provider", default=None)
     ap.add_argument("--model", default=None)
     ap.add_argument("--project-dir", required=True)
+    ap.add_argument("--tasks", default=None,
+                    help="Task ID to run (only 'explain-agent-loop' exists). "
+                         "Accepted for compatibility.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
