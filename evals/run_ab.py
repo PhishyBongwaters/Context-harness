@@ -1,4 +1,4 @@
-"""A/B retention evaluation runner.
+"""A/B retention evaluation runner — real multi-turn sessions.
 
 Usage:
     python -m evals.run_ab --provider <name> --model <id> [--tasks needle-01]
@@ -7,9 +7,20 @@ Runs each task under:
   A (--no-prune): naive, append-only, truncate oldest at window
   B (default):    full harness (budget + janitor + deterministic prune)
 
-For each prune event, freezes pre-prune context and runs the retention
-quiz. Outputs one JSON line per task-condition to stdout, plus a
-summary table at the end.
+How it works (like a real session):
+  1. Fresh session, empty history.
+  2. Turn 1: user asks the model to investigate something. The model
+     uses tools (read/exec) and encounters the needle naturally in
+     tool output — just like a real debugging session.
+  3. Turns 2-N: user asks follow-up questions requiring more tool
+     calls. Context grows to 30k+ tokens from real tool output.
+  4. Pruning triggers (condition B) or naive truncation (condition A).
+  5. Final turn: user asks about the needle from early in the session.
+     The model must recall it from the (pruned) context.
+
+The model participates in building the context — no pre-loaded fake
+history. This tests what actually matters: does the harness preserve
+what the model needs across pruning?
 
 Requires a configured provider (API key in env, or local server).
 """
@@ -25,39 +36,45 @@ from pathlib import Path
 # Allow running as `python -m evals.run_ab` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from evals.tasks.needle_tasks import TASKS, generate_distractors
-from evals.quiz import run_quiz, check_answer
+from evals.tasks.needle_tasks import TASKS
+from evals.quiz import check_answer
 from harness.config import load_config
 from harness.context import Budget, count_tokens
 from harness.loop import Loop, Session
 
 
-def build_session(task: dict, tmpdir: Path) -> Session:
-    """Create a session pre-loaded with the task's setup + distractors."""
-    from harness.context import render_user, render_assistant, render_tool
-    import uuid
-    sess_dir = tmpdir / f"eval-{task['id']}"
-    sess_dir.mkdir(parents=True, exist_ok=True)
-    sess = Session(id=task["id"], dir=sess_dir, workdir="/tmp")
-    parts = []
-    for role, content in task["setup_turns"]:
-        if role == "user":
-            parts.append(render_user(content))
-        elif role == "assistant":
-            parts.append(render_assistant(content, None))
-        elif role == "tool":
-            parts.append(render_tool(f"eval-{uuid.uuid4().hex[:8]}", content))
-    for role, content in generate_distractors(task["distractor_turns"]):
-        if role == "user":
-            parts.append(render_user(content))
-        elif role == "assistant":
-            parts.append(render_assistant(content, None))
-        elif role == "tool":
-            parts.append(render_tool(f"eval-{uuid.uuid4().hex[:8]}", content))
-    # Final question appended as user turn (the harness will answer it).
-    parts.append(render_user(task["final_question"]))
-    sess.context.save("".join(parts))
-    return sess
+def setup_task_files(task: dict, workdir: Path) -> None:
+    """Create the fake project files the model will investigate.
+
+    The needle is planted in one of the files, encountered naturally
+    when the model reads it during investigation.
+    """
+    proj = workdir / f"eval-{task['id']}"
+    proj.mkdir(parents=True, exist_ok=True)
+    # Charter contains the needle.
+    (proj / "CHARTER.md").write_text(
+        f"# Project Charter\n\n{task['needle']}\n\n"
+        f"Status: active\nTeam: 8 engineers\n",
+        encoding="utf-8")
+    # Lots of other files for the model to sift through.
+    for i in range(30):
+        (proj / f"module_{i:02d}.py").write_text(
+            f'"""Module {i}: utility functions."""\n\n'
+            f"def helper_{i}(x):\n"
+            f'    """Do something with x."""\n'
+            f"    return x * {i + 1}\n\n"
+            f"CONFIG_{i} = {{'timeout': {10 + i}, 'retries': 3, "
+            f"'endpoint': 'https://api{i}.example.com/v1'}}\n",
+            encoding="utf-8")
+    # Verbose log file for context bulk.
+    log_lines = []
+    for i in range(500):
+        log_lines.append(
+            f"[2026-10-10 06:{i//60:02d}:{i%60:02d} INFO] "
+            f"request {i}: GET /api/v1/resource/{i} -> 200 "
+            f"({20 + (i % 50)}ms)")
+    (proj / "app.log").write_text("\n".join(log_lines), encoding="utf-8")
+    return proj
 
 
 def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
@@ -67,15 +84,13 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
     prune_enabled = (condition == "B")
     provider = make_provider(cfg, provider=cfg.provider, model=cfg.model,
                              base_url=cfg.base_url, api_key=cfg.api_key)
-    budget = Budget(hard=cfg.budget_hard, soft=cfg.budget_soft,
+    # Eval budget: small enough that real work triggers pruning.
+    budget = Budget(hard=30_000, soft=20_000,
                     window=getattr(cfg, "context_window", None))
-    events = []
-    prune_snapshots = []  # (tokens_before, pre_text, tokens_after)
+    prune_snapshots = []
 
     def on_event(kind, data):
-        events.append({"kind": kind, "data": data})
         if kind in ("prune-deterministic", "prune", "naive-truncate"):
-            # Snapshot for retention quiz (pre-prune text captured by caller)
             pass
 
     loop = Loop(provider, budget, on_event=on_event,
@@ -85,11 +100,14 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap)
 
-    sess = build_session(task, tmpdir)
-    tokens_before_run = count_tokens(sess.context.load())
+    # Fresh session. Model builds context itself via tool calls.
+    sess_dir = tmpdir / f"eval-{task['id']}-{condition}"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    proj_dir = setup_task_files(task, tmpdir / "work")
+    sess = Session(id=f"{task['id']}-{condition}", dir=sess_dir,
+                   workdir=str(proj_dir))
 
-    # Track prune events by watching context size changes.
-    # Simpler: wrap prune_turn to snapshot.
+    # Wrap prune to snapshot.
     orig_prune = loop.prune_turn
     def wrapped_prune(s):
         pre = s.context.load()
@@ -99,8 +117,6 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
         prune_snapshots.append((tb, pre, ta))
         return ok
     loop.prune_turn = wrapped_prune
-
-    # Also snapshot naive truncates.
     orig_naive = loop._naive_truncate
     def wrapped_naive(s):
         pre = s.context.load()
@@ -110,9 +126,32 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
         prune_snapshots.append((tb, pre, ta))
     loop._naive_truncate = wrapped_naive
 
+    tokens_before = 0
     start = time.time()
     try:
-        # Run one turn: the model answers the final question.
+        # Turn 1: investigate the project. Model reads CHARTER.md (needle)
+        # and other files via tools. Context grows from real tool output.
+        a1 = loop.run_turn(
+            sess,
+            f"Investigate the project in {proj_dir}. Start by reading "
+            f"CHARTER.md, then skim a few module files and the log to "
+            f"understand the structure. Summarize what this project does.")
+        tokens_before = count_tokens(sess.context.load())
+
+        # Turns 2-4: more investigation, growing context.
+        a2 = loop.run_turn(
+            sess,
+            "Now dig into the modules. Read at least 10 module files and "
+            "report any interesting patterns in the helper functions.")
+        a3 = loop.run_turn(
+            sess,
+            "Check the log file for errors or warnings. Summarize what "
+            "you find.")
+        a4 = loop.run_turn(
+            sess,
+            "Look at the remaining modules you haven't checked yet.")
+
+        # Final turn: the retention quiz. Ask about the needle from turn 1.
         answer = loop.run_turn(sess, task["final_question"])
         success = check_answer(answer or "", task["needle_answer"])
     except Exception as e:
@@ -120,14 +159,11 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
         success = False
     wall = time.time() - start
 
-    # Retention quiz: for each prune event, quiz on the pruned file.
-    # Here we check the final answer directly (it used the pruned context).
-    # A deeper quiz would re-ask with only the pruned file; the final
-    # answer already reflects what survived pruning.
+    # Did the needle survive pruning?
+    final_ctx = sess.context.load()
     quiz_scores = []
     for tb, pre_text, ta in prune_snapshots:
-        # Did the needle survive this prune?
-        survived = task["needle_answer"].lower() in sess.context.load().lower()
+        survived = task["needle_answer"].lower() in final_ctx.lower()
         quiz_scores.append({
             "tokens_before": tb,
             "tokens_after": ta,
@@ -140,8 +176,8 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
         "success": success,
         "answer": (answer or "")[:200],
         "expected": task["needle_answer"],
-        "tokens_before_run": tokens_before_run,
-        "tokens_after_run": count_tokens(sess.context.load()),
+        "tokens_before_run": tokens_before,
+        "tokens_after_run": count_tokens(final_ctx),
         "prune_events": len(prune_snapshots),
         "quiz": quiz_scores,
         "wall_time_s": round(wall, 1),
@@ -183,7 +219,6 @@ def main():
             for r in results:
                 f.write(json.dumps(r) + "\n")
 
-    # Summary table
     print("\n=== SUMMARY ===", file=sys.stderr)
     print(f"{'task':<12} {'cond':<5} {'success':<8} {'prunes':<7} "
           f"{'tok_before':<11} {'tok_after':<10}", file=sys.stderr)
