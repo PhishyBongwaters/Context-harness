@@ -256,6 +256,11 @@ class Approver:
         self.input_fn = input_fn
         self.pump = pump  # None -> process-shared pump
         self.approval_timeout = max(1, int(approval_timeout))
+        # Env var bypass for non-interactive runs (CI, test suites, remote
+        # execution). HARNESS_AUTO_APPROVE=1 auto-approves ASK decisions.
+        if not auto_approve:
+            auto_approve = os.environ.get("HARNESS_AUTO_APPROVE", "").lower() \
+                in ("1", "true", "yes")
         self.auto_approve = auto_approve
         self.session_keys: set[str] = self._load()
         self.turn_keys: set[str] = set()
