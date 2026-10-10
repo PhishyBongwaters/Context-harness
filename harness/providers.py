@@ -317,6 +317,17 @@ def make_provider(cfg, *, provider=None, model=None, base_url=None,
     name = provider or cfg.provider
     timeout = (timeout if timeout is not None
                else getattr(cfg, "request_timeout", 120))
+    # Resolve registry names to their kind (e.g. "llama.cpp" -> "openai").
+    providers = getattr(cfg, "providers", None) or {}
+    if isinstance(providers, dict) and name in providers:
+        entry = providers[name] or {}
+        kind = entry.get("kind", "openai")
+        # Registry entry wins for connection details unless overridden.
+        if model is None:
+            model = entry.get("model")
+        if base_url is None:
+            base_url = entry.get("base_url")
+        name = kind
     if name == "anthropic":
         return AnthropicProvider(
             api_key=cfg.api_key if api_key is _UNSET else api_key,
