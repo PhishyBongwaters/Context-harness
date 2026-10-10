@@ -618,6 +618,15 @@ def _build_loop(cfg, args, on_event=None, approver=None,
         except OSError:
             pass
 
+    # User tools: config tools_dir (discovered) + --tool (one-shot).
+    user_tool_paths: list[str] = []
+    tools_dir = getattr(cfg, "tools_dir", None)
+    if tools_dir:
+        from .user_tools import discover_user_tools
+        user_tool_paths.extend(discover_user_tools(tools_dir))
+    for t in getattr(args, "tool", None) or []:
+        user_tool_paths.append(t)
+
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft,
                               window=getattr(cfg, "context_window", None)),
                 on_event=on_event or _print_event, prune_provider=prune,
@@ -638,6 +647,7 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 include_text=include_text,
                 include_subagents=(getattr(args, "include_subagents", False)
                                    or getattr(cfg, "include_subagents", False)),
+                user_tool_paths=user_tool_paths,
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
@@ -1012,6 +1022,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--include-subagents", action="store_true",
                     help="Also inject the include text into subagent prompts "
                          "(default: main loop only).")
+    ap.add_argument("--tool", action="append", default=None, metavar="PATH",
+                    help="User tool script (repeatable). The script must have "
+                         "a JSON manifest sidecar (same basename, .json). "
+                         "Runs as a subprocess: JSON args on stdin, JSON "
+                         "{result, files} on stdout.")
     ap.add_argument("--delegate-model", default=None,
                     metavar="PROVIDER/MODEL",
                     help="Subagent model override ('provider/model' or bare "

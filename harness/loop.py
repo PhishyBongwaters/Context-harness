@@ -201,7 +201,8 @@ class Loop:
                  delegate_model: str | None = None,
                  provider_factory=None,
                  include_text: str | None = None,
-                 include_subagents: bool = False):
+                 include_subagents: bool = False,
+                 user_tool_paths: list | None = None):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -233,6 +234,20 @@ class Loop:
         self._provider_factory = provider_factory
         self._tools = tool_definitions(
             include_delegation=not is_subagent)
+        # User tools: scripts as tools, loaded from manifests.
+        self._user_executors: dict = {}
+        if user_tool_paths:
+            from .user_tools import load_user_tools
+            defs, execs = load_user_tools(user_tool_paths)
+            # Don't let user tools shadow built-ins.
+            builtin_names = {t["name"] for t in self._tools}
+            for d in defs:
+                if d["name"] not in builtin_names:
+                    self._tools.append(d)
+            self._user_executors = {
+                k: v for k, v in execs.items()
+                if k not in builtin_names
+            }
         if tools_allowlist is not None:
             allowed = set(tools_allowlist)
             self._tools = [t for t in self._tools
@@ -568,7 +583,14 @@ class Loop:
         target = self._source_target(session, name, args)
         before = (target.read_text(encoding="utf-8", errors="replace")
                   if target is not None else None)
-        result = run_tool(name, args, session.workdir)
+        if name in self._user_executors:
+            try:
+                result = self._user_executors[name](args or {},
+                                                   session.workdir)
+            except Exception as e:  # never let a user tool crash the loop
+                result = f"ERROR executing user tool {name}: {e}"
+        else:
+            result = run_tool(name, args, session.workdir)
         if target is not None and before is not None:
             after = target.read_text(encoding="utf-8", errors="replace")
             if after != before:

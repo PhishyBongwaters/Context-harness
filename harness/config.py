@@ -429,6 +429,9 @@ class Config:
     include_file: str | None = None
     # If True, the include text is also injected into subagent prompts.
     include_subagents: bool = False
+    # Directory of user tool scripts (each .py/.sh with a .json manifest
+    # sidecar). Loaded at startup; --tool adds one-shot extras.
+    tools_dir: str | None = None
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -598,6 +601,7 @@ def load_config(path: str | Path | None = None,
         prune_section_cap=int(merged.get("prune_section_cap", 8000)),
         include_file=merged.get("include_file"),
         include_subagents=bool(merged.get("include_subagents", False)),
+        tools_dir=merged.get("tools_dir"),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
