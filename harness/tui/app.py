@@ -16,7 +16,7 @@ try:
     from textual.containers import Horizontal, Vertical
     from textual.screen import ModalScreen
     from textual.widgets import (Button, Header, Input, Label,
-                                   Log, OptionList, Static)
+                                   Log, OptionList, Static, TextArea)
     from textual.widgets.option_list import Option
 
     _HAS = True
@@ -1030,6 +1030,57 @@ if _HAS:
                     w.remove_class(cls)
                 if status in ("warn", "over"):
                     w.add_class(status)
+
+        def on_text_area_changed(self, event: "TextArea.Changed") -> None:
+            """Live budget bar: show constructable context + pending input.
+
+            The bar used to show last-sent tokens. Now it shows what the
+            NEXT turn will cost: current assembled session context plus
+            the user's pending input text. Updates as you type, so you
+            see the prune savings (30k -> 4k) before hitting enter.
+            Only when idle — real request events own the bar during turns.
+            """
+            try:
+                if event.text_area.id != "input":
+                    return
+                if self._turn_start is not None:
+                    return  # turn running; request events own the bar
+                if not hasattr(self, "_session") or self._session is None:
+                    return
+                from harness.assembly import assemble
+                from harness.context import count_tokens
+                ctx_text = assemble(self._session.dir)
+                input_text = event.text_area.text or ""
+                live_toks = count_tokens(ctx_text) + count_tokens(input_text)
+                budget = (self._agent_loop.budget
+                          if hasattr(self, "_agent_loop") and self._agent_loop
+                          else None)
+                data = {
+                    "tokens_est": live_toks,
+                    "phase": "live",
+                    "hard": budget.hard if budget else 0,
+                    "soft": budget.soft if budget else 0,
+                    "window": budget.window if budget else 0,
+                }
+                bar = self.query_one("#budget", BudgetBar)
+                gauge = self.query_one("#gauge", BudgetGauge)
+                bar.set_request(data)
+                gauge.set_request(data)
+                try:
+                    denom = (budget.window or budget.hard) if budget else 0
+                    self._budget_pct = (100.0 * live_toks / denom
+                                        if denom else 0.0)
+                except Exception:
+                    pass
+                status = budget_bar_status(data)
+                self._budget_status = status
+                for w in (gauge, bar):
+                    for cls in ("warn", "over"):
+                        w.remove_class(cls)
+                    if status in ("warn", "over"):
+                        w.add_class(status)
+            except Exception:
+                pass
 
         def _tick_status(self) -> None:
             if self._turn_start is not None:
