@@ -62,12 +62,16 @@ _PROMPT_NUDGE_LINES = (
 
 
 def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
-                soft: int, workdir: str | Path | None = None) -> str:
+                soft: int, workdir: str | Path | None = None,
+                include_text: str | None = None) -> str:
     """Read prompt.md fresh and fill the known template placeholders.
 
     Only the harness-known placeholders are substituted; any other
     braces in a custom prompt are left literal (str.format would blow
     up on them).
+
+    If include_text is given (non-empty), it's appended under a
+    "# User includes" header.
     """
     import platform
     text = _read(Path(sdir) / "prompt.md")
@@ -76,13 +80,17 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
     elif _PROMPT_NUDGE_MARKER not in text:
         # Has the base guidance but predates the nudge: append it.
         text = text.rstrip("\n") + "\n" + _PROMPT_NUDGE_LINES
-    return (text.replace("{ctx_path}", str(ctx_path))
+    text = (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))
                 .replace("{os_name}", platform.system())
                 .replace("{workdir}",
                          str(workdir) if workdir else "")
                 .replace("{sdir}", str(sdir)))
+    if include_text and include_text.strip():
+        text = (text.rstrip("\n") + "\n\n# User includes\n\n"
+                + include_text.strip() + "\n")
+    return text
 
 
 def write_assembled(sdir: str | Path, text: str) -> Path:

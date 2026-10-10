@@ -199,7 +199,9 @@ class Loop:
                  tools_allowlist: list[str] | None = None,
                  subagent_budget_fraction: float = 0.25,
                  delegate_model: str | None = None,
-                 provider_factory=None):
+                 provider_factory=None,
+                 include_text: str | None = None,
+                 include_subagents: bool = False):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -215,6 +217,9 @@ class Loop:
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
         self.prune_enabled = prune_enabled
+        # User include text: appended to system prompt under "# User includes".
+        self.include_text = include_text
+        self.include_subagents = include_subagents
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -680,6 +685,8 @@ class Loop:
             is_subagent=True,
             subagent_id=sid,
             tools_allowlist=allowlist,
+            include_text=(self.include_text if self.include_subagents
+                          else None),
         )
         result_path = str(sdir / "result.md")
         prov = getattr(sub_loop, "provider", None)
@@ -851,7 +858,8 @@ class Loop:
         main_system = load_prompt(session.dir, ctx_path=ctx_path,
                                   hard=self.budget.hard,
                                   soft=self.budget.soft,
-                                  workdir=session.workdir)
+                                  workdir=session.workdir,
+                                  include_text=self.include_text)
         gate = lambda msgs: self._measure(
             self.provider, main_system, msgs, self._tools)["total"]
         for attempt in range(MAX_PRUNE_ATTEMPTS):
@@ -932,7 +940,8 @@ class Loop:
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
-                             workdir=session.workdir)
+                             workdir=session.workdir,
+                             include_text=self.include_text)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()

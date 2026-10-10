@@ -422,6 +422,13 @@ class Config:
     # False = naive mode (condition A): no pruning, no dedupe, no archive.
     # Append-only; truncate oldest at window when over. For A/B evaluation.
     prune_enabled: bool = True
+    # User include file: raw text appended to the system prompt under
+    # "# User includes". Set via --include (one-shot) or config
+    # include_file (persistent). If the file exists and is non-empty,
+    # it's included automatically.
+    include_file: str | None = None
+    # If True, the include text is also injected into subagent prompts.
+    include_subagents: bool = False
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -589,6 +596,8 @@ def load_config(path: str | Path | None = None,
                       if merged.get("prune_target") else None),
         prune_keep_tools=int(merged.get("prune_keep_tools", 5)),
         prune_section_cap=int(merged.get("prune_section_cap", 8000)),
+        include_file=merged.get("include_file"),
+        include_subagents=bool(merged.get("include_subagents", False)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),

@@ -606,6 +606,18 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                            base_url=prune_base_url, api_key=prune_key,
                            timeout=_prune_timeout(cfg))
 
+    # User include text: --include (one-shot) wins over config include_file.
+    include_text = None
+    include_path = (getattr(args, "include", None) or
+                    getattr(cfg, "include_file", None))
+    if include_path:
+        try:
+            p = Path(include_path).expanduser()
+            if p.is_file():
+                include_text = p.read_text(encoding="utf-8")
+        except OSError:
+            pass
+
     return Loop(provider, Budget(cfg.budget_hard, cfg.budget_soft,
                               window=getattr(cfg, "context_window", None)),
                 on_event=on_event or _print_event, prune_provider=prune,
@@ -623,6 +635,9 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 prune_enabled=getattr(cfg, "prune_enabled", True),
                 subagent_budget_fraction=cfg.subagent_budget_fraction,
                 delegate_model=cfg.delegate_model,
+                include_text=include_text,
+                include_subagents=(getattr(args, "include_subagents", False)
+                                   or getattr(cfg, "include_subagents", False)),
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
@@ -991,6 +1006,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="Naive mode (condition A): disable all pruning, "
                          "dedupe, and archive. Append-only; truncate oldest "
                          "at window when over. For A/B evaluation.")
+    ap.add_argument("--include", default=None, metavar="PATH",
+                    help="One-shot include file: raw text appended to the "
+                         "system prompt under '# User includes'.")
+    ap.add_argument("--include-subagents", action="store_true",
+                    help="Also inject the include text into subagent prompts "
+                         "(default: main loop only).")
     ap.add_argument("--delegate-model", default=None,
                     metavar="PROVIDER/MODEL",
                     help="Subagent model override ('provider/model' or bare "
