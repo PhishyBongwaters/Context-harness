@@ -419,6 +419,9 @@ class Config:
     prune_target: int | None = None
     prune_keep_tools: int = 5
     prune_section_cap: int = 8000
+    # False = naive mode (condition A): no pruning, no dedupe, no archive.
+    # Append-only; truncate oldest at window when over. For A/B evaluation.
+    prune_enabled: bool = True
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.

@@ -573,6 +573,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     if getattr(args, "budget_soft", None):
         cfg.budget_soft = args.budget_soft
         cfg.budget_soft_auto = False
+    if getattr(args, "no_prune", False):
+        cfg.prune_enabled = False
     kind = _resolved_kind(cfg)
     # Sync display fields from the registry entry (no-op for legacy, so
     # load_config values and CLI overrides keep working untouched).
@@ -612,6 +614,7 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 prune_target=cfg.prune_target,
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap,
+                prune_enabled=getattr(cfg, "prune_enabled", True),
                 subagent_budget_fraction=cfg.subagent_budget_fraction,
                 delegate_model=cfg.delegate_model,
                 provider_factory=(
@@ -975,6 +978,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Hard token budget override (default from config).")
     ap.add_argument("--budget-soft", type=int, default=None,
                     help="Soft token budget override (default from config).")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="Naive mode (condition A): disable all pruning, "
+                         "dedupe, and archive. Append-only; truncate oldest "
+                         "at window when over. For A/B evaluation.")
     ap.add_argument("--delegate-model", default=None,
                     metavar="PROVIDER/MODEL",
                     help="Subagent model override ('provider/model' or bare "

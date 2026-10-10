@@ -190,6 +190,7 @@ class Loop:
                  prune_target: int | None = None,
                  prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
                  prune_section_cap: int = DEFAULT_SECTION_CAP,
+                 prune_enabled: bool = True,
                  history_cap: int | None = None,
                  is_subagent: bool = False,
                  subagent_id: str | None = None,
@@ -211,6 +212,7 @@ class Loop:
         self.prune_target = prune_target  # None -> soft budget
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
+        self.prune_enabled = prune_enabled
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -335,12 +337,37 @@ class Loop:
     def _policy(self, session: Session) -> Policy:
         return Policy(session.workdir, session.dir, session.context.path)
 
+    def _naive_truncate(self, session: Session) -> None:
+        """Condition A: drop oldest sections until under hard budget.
+
+        No dedupe, no archive, no model call. The 'stupid and lazy'
+        baseline for A/B evaluation.
+        """
+        from .deterministic import _split_sections, _split_preamble, _render
+        from .context import count_tokens
+        try:
+            text = session.context.load()
+            pre, _ = _split_preamble(text)
+            sections = _split_sections(text)
+            # Drop from oldest until under hard. Keep at least 2 sections.
+            while len(sections) > 2:
+                if count_tokens(_render(sections, pre)) < self.budget.hard:
+                    break
+                sections.pop(0)
+            session.context.save(_render(sections, pre))
+            self._emit("naive-truncate", {"sections_kept": len(sections)})
+        except Exception:
+            pass
+
     def _auto_dedupe(self, session: Session) -> None:
         """Run exact-dedupe on scratch.md after every tool result (T6).
 
         The harness does this mechanically -- byte-identical assistant/tool
         sections collapse to the newest. No model call, no budget check.
+        Skipped in naive mode (--no-prune).
         """
+        if not self.prune_enabled:
+            return
         from .deterministic import dedupe_exact
         try:
             p = session.dir / "scratch.md"
@@ -938,6 +965,11 @@ class Loop:
                 if status == "over":
                     self._emit("budget", {"status": "over", "tokens": est,
                                           "breakdown": bd})
+                    if not self.prune_enabled:
+                        # Naive mode (condition A): truncate oldest at window.
+                        self._naive_truncate(session)
+                        warned = False
+                        continue
                     if not self.prune_turn(session):
                         raise BudgetExceeded(
                             f"Still over hard budget ({self.budget.hard:,}) "
