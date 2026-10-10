@@ -152,6 +152,9 @@ def main():
     ap.add_argument("--project-dir", required=True,
                     help="Real project directory for the model to investigate "
                          "(e.g. D:/projects/context-harness)")
+    ap.add_argument("--tasks", default=None,
+                    help="Comma-separated task IDs to run "
+                         "(default: all). E.g. --tasks harness-01")
     ap.add_argument("--out", default=None, help="JSONL output path")
     args = ap.parse_args()
 
@@ -166,11 +169,17 @@ def main():
         print(f"Project dir not found: {project_dir}", file=sys.stderr)
         sys.exit(1)
 
+    wanted = set(args.tasks.split(",")) if args.tasks else None
+    tasks = [t for t in TASKS if not wanted or t["id"] in wanted]
+    if not tasks:
+        print(f"No tasks match: {args.tasks}", file=sys.stderr)
+        sys.exit(1)
+
     import tempfile
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        for task in TASKS:
+        for task in tasks:
             for cond in ("A", "B"):
                 print(f"Running {task['id']} condition {cond}...",
                       file=sys.stderr)
