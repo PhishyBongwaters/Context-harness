@@ -350,13 +350,16 @@ def _show_config(cfg) -> None:
 def providers_lines(cfg=None, _probe=None) -> list[str]:
     """Known providers. Pure except the registry reachability dots.
 
-    Registry non-empty: one row per entry (dot, * = active). Else the
-    legacy kind list. Dots are display-only, never block.
+    Registry entries first (dot, * = active), then any legacy kinds
+    not already in the registry -- matching the picker, where a kind
+    must never vanish just because a registry entry exists.
+    Dots are display-only, never block.
     """
     providers = getattr(cfg, "providers", None) if cfg is not None else None
+    probe = _probe or probe_provider
+    lines = ["[providers]"]
+    seen = set()
     if isinstance(providers, dict) and providers:
-        probe = _probe or probe_provider
-        lines = ["[providers]"]
         for name in sorted(providers):
             entry = providers[name] or {}
             kind = entry.get("kind", "?")
@@ -370,11 +373,14 @@ def providers_lines(cfg=None, _probe=None) -> list[str]:
             star = (" *" if getattr(cfg, "provider", None) == name else "")
             lines.append(f"  {dot} {name}{star}: kind={kind} "
                          f"model={model} base_url={base}")
-        return lines
-    return (["[providers]"]
-            + [f"  {name}: base_url={meta.get('base_url')} "
-               f"api_key_env={meta.get('api_key_env')}"
-               for name, meta in sorted(PROVIDER_DEFAULTS.items())])
+            seen.add(name)
+    # Legacy kinds not shadowed by the registry (picker parity).
+    for name, meta in sorted(PROVIDER_DEFAULTS.items()):
+        if name in seen:
+            continue
+        lines.append(f"  {name}: base_url={meta.get('base_url')} "
+                     f"api_key_env={meta.get('api_key_env')}")
+    return lines
 
 
 def _show_providers(cfg=None) -> None:
