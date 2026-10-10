@@ -79,22 +79,26 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
     sess = Session(id=f"{task['id']}-{condition}", dir=sess_dir,
                    workdir=project_dir)
 
-    # Wrap prune to snapshot.
+    # Wrap prune to snapshot. Use assemble() for true transcript size,
+    # not context.md (which is just the cached artifact).
+    from harness.assembly import assemble
+    def _transcript_tokens(s):
+        return count_tokens(assemble(s.dir))
     orig_prune = loop.prune_turn
     def wrapped_prune(s):
-        pre = s.context.load()
-        tb = count_tokens(pre)
+        tb = _transcript_tokens(s)
+        pre = assemble(s.dir)
         ok = orig_prune(s)
-        ta = count_tokens(s.context.load())
+        ta = _transcript_tokens(s)
         prune_snapshots.append((tb, pre, ta))
         return ok
     loop.prune_turn = wrapped_prune
     orig_naive = loop._naive_truncate
     def wrapped_naive(s):
-        pre = s.context.load()
-        tb = count_tokens(pre)
+        tb = _transcript_tokens(s)
+        pre = assemble(s.dir)
         orig_naive(s)
-        ta = count_tokens(s.context.load())
+        ta = _transcript_tokens(s)
         prune_snapshots.append((tb, pre, ta))
     loop._naive_truncate = wrapped_naive
 
@@ -103,7 +107,7 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
     try:
         # Turn 1: the model investigates and encounters the needle.
         a1 = loop.run_turn(sess, task["turn1"])
-        tokens_before = count_tokens(sess.context.load())
+        tokens_before = _transcript_tokens(sess)
 
         # Follow-up turns: more investigation, growing context.
         for followup in task["followups"]:
@@ -117,7 +121,7 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
         success = False
     wall = time.time() - start
 
-    final_ctx = sess.context.load()
+    final_ctx = assemble(sess.dir)
     quiz_scores = []
     for tb, pre_text, ta in prune_snapshots:
         survived = task["needle_answer"].lower() in final_ctx.lower()
