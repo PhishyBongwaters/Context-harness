@@ -1,6 +1,6 @@
 # Evaluation plan — satellite context
 
-**Status:** plan (2026-10-07)
+**Status:** A→B implemented (2026-10-10) — see `evals/README.md`.
 **Goal:** produce honest numbers for the engineering layer — the parts the
 CLM paper doesn't cover: budget-legible pruning, the janitor pattern,
 completion-triggered pruning, satellite files with a verified index.
@@ -8,6 +8,11 @@ completion-triggered pruning, satellite files with a verified index.
 Rule zero, from hard experience: measured, not estimated. Same tasks on
 both sides, token counts from real payloads, analysis from committed
 data. A number neither side can reproduce is worse than no number.
+
+The eval keeps us honest: `python -m evals.run_ab` runs Rob's manual
+"explain the agent loop" test under both conditions on the real
+codebase. Raw transcripts are saved for independent verification —
+don't trust harness numbers, count them yourself.
 
 ## Claims → metrics
 
