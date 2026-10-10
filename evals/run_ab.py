@@ -1,21 +1,21 @@
 """A/B retention evaluation runner — real multi-turn sessions.
 
 Usage:
-    python -m evals.run_ab --provider <name> --model <id> [--tasks needle-01]
+    python -m evals.run_ab --provider <name> --model <id> \
+        --project-dir D:/projects/context-harness
 
 Runs each task under:
   A (--no-prune): naive, append-only, truncate oldest at window
   B (default):    full harness (budget + janitor + deterministic prune)
 
-How it works (like a real session):
+How it works (like Rob's manual test):
   1. Fresh session, empty history.
-  2. Turn 1: user asks the model to investigate something. The model
-     uses tools (read/exec) and encounters the needle naturally in
-     tool output — just like a real debugging session.
-  3. Turns 2-N: user asks follow-up questions requiring more tool
-     calls. Context grows to 30k+ tokens from real tool output.
+  2. Turn 1: "Explain the agent loop." Model reads harness/loop.py
+     and related files via tools, building real context.
+  3. Turns 2-4: follow-up questions requiring more file reads.
+     Context grows to 30k+ tokens from real tool output.
   4. Pruning triggers (condition B) or naive truncation (condition A).
-  5. Final turn: user asks about the needle from early in the session.
+  5. Final turn: ask about a specific detail from turn 1.
      The model must recall it from the (pruned) context.
 
 The model participates in building the context — no pre-loaded fake
@@ -36,57 +36,41 @@ from pathlib import Path
 # Allow running as `python -m evals.run_ab` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from evals.tasks.needle_tasks import TASKS
 from evals.quiz import check_answer
 from harness.config import load_config
 from harness.context import Budget, count_tokens
 from harness.loop import Loop, Session
 
 
-def setup_task_files(task: dict, workdir: Path,
-                     project_dir: str | None = None) -> Path:
-    """Create (or use) the project files the model will investigate.
-
-    If project_dir is given, use the real project (the needle must be
-    planted in it beforehand, or use a task whose needle matches real
-    content). Otherwise generate a fake project with the needle in
-    CHARTER.md.
-    """
-    if project_dir:
-        proj = Path(project_dir).resolve()
-        if not proj.is_dir():
-            raise ValueError(f"Project dir not found: {project_dir}")
-        return proj
-    proj = workdir / f"eval-{task['id']}"
-    proj.mkdir(parents=True, exist_ok=True)
-    # Charter contains the needle.
-    (proj / "CHARTER.md").write_text(
-        f"# Project Charter\n\n{task['needle']}\n\n"
-        f"Status: active\nTeam: 8 engineers\n",
-        encoding="utf-8")
-    # Lots of other files for the model to sift through.
-    for i in range(30):
-        (proj / f"module_{i:02d}.py").write_text(
-            f'"""Module {i}: utility functions."""\n\n'
-            f"def helper_{i}(x):\n"
-            f'    """Do something with x."""\n'
-            f"    return x * {i + 1}\n\n"
-            f"CONFIG_{i} = {{'timeout': {10 + i}, 'retries': 3, "
-            f"'endpoint': 'https://api{i}.example.com/v1'}}\n",
-            encoding="utf-8")
-    # Verbose log file for context bulk.
-    log_lines = []
-    for i in range(500):
-        log_lines.append(
-            f"[2026-10-10 06:{i//60:02d}:{i%60:02d} INFO] "
-            f"request {i}: GET /api/v1/resource/{i} -> 200 "
-            f"({20 + (i % 50)}ms)")
-    (proj / "app.log").write_text("\n".join(log_lines), encoding="utf-8")
-    return proj
+# The task: explain the agent loop, then recall a specific detail.
+# The needle is a fact the model learns in turn 1 from reading the code.
+TASK = {
+    "id": "agent-loop",
+    "turn1": (
+        "Explain the agent loop. Start by reading harness/loop.py, "
+        "focusing on the Loop class and the run_turn method. "
+        "What does run_turn do?"),
+    "needle_question": "What does run_turn do?",
+    # The needle answer is checked loosely; the model should mention
+    # key aspects (runs a single turn, calls the model, handles tools).
+    # We check for a distinctive phrase from the code.
+    "needle_answer": "run_turn",
+    "followups": [
+        "Now read harness/deterministic.py and explain the prune ladder. "
+        "What are the stages?",
+        "Read harness/approvals.py and explain the Policy class. "
+        "What tools are always allowed?",
+        "Read harness/session.py and explain init_layout. "
+        "What files does it create?",
+    ],
+    "final_question": (
+        "Back to the agent loop: what does the run_turn method do? "
+        "Be specific about its key steps."),
+}
 
 
 def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
-                  project_dir: str | None = None) -> dict:
+                  project_dir: str) -> dict:
     """Run one task under one condition. Returns metrics dict."""
     from harness.providers import make_provider
 
@@ -110,12 +94,11 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
                 prune_section_cap=cfg.prune_section_cap)
 
     # Fresh session. Model builds context itself via tool calls.
+    # workdir is the real project so read/list_dir tools work.
     sess_dir = tmpdir / f"eval-{task['id']}-{condition}"
     sess_dir.mkdir(parents=True, exist_ok=True)
-    proj_dir = setup_task_files(task, tmpdir / "work",
-                                project_dir=project_dir)
     sess = Session(id=f"{task['id']}-{condition}", dir=sess_dir,
-                   workdir=str(proj_dir))
+                   workdir=project_dir)
 
     # Wrap prune to snapshot.
     orig_prune = loop.prune_turn
@@ -139,29 +122,15 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
     tokens_before = 0
     start = time.time()
     try:
-        # Turn 1: investigate the project. Model reads CHARTER.md (needle)
-        # and other files via tools. Context grows from real tool output.
-        a1 = loop.run_turn(
-            sess,
-            f"Investigate the project in {proj_dir}. Start by reading "
-            f"CHARTER.md, then skim a few module files and the log to "
-            f"understand the structure. Summarize what this project does.")
+        # Turn 1: explain the agent loop (model reads real files).
+        a1 = loop.run_turn(sess, task["turn1"])
         tokens_before = count_tokens(sess.context.load())
 
-        # Turns 2-4: more investigation, growing context.
-        a2 = loop.run_turn(
-            sess,
-            "Now dig into the modules. Read at least 10 module files and "
-            "report any interesting patterns in the helper functions.")
-        a3 = loop.run_turn(
-            sess,
-            "Check the log file for errors or warnings. Summarize what "
-            "you find.")
-        a4 = loop.run_turn(
-            sess,
-            "Look at the remaining modules you haven't checked yet.")
+        # Follow-up turns: more file reads, growing context.
+        for followup in task["followups"]:
+            loop.run_turn(sess, followup)
 
-        # Final turn: the retention quiz. Ask about the needle from turn 1.
+        # Final turn: retention quiz on turn 1 detail.
         answer = loop.run_turn(sess, task["final_question"])
         success = check_answer(answer or "", task["needle_answer"])
     except Exception as e:
@@ -169,7 +138,6 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
         success = False
     wall = time.time() - start
 
-    # Did the needle survive pruning?
     final_ctx = sess.context.load()
     quiz_scores = []
     for tb, pre_text, ta in prune_snapshots:
@@ -198,12 +166,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--provider", default=None)
     ap.add_argument("--model", default=None)
-    ap.add_argument("--tasks", default=None,
-                    help="Comma-separated task IDs (default: all)")
+    ap.add_argument("--project-dir", required=True,
+                    help="Real project directory for the model to investigate "
+                         "(e.g. D:/projects/context-harness)")
     ap.add_argument("--out", default=None, help="JSONL output path")
-    ap.add_argument("--project-dir", default=None,
-                    help="Real project directory to investigate "
-                         "(instead of generated fake files)")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -212,21 +178,21 @@ def main():
     if args.model:
         cfg.model = args.model
 
-    wanted = set(args.tasks.split(",")) if args.tasks else None
-    tasks = [t for t in TASKS if not wanted or t["id"] in wanted]
+    project_dir = str(Path(args.project_dir).resolve())
+    if not Path(project_dir).is_dir():
+        print(f"Project dir not found: {project_dir}", file=sys.stderr)
+        sys.exit(1)
 
     import tempfile
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        for task in tasks:
-            for cond in ("A", "B"):
-                print(f"Running {task['id']} condition {cond}...",
-                      file=sys.stderr)
-                r = run_condition(task, cond, cfg, tmpdir,
-                                  project_dir=args.project_dir)
-                results.append(r)
-                print(json.dumps(r), flush=True)
+        for cond in ("A", "B"):
+            print(f"Running {TASK['id']} condition {cond}...",
+                  file=sys.stderr)
+            r = run_condition(TASK, cond, cfg, tmpdir, project_dir)
+            results.append(r)
+            print(json.dumps(r), flush=True)
 
     if args.out:
         with open(args.out, "w") as f:
