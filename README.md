@@ -25,7 +25,8 @@ There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
 1. **satellites** — `sats/current.md`, `sats/goals.md`,
-   `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`
+   `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`,
+   `sats/hypotheses.md`
    (durable one-liners, sent as `## sat <name>` sections)
 2. **history** — `history.md` (stamped conversation record plus episode
    pointers)
@@ -54,6 +55,8 @@ once):
   add one with `/goal "text"` or `--goal "text"`
 - `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
   facts, decisions with reasons, open tasks
+- `sats/hypotheses.md` — half-formed ideas, unproven suspicions
+  (promote to facts when confirmed, delete when disproven)
 
 `write` is rejected on all session sources — use `edit`.
 
@@ -106,7 +109,7 @@ implemented from scratch for interactive use.
   index.md         pointer map (harness-owned)
   history.md       stamped conversation record (model-editable)
   sats/            current.md, goals.md, facts.md, decisions.md,
-                   tasks.md (model-editable)
+                   tasks.md, hypotheses.md (model-editable)
   scratch.md       current episode working notes (harness-owned)
   archive/         closed episodes, one file per turn (harness-owned)
   context.md       assembled artifact for inspection (rebuilt every turn)

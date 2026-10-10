@@ -30,7 +30,7 @@ every turn: keep, compress, reorganize, discard.
 │    Full diagnosis, script blocks, tool output.       │  purged freely
 ├─────────────────────────────────────────────────────┤
 │ 2. CURATED LAYER — satellite files                   │  one-liners
-│    facts.md · decisions.md · tasks.md                │  model-written
+│    facts.md · decisions.md · tasks.md · hypotheses.md │  model-written
 ├─────────────────────────────────────────────────────┤
 │ 3. ARCHIVE LAYER — dated backups                    │  addressable
 │    Purged detail, saved — never lost, rarely loaded. │
@@ -44,11 +44,16 @@ every turn: keep, compress, reorganize, discard.
 diagnosis, script blocks, self-conversation. Purged aggressively — this
 layer is allowed to be messy because nothing in it is load-bearing.
 
-**Curated layer.** Three (max four) satellite files, one-liners only:
+**Curated layer.** Four satellite files, one-liners only:
 
 - `facts.md` — world state discovered ("auth retry bug is in `login()`, not the token refresh")
 - `decisions.md` — the *why* that evaporates ("chose X over Y because Z; rejected W after test T failed")
 - `tasks.md` — what's pending, what's done
+- `hypotheses.md` — half-formed ideas, unproven suspicions ("I think the
+  latency is DNS but haven't verified"). Prune ruthlessly: promote to
+  facts when confirmed, delete when disproven. This is the messy middle
+  between scratch and fact — without it, hunches either die in scratch
+  or get prematurely promoted to facts.
 
 Findings fold into facts. The ontology stays small on purpose: eight
 satellite files would reinvent the bloat with extra steps.

@@ -61,6 +61,7 @@ new_text, which must match exactly once):
   sats/goals.md -- enduring objectives (`- [active]` / `- [done]`)
   sats/facts.md, sats/decisions.md, sats/tasks.md -- one-line facts,
     decisions with reasons, open tasks
+  sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
 
   Heavy curation (large histories, many files to triage): prefer
   `delegate` -- a subagent does the reading and editing in its own
@@ -111,7 +112,8 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
   {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
-  {sats_dir}/decisions.md, {sats_dir}/tasks.md -- durable one-liners
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md,
+  {sats_dir}/hypotheses.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to

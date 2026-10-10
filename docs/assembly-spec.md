@@ -32,6 +32,7 @@ Non-goals: provider plumbing, TUI, prompt wording. Those are untouched.
     facts.md           # MODEL-EDITABLE. One-liners.
     decisions.md       # MODEL-EDITABLE. One-liners.
     tasks.md           # MODEL-EDITABLE. One-liners.
+    hypotheses.md      # MODEL-EDITABLE. Unproven suspicions; prune ruthlessly.
   scratch.md           # HARNESS-OWNED. Current episode tool trace.
   archive/
     <stamp>-episode-t<NNNN>.md   # HARNESS-OWNED. Closed episodes.
@@ -197,6 +198,7 @@ to "summarize old history"; its remaining job is sats hygiene.
 - sats/facts.md
 - sats/decisions.md
 - sats/tasks.md
+- sats/hypotheses.md
 
 ## episodes
 - archive/20261009-093012-episode-t0042.md  (turns 38-42, 14 tool calls)

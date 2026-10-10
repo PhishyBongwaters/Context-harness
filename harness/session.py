@@ -24,6 +24,10 @@ SAT_FILES = {
     "facts": "# Facts\n\nDiscovered truths about the world, one line each.\n",
     "decisions": "# Decisions\n\nChoices made and why, one line each.\n",
     "tasks": "# Tasks\n\nOpen work items, one line each.\n",
+    "hypotheses": ("# Hypotheses\n\nHalf-formed ideas and open questions, "
+                   "one line each. Things you suspect but haven't verified. "
+                   "Prune ruthlessly -- promote to facts when confirmed, "
+                   "delete when disproven.\n"),
 }
 
 INDEX_TEMPLATE = """# Index
@@ -37,6 +41,7 @@ writes it.
 - sats/facts.md
 - sats/decisions.md
 - sats/tasks.md
+- sats/hypotheses.md
 
 ## episodes
 """
