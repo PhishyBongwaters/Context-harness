@@ -36,37 +36,16 @@ from pathlib import Path
 # Allow running as `python -m evals.run_ab` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from evals.tasks.harness_tasks import TASKS
 from evals.quiz import check_answer
 from harness.config import load_config
 from harness.context import Budget, count_tokens
 from harness.loop import Loop, Session
 
 
-# The task: explain the agent loop, then recall a specific detail.
-# The needle is a fact the model learns in turn 1 from reading the code.
-TASK = {
-    "id": "agent-loop",
-    "turn1": (
-        "Explain the agent loop. Start by reading harness/loop.py, "
-        "focusing on the Loop class and the run_turn method. "
-        "What does run_turn do?"),
-    "needle_question": "What does run_turn do?",
-    # The needle answer is checked loosely; the model should mention
-    # key aspects (runs a single turn, calls the model, handles tools).
-    # We check for a distinctive phrase from the code.
-    "needle_answer": "run_turn",
-    "followups": [
-        "Now read harness/deterministic.py and explain the prune ladder. "
-        "What are the stages?",
-        "Read harness/approvals.py and explain the Policy class. "
-        "What tools are always allowed?",
-        "Read harness/session.py and explain init_layout. "
-        "What files does it create?",
-    ],
-    "final_question": (
-        "Back to the agent loop: what does the run_turn method do? "
-        "Be specific about its key steps."),
-}
+# The task: 5 real questions about the harness codebase.
+# Each task has the model investigate via tools, then gets quizzed.
+# TASKS is imported from evals.tasks.harness_tasks above.
 
 
 def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
@@ -122,11 +101,11 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
     tokens_before = 0
     start = time.time()
     try:
-        # Turn 1: explain the agent loop (model reads real files).
+        # Turn 1: the model investigates and encounters the needle.
         a1 = loop.run_turn(sess, task["turn1"])
         tokens_before = count_tokens(sess.context.load())
 
-        # Follow-up turns: more file reads, growing context.
+        # Follow-up turns: more investigation, growing context.
         for followup in task["followups"]:
             loop.run_turn(sess, followup)
 
@@ -187,12 +166,13 @@ def main():
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        for cond in ("A", "B"):
-            print(f"Running {TASK['id']} condition {cond}...",
-                  file=sys.stderr)
-            r = run_condition(TASK, cond, cfg, tmpdir, project_dir)
-            results.append(r)
-            print(json.dumps(r), flush=True)
+        for task in TASKS:
+            for cond in ("A", "B"):
+                print(f"Running {task['id']} condition {cond}...",
+                      file=sys.stderr)
+                r = run_condition(task, cond, cfg, tmpdir, project_dir)
+                results.append(r)
+                print(json.dumps(r), flush=True)
 
     if args.out:
         with open(args.out, "w") as f:
