@@ -81,7 +81,8 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
                 .replace("{soft}", str(soft))
                 .replace("{os_name}", platform.system())
                 .replace("{workdir}",
-                         str(workdir) if workdir else ""))
+                         str(workdir) if workdir else "")
+                .replace("{sdir}", str(sdir)))
 
 
 def write_assembled(sdir: str | Path, text: str) -> Path:

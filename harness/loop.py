@@ -53,15 +53,15 @@ already see, doubling your context for nothing.
 CURATION (your standing permission -- edits here never need approval):
 you curate the durable sources with your edit tool (exact old_text /
 new_text, which must match exactly once):
-  history.md -- the conversation record (the harness records every
+  {sdir}/history.md -- the conversation record (the harness records every
     turn and archives old turns automatically; correct mistakes, don't
     manage size)
-  sats/current.md -- what you are actively working on; update it
+  {sdir}/sats/current.md -- what you are actively working on; update it
     when the task changes or completes
-  sats/goals.md -- enduring objectives (`- [active]` / `- [done]`)
-  sats/facts.md, sats/decisions.md, sats/tasks.md -- one-line facts,
+  {sdir}/sats/goals.md -- enduring objectives (`- [active]` / `- [done]`)
+  {sdir}/sats/facts.md, {sdir}/sats/decisions.md, {sdir}/sats/tasks.md -- one-line facts,
     decisions with reasons, open tasks
-  sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
+  {sdir}/sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
 
   Heavy curation (large histories, many files to triage): prefer
   `delegate` -- a subagent does the reading and editing in its own
