@@ -1080,7 +1080,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "serve", False):
         from .serve import run_serve
         from pathlib import Path
-        port = getattr(args, "port", 8080) or 8080
+        port = getattr(args, "port", None) or getattr(cfg, "serve_port", 8080)
         sessions_root = Path(cfg.sessions_path) / "serve"
         sessions_root.mkdir(parents=True, exist_ok=True)
         def make_loop():

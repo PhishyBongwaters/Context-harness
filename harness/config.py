@@ -432,6 +432,8 @@ class Config:
     # Directory of user tool scripts (each .py/.sh with a .json manifest
     # sidecar). Loaded at startup; --tool adds one-shot extras.
     tools_dir: str | None = None
+    # Port for --serve mode (overridden by --port CLI flag).
+    serve_port: int = 8080
     # Prune (janitor) model: cheaper/smaller model for prune-only turns.
     # Each falls back to the main setting when unset; resolution happens
     # in __main__ after CLI overrides so --provider/--model apply.
@@ -602,6 +604,7 @@ def load_config(path: str | Path | None = None,
         include_file=merged.get("include_file"),
         include_subagents=bool(merged.get("include_subagents", False)),
         tools_dir=merged.get("tools_dir"),
+        serve_port=int(merged.get("serve_port", 8080)),
         prune_provider=merged.get("prune_provider"),
         prune_model=merged.get("prune_model"),
         prune_base_url=merged.get("prune_base_url"),
