@@ -43,12 +43,20 @@ from harness.context import Budget, count_tokens
 from harness.loop import Loop, Session
 
 
-def setup_task_files(task: dict, workdir: Path) -> None:
-    """Create the fake project files the model will investigate.
+def setup_task_files(task: dict, workdir: Path,
+                     project_dir: str | None = None) -> Path:
+    """Create (or use) the project files the model will investigate.
 
-    The needle is planted in one of the files, encountered naturally
-    when the model reads it during investigation.
+    If project_dir is given, use the real project (the needle must be
+    planted in it beforehand, or use a task whose needle matches real
+    content). Otherwise generate a fake project with the needle in
+    CHARTER.md.
     """
+    if project_dir:
+        proj = Path(project_dir).resolve()
+        if not proj.is_dir():
+            raise ValueError(f"Project dir not found: {project_dir}")
+        return proj
     proj = workdir / f"eval-{task['id']}"
     proj.mkdir(parents=True, exist_ok=True)
     # Charter contains the needle.
@@ -77,7 +85,8 @@ def setup_task_files(task: dict, workdir: Path) -> None:
     return proj
 
 
-def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
+def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
+                  project_dir: str | None = None) -> dict:
     """Run one task under one condition. Returns metrics dict."""
     from harness.providers import make_provider
 
@@ -103,7 +112,8 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path) -> dict:
     # Fresh session. Model builds context itself via tool calls.
     sess_dir = tmpdir / f"eval-{task['id']}-{condition}"
     sess_dir.mkdir(parents=True, exist_ok=True)
-    proj_dir = setup_task_files(task, tmpdir / "work")
+    proj_dir = setup_task_files(task, tmpdir / "work",
+                                project_dir=project_dir)
     sess = Session(id=f"{task['id']}-{condition}", dir=sess_dir,
                    workdir=str(proj_dir))
 
@@ -191,6 +201,9 @@ def main():
     ap.add_argument("--tasks", default=None,
                     help="Comma-separated task IDs (default: all)")
     ap.add_argument("--out", default=None, help="JSONL output path")
+    ap.add_argument("--project-dir", default=None,
+                    help="Real project directory to investigate "
+                         "(instead of generated fake files)")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -210,7 +223,8 @@ def main():
             for cond in ("A", "B"):
                 print(f"Running {task['id']} condition {cond}...",
                       file=sys.stderr)
-                r = run_condition(task, cond, cfg, tmpdir)
+                r = run_condition(task, cond, cfg, tmpdir,
+                                  project_dir=args.project_dir)
                 results.append(r)
                 print(json.dumps(r), flush=True)
 
