@@ -53,7 +53,8 @@ EXPECTED_CONCEPTS = ["loop", "run_turn", "prune", "budget", "context"]
 
 
 def run_condition(condition: str, cfg, tmpdir: Path,
-                  project_dir: str, prompt: str | None = None) -> dict:
+                  project_dir: str, prompt: str | None = None,
+                  transcript_dir: str | None = None) -> dict:
     from harness.providers import make_provider
 
     prune_enabled = (condition == "B")
@@ -113,6 +114,15 @@ def run_condition(condition: str, cfg, tmpdir: Path,
         concepts_hit = 0
     wall = time.time() - start
 
+    # Save raw transcript for independent verification.
+    transcript_path = None
+    if transcript_dir:
+        tdir = Path(transcript_dir)
+        tdir.mkdir(parents=True, exist_ok=True)
+        transcript_path = str(tdir / f"{TASK_ID}-{condition}.md")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            f.write(assemble(sess.dir))
+
     return {
         "task_id": TASK_ID,
         "condition": condition,
@@ -124,6 +134,7 @@ def run_condition(condition: str, cfg, tmpdir: Path,
         "peak_tokens": peak_tokens,
         "post_prune_tokens": post_prune_tokens,
         "prune_events": len(prune_events),
+        "transcript": transcript_path,
         "wall_time_s": round(wall, 1),
     }
 
@@ -137,6 +148,10 @@ def main():
                     help="Custom initial prompt (replaces 'Explain the agent loop'). "
                          "E.g. --prompt 'Review the code until you can explain X'")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--transcript-dir", default=None,
+                    help="Directory to save raw transcripts (unmolested text) "
+                         "for independent verification. "
+                         "Saves {task}-{condition}.md per run.")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -157,7 +172,8 @@ def main():
         for cond in ("A", "B"):
             print(f"Running {TASK_ID} condition {cond}...", file=sys.stderr)
             r = run_condition(cond, cfg, tmpdir, project_dir,
-                              prompt=args.prompt)
+                              prompt=args.prompt,
+                              transcript_dir=args.transcript_dir)
             results.append(r)
             print(json.dumps(r), flush=True)
 
