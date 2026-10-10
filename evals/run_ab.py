@@ -53,7 +53,7 @@ EXPECTED_CONCEPTS = ["loop", "run_turn", "prune", "budget", "context"]
 
 
 def run_condition(condition: str, cfg, tmpdir: Path,
-                  project_dir: str) -> dict:
+                  project_dir: str, prompt: str | None = None) -> dict:
     from harness.providers import make_provider
 
     prune_enabled = (condition == "B")
@@ -63,10 +63,20 @@ def run_condition(condition: str, cfg, tmpdir: Path,
     budget = Budget(hard=12_000, soft=8_000,
                     window=getattr(cfg, "context_window", None))
     prune_events = []
+    peak_tokens = 0
+    post_prune_tokens = 0
 
     def on_event(kind, data):
+        nonlocal peak_tokens, post_prune_tokens
         if kind in ("prune-deterministic", "prune", "naive-truncate"):
             prune_events.append({"kind": kind, "data": data})
+            # Capture the actual before/after from the prune report.
+            if isinstance(data, dict):
+                tb = data.get("tokens_before", 0)
+                ta = data.get("tokens_after", 0)
+                if tb > peak_tokens:
+                    peak_tokens = tb
+                post_prune_tokens = ta
 
     loop = Loop(provider, budget, on_event=on_event,
                 prune_provider=provider,
@@ -85,8 +95,10 @@ def run_condition(condition: str, cfg, tmpdir: Path,
 
     tokens_before = 0
     start = time.time()
+    # Use custom prompt if provided, else default turns.
+    turns = [prompt] + TURNS[1:] if prompt else TURNS
     try:
-        for i, turn in enumerate(TURNS):
+        for i, turn in enumerate(turns):
             loop.run_turn(sess, turn)
             if i == 0:
                 tokens_before = tok()
@@ -109,6 +121,8 @@ def run_condition(condition: str, cfg, tmpdir: Path,
         "answer": (answer or "")[:300],
         "tokens_before_run": tokens_before,
         "tokens_after_run": tok(),
+        "peak_tokens": peak_tokens,
+        "post_prune_tokens": post_prune_tokens,
         "prune_events": len(prune_events),
         "wall_time_s": round(wall, 1),
     }
@@ -119,6 +133,9 @@ def main():
     ap.add_argument("--provider", default=None)
     ap.add_argument("--model", default=None)
     ap.add_argument("--project-dir", required=True)
+    ap.add_argument("--prompt", default=None,
+                    help="Custom initial prompt (replaces 'Explain the agent loop'). "
+                         "E.g. --prompt 'Review the code until you can explain X'")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -139,7 +156,8 @@ def main():
         tmpdir = Path(tmp)
         for cond in ("A", "B"):
             print(f"Running {TASK_ID} condition {cond}...", file=sys.stderr)
-            r = run_condition(cond, cfg, tmpdir, project_dir)
+            r = run_condition(cond, cfg, tmpdir, project_dir,
+                              prompt=args.prompt)
             results.append(r)
             print(json.dumps(r), flush=True)
 
