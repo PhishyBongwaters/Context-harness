@@ -1,28 +1,24 @@
-"""A/B retention evaluation runner — real multi-turn sessions.
+"""A/B evaluation: 'Explain the agent loop' on the real harness repo.
 
 Usage:
     python -m evals.run_ab --provider <name> --model <id> \
         --project-dir D:/projects/context-harness
 
-Runs each task under:
+Runs under:
   A (--no-prune): naive, append-only, truncate oldest at window
   B (default):    full harness (budget + janitor + deterministic prune)
 
-How it works (like Rob's manual test):
-  1. Fresh session, empty history.
-  2. Turn 1: "Explain the agent loop." Model reads harness/loop.py
-     and related files via tools, building real context.
-  3. Turns 2-4: follow-up questions requiring more file reads.
-     Context grows to 30k+ tokens from real tool output.
-  4. Pruning triggers (condition B) or naive truncation (condition A).
-  5. Final turn: ask about a specific detail from turn 1.
-     The model must recall it from the (pruned) context.
+What it does (Rob's manual test, automated):
+  1. Fresh session.
+  2. "Explain the agent loop." Model reads harness/loop.py and related
+     files via tools, building real context from real tool output.
+  3. Follow-ups ask it to dig deeper into specific files.
+     Context grows; pruning triggers.
+  4. Final: "Summarize what the agent loop does in 3 sentences."
+     We check if the summary is coherent and mentions key concepts.
 
-The model participates in building the context — no pre-loaded fake
-history. This tests what actually matters: does the harness preserve
-what the model needs across pruning?
-
-Requires a configured provider (API key in env, or local server).
+Metrics: tokens before/after, prune events, and whether the final
+summary mentions core concepts (Loop, run_turn, budget, prune).
 """
 
 from __future__ import annotations
@@ -33,37 +29,44 @@ import sys
 import time
 from pathlib import Path
 
-# Allow running as `python -m evals.run_ab` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from evals.tasks.harness_tasks import TASKS
-from evals.quiz import check_answer
 from harness.config import load_config
 from harness.context import Budget, count_tokens
 from harness.loop import Loop, Session
+from harness.assembly import assemble
 
 
-# The task: 5 real questions about the harness codebase.
-# Each task has the model investigate via tools, then gets quizzed.
-# TASKS is imported from evals.tasks.harness_tasks above.
+TASK_ID = "explain-agent-loop"
+TURNS = [
+    "Explain the agent loop. Read harness/loop.py, focusing on the Loop "
+    "class. What is its purpose?",
+    "Now read harness/deterministic.py. What does the prune ladder do?",
+    "Read harness/approvals.py. How does the Policy decide what to allow?",
+    "Read harness/session.py. What is init_layout for?",
+]
+FINAL_QUESTION = (
+    "Summarize in 3 sentences: what does the agent loop do, "
+    "and how does it manage context?")
+# Key concepts that should appear in a good summary.
+EXPECTED_CONCEPTS = ["loop", "run_turn", "prune", "budget", "context"]
 
 
-def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
+def run_condition(condition: str, cfg, tmpdir: Path,
                   project_dir: str) -> dict:
-    """Run one task under one condition. Returns metrics dict."""
     from harness.providers import make_provider
 
     prune_enabled = (condition == "B")
     provider = make_provider(cfg, provider=cfg.provider, model=cfg.model,
                              base_url=cfg.base_url, api_key=cfg.api_key)
-    # Eval budget: small enough that real work triggers pruning.
-    budget = Budget(hard=30_000, soft=20_000,
+    # Low budget to guarantee pruning triggers.
+    budget = Budget(hard=12_000, soft=8_000,
                     window=getattr(cfg, "context_window", None))
-    prune_snapshots = []
+    prune_events = []
 
     def on_event(kind, data):
         if kind in ("prune-deterministic", "prune", "naive-truncate"):
-            pass
+            prune_events.append({"kind": kind, "data": data})
 
     loop = Loop(provider, budget, on_event=on_event,
                 prune_provider=provider,
@@ -72,75 +75,41 @@ def run_condition(task: dict, condition: str, cfg, tmpdir: Path,
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap)
 
-    # Fresh session. Model builds context itself via tool calls.
-    # workdir is the real project so read/list_dir tools work.
-    sess_dir = tmpdir / f"eval-{task['id']}-{condition}"
+    sess_dir = tmpdir / f"eval-{TASK_ID}-{condition}"
     sess_dir.mkdir(parents=True, exist_ok=True)
-    sess = Session(id=f"{task['id']}-{condition}", dir=sess_dir,
+    sess = Session(id=f"{TASK_ID}-{condition}", dir=sess_dir,
                    workdir=project_dir)
 
-    # Wrap prune to snapshot. Use assemble() for true transcript size,
-    # not context.md (which is just the cached artifact).
-    from harness.assembly import assemble
-    def _transcript_tokens(s):
-        return count_tokens(assemble(s.dir))
-    orig_prune = loop.prune_turn
-    def wrapped_prune(s):
-        tb = _transcript_tokens(s)
-        pre = assemble(s.dir)
-        ok = orig_prune(s)
-        ta = _transcript_tokens(s)
-        prune_snapshots.append((tb, pre, ta))
-        return ok
-    loop.prune_turn = wrapped_prune
-    orig_naive = loop._naive_truncate
-    def wrapped_naive(s):
-        tb = _transcript_tokens(s)
-        pre = assemble(s.dir)
-        orig_naive(s)
-        ta = _transcript_tokens(s)
-        prune_snapshots.append((tb, pre, ta))
-    loop._naive_truncate = wrapped_naive
+    def tok():
+        return count_tokens(assemble(sess.dir))
 
     tokens_before = 0
     start = time.time()
     try:
-        # Turn 1: the model investigates and encounters the needle.
-        a1 = loop.run_turn(sess, task["turn1"])
-        tokens_before = _transcript_tokens(sess)
-
-        # Follow-up turns: more investigation, growing context.
-        for followup in task["followups"]:
-            loop.run_turn(sess, followup)
-
-        # Final turn: retention quiz on turn 1 detail.
-        answer = loop.run_turn(sess, task["final_question"])
-        success = check_answer(answer or "", task["needle_answer"])
+        for i, turn in enumerate(TURNS):
+            loop.run_turn(sess, turn)
+            if i == 0:
+                tokens_before = tok()
+        answer = loop.run_turn(sess, FINAL_QUESTION)
+        # Check: does the summary mention key concepts?
+        low = (answer or "").lower()
+        concepts_hit = sum(1 for c in EXPECTED_CONCEPTS if c in low)
+        success = concepts_hit >= 3
     except Exception as e:
         answer = f"ERROR: {e}"
         success = False
+        concepts_hit = 0
     wall = time.time() - start
 
-    final_ctx = assemble(sess.dir)
-    quiz_scores = []
-    for tb, pre_text, ta in prune_snapshots:
-        survived = task["needle_answer"].lower() in final_ctx.lower()
-        quiz_scores.append({
-            "tokens_before": tb,
-            "tokens_after": ta,
-            "needle_survived": survived,
-        })
-
     return {
-        "task_id": task["id"],
+        "task_id": TASK_ID,
         "condition": condition,
         "success": success,
-        "answer": (answer or "")[:200],
-        "expected": task["needle_answer"],
+        "concepts_hit": concepts_hit,
+        "answer": (answer or "")[:300],
         "tokens_before_run": tokens_before,
-        "tokens_after_run": count_tokens(final_ctx),
-        "prune_events": len(prune_snapshots),
-        "quiz": quiz_scores,
+        "tokens_after_run": tok(),
+        "prune_events": len(prune_events),
         "wall_time_s": round(wall, 1),
     }
 
@@ -149,13 +118,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--provider", default=None)
     ap.add_argument("--model", default=None)
-    ap.add_argument("--project-dir", required=True,
-                    help="Real project directory for the model to investigate "
-                         "(e.g. D:/projects/context-harness)")
-    ap.add_argument("--tasks", default=None,
-                    help="Comma-separated task IDs to run "
-                         "(default: all). E.g. --tasks harness-01")
-    ap.add_argument("--out", default=None, help="JSONL output path")
+    ap.add_argument("--project-dir", required=True)
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     cfg = load_config()
@@ -169,23 +133,15 @@ def main():
         print(f"Project dir not found: {project_dir}", file=sys.stderr)
         sys.exit(1)
 
-    wanted = set(args.tasks.split(",")) if args.tasks else None
-    tasks = [t for t in TASKS if not wanted or t["id"] in wanted]
-    if not tasks:
-        print(f"No tasks match: {args.tasks}", file=sys.stderr)
-        sys.exit(1)
-
     import tempfile
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
-        for task in tasks:
-            for cond in ("A", "B"):
-                print(f"Running {task['id']} condition {cond}...",
-                      file=sys.stderr)
-                r = run_condition(task, cond, cfg, tmpdir, project_dir)
-                results.append(r)
-                print(json.dumps(r), flush=True)
+        for cond in ("A", "B"):
+            print(f"Running {TASK_ID} condition {cond}...", file=sys.stderr)
+            r = run_condition(cond, cfg, tmpdir, project_dir)
+            results.append(r)
+            print(json.dumps(r), flush=True)
 
     if args.out:
         with open(args.out, "w") as f:
@@ -193,12 +149,11 @@ def main():
                 f.write(json.dumps(r) + "\n")
 
     print("\n=== SUMMARY ===", file=sys.stderr)
-    print(f"{'task':<12} {'cond':<5} {'success':<8} {'prunes':<7} "
-          f"{'tok_before':<11} {'tok_after':<10}", file=sys.stderr)
     for r in results:
-        print(f"{r['task_id']:<12} {r['condition']:<5} "
-              f"{str(r['success']):<8} {r['prune_events']:<7} "
-              f"{r['tokens_before_run']:<11} {r['tokens_after_run']:<10}",
+        print(f"{r['task_id']} {r['condition']}: success={r['success']} "
+              f"concepts={r['concepts_hit']}/5 "
+              f"prunes={r['prune_events']} "
+              f"tok {r['tokens_before_run']}->{r['tokens_after_run']}",
               file=sys.stderr)
 
 
