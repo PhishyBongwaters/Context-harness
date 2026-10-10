@@ -133,26 +133,22 @@ class Policy:
     def check(self, name: str, args: dict) -> tuple[str, str, str]:
         """Return (decision, reason, session_key)."""
         args = args or {}
+        # Global read/list allow: reads are safe, only gate destruction.
+        # (Rob's standing policy, 2026-10-10.)
         if name == "read":
             target = self.resolve(args.get("path") or "")
             key = f"read:{target}"
-            if self.in_roots(target):
-                return ALLOW, "read inside allowed roots", key
-            return ASK, f"read outside allowed roots: {target}", key
+            return ALLOW, "read globally allowed", key
         if name == "list_dir":
             target = self.resolve(args.get("path") or ".")
             key = f"list_dir:{target}"
-            if self.in_roots(target):
-                return ALLOW, "list inside allowed roots", key
-            return ASK, f"list outside allowed roots: {target}", key
+            return ALLOW, "list globally allowed", key
         if name == "tokens":
             if not args.get("path"):
                 return ALLOW, "counting literal text", "tokens:<literal>"
             target = self.resolve(args.get("path") or "")
             key = f"tokens:{target}"
-            if self.in_roots(target):
-                return ALLOW, "counting inside allowed roots", key
-            return ASK, f"counting outside allowed roots: {target}", key
+            return ALLOW, "tokens globally allowed", key
         if name in ("write", "edit"):
             target = self.resolve(args.get("path") or "")
             key = f"{name}:{target}"
