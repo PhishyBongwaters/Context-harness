@@ -739,6 +739,9 @@ if _HAS:
                "margin-bottom: 1; width: 1fr; } "
                ".message-tool { background: #232323; padding: 0 1; "
                "margin-bottom: 1; width: 1fr; } "
+               # Diff cards: subtle warm tint, distinct from chat.
+               ".message-context-diff { background: #2b251c; padding: 0 1; "
+               "margin-bottom: 1; width: 1fr; } "
                # Navigation cursor: accent bar on the current message
                # (opencode-style jump-to-message).
                ".message-current { border-left: solid $accent; } "
@@ -1146,7 +1149,9 @@ if _HAS:
 
         # Event kinds that are system instrumentation, not conversation:
         # they go to the top SystemPanel, never the chat transcript.
-        _SYSTEM_KINDS = {"error", "prune", "context-diff", "budget",
+        # context-diff is the exception: it renders as an opencode-style
+        # diff card in the transcript (message-context-diff widget).
+        _SYSTEM_KINDS = {"error", "prune", "budget",
                          "interrupted", "approval-wait", "approval-result"}
 
         def _poll(self) -> None:
