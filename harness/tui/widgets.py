@@ -184,17 +184,31 @@ def format_event(kind: str, data, *, user_name: str = "me",
         data = data or {}
         rec = data.get("recovered", 0)
         sign = "+" if rec >= 0 else ""
-        lines = [f"[context diff: {sign}{rec:,} tokens]"]
-        for r in (data.get("removed") or [])[:5]:
-            lines.append(f"  - {r.get('header')} "
-                         f"({r.get('tokens', 0):,} tokens)")
-        if len(data.get("removed") or []) > 5:
-            lines.append(f"  - ... +{len(data['removed']) - 5} more")
-        for a in (data.get("added") or [])[:5]:
-            lines.append(f"  + {a.get('header')} "
-                         f"({a.get('tokens', 0):,} tokens)")
-        if len(data.get("added") or []) > 5:
-            lines.append(f"  + ... +{len(data['added']) - 5} more")
+        lines = [_ansi(f"[context diff: {sign}{rec:,} tokens]", 1)]
+        # Opencode-style diff card: unified per-section diffs, red/green.
+        for sec in (data.get("section_diffs") or []):
+            lines.append(_ansi(str(sec.get("header") or ""), 1))
+            for ln in (sec.get("lines") or []):
+                if ln.startswith("+"):
+                    lines.append(_ansi(ln, 32))
+                elif ln.startswith("-"):
+                    lines.append(_ansi(ln, 31))
+                elif ln.startswith("@@"):
+                    lines.append(_ansi(ln, 2))
+                else:
+                    lines.append(ln)
+        if not (data.get("section_diffs") or []):
+            # Fallback for minimal/legacy event data: header summary.
+            for r in (data.get("removed") or [])[:5]:
+                lines.append(_ansi(f"  - {r.get('header')} "
+                                   f"({r.get('tokens', 0):,} tokens)", 31))
+            if len(data.get("removed") or []) > 5:
+                lines.append(f"  - ... +{len(data['removed']) - 5} more")
+            for a in (data.get("added") or [])[:5]:
+                lines.append(_ansi(f"  + {a.get('header')} "
+                                   f"({a.get('tokens', 0):,} tokens)", 32))
+            if len(data.get("added") or []) > 5:
+                lines.append(f"  + ... +{len(data['added']) - 5} more")
         return "\n".join(lines)
     if kind == "request":
         data = data or {}

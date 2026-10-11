@@ -158,14 +158,23 @@ def _print_event(kind: str, data) -> None:
         rec = data["recovered"]
         sign = "+" if rec >= 0 else ""
         print(f"\n[context diff: {sign}{rec:,} tokens]", flush=True)
-        for r in data["removed"][:5]:
-            print(f"  - {r['header']} ({r['tokens']:,} tokens)", flush=True)
-        if len(data["removed"]) > 5:
-            print(f"  - ... +{len(data['removed']) - 5} more", flush=True)
-        for a in data["added"][:5]:
-            print(f"  + {a['header']} ({a['tokens']:,} tokens)", flush=True)
-        if len(data["added"]) > 5:
-            print(f"  + ... +{len(data['added']) - 5} more", flush=True)
+        for sec in (data.get("section_diffs") or []):
+            print(f"  {sec.get('header')}", flush=True)
+            for ln in (sec.get("lines") or []):
+                print(f"  {ln}", flush=True)
+        if not (data.get("section_diffs") or []):
+            for r in data["removed"][:5]:
+                print(f"  - {r['header']} ({r['tokens']:,} tokens)",
+                      flush=True)
+            if len(data["removed"]) > 5:
+                print(f"  - ... +{len(data['removed']) - 5} more",
+                      flush=True)
+            for a in data["added"][:5]:
+                print(f"  + {a['header']} ({a['tokens']:,} tokens)",
+                      flush=True)
+            if len(data["added"]) > 5:
+                print(f"  + ... +{len(data['added']) - 5} more",
+                      flush=True)
     elif kind == "request" and "tokens_est" in (data or {}):
         toks, hard = data["tokens_est"], data.get("hard") or 0
         pct = 100.0 * toks / hard if hard else 0
