@@ -50,6 +50,12 @@ results). There is no other memory. The assembled text below IS your context -- 
 to {ctx_path}, but never read that file: it duplicates what you can
 already see, doubling your context for nothing.
 
+AMNESIA: you forget between turns. Pruned or archived turns leave your
+context, and re-reading them costs tokens every time. If it isn't written
+in your sats or history, you don't know it. When you start anything
+multi-step, write the plan and current state to sats/current.md first and
+keep it updated as you go -- your notes are cheaper than your memory.
+
 CURATION (your standing permission -- edits here never need approval):
 you curate the durable sources with your edit tool (exact old_text /
 new_text, which must match exactly once):
