@@ -954,29 +954,112 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         message to copy its plain text. Replaces the single-Log
         transcript: backgrounds are reliable on every terminal, at the
         cost of drag-select (click-to-copy covers it).
+
+        Navigation (opencode behavior layer): alt+k / alt+j step a
+        cursor through messages, alt+u jumps to the last user message,
+        alt+c copies the cursor message (or the last one when the
+        cursor is unset). While the cursor is set the view is pinned:
+        new messages do not yank the scroll; stepping past the end
+        clears the cursor and resumes follow mode.
         """
 
         def __init__(self, *a, **k) -> None:
             super().__init__(*a, **k)
             self._message_count = 0
+            self._messages: list = []
+            self._nav_index: int | None = None
 
         @property
         def message_count(self) -> int:
             return self._message_count
 
+        @property
+        def nav_index(self) -> int | None:
+            return self._nav_index
+
+        def message_widgets(self) -> list:
+            return list(self._messages)
+
+        def current_message(self):
+            if self._nav_index is None:
+                return None
+            if 0 <= self._nav_index < len(self._messages):
+                return self._messages[self._nav_index]
+            return None
+
+        def _paint_nav(self) -> None:
+            for i, w in enumerate(self._messages):
+                try:
+                    if i == self._nav_index:
+                        w.add_class("message-current")
+                    else:
+                        w.remove_class("message-current")
+                except Exception:
+                    pass
+
+        def _set_nav(self, index: int | None) -> None:
+            if index is not None:
+                if not self._messages:
+                    index = None
+                else:
+                    index = max(0, min(index, len(self._messages) - 1))
+            self._nav_index = index
+            self._paint_nav()
+            cur = self.current_message()
+            if cur is not None:
+                try:
+                    self.scroll_to_widget(cur, animate=False)
+                except Exception:
+                    pass
+
+        def nav_step(self, delta: int) -> None:
+            """Step the cursor; past the end resumes follow mode,
+            past the start clamps at the first message."""
+            if not self._messages:
+                return
+            if self._nav_index is None:
+                nxt = 0 if delta > 0 else len(self._messages) - 1
+            else:
+                nxt = self._nav_index + delta
+            if nxt >= len(self._messages):
+                self._set_nav(None)
+            elif nxt < 0:
+                self._set_nav(0)
+            else:
+                self._set_nav(nxt)
+
+        def nav_last_user(self) -> None:
+            """Jump the cursor to the most recent user message."""
+            for i in range(len(self._messages) - 1, -1, -1):
+                w = self._messages[i]
+                try:
+                    kind = w.message_kind
+                except Exception:
+                    kind = None
+                if kind == "user":
+                    self._set_nav(i)
+                    return
+
         def write_message(self, kind: str, text: str) -> None:
             try:
-                self.mount(MessageWidget(text, kind))
+                w = MessageWidget(text, kind)
+                self.mount(w)
             except Exception:
                 return
+            self._messages.append(w)
             self._message_count += 1
-            try:
-                self.scroll_end(animate=False)
-            except Exception:
-                pass
+            if self._nav_index is None:
+                # Follow mode: stay pinned to the bottom. When the
+                # cursor is set the view stays where the user put it.
+                try:
+                    self.scroll_end(animate=False)
+                except Exception:
+                    pass
 
         def clear_all(self) -> None:
             self._message_count = 0
+            self._messages = []
+            self._nav_index = None
             try:
                 self.remove_children()
             except Exception:
