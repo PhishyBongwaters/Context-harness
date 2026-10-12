@@ -704,10 +704,7 @@ class Loop:
             # the parent's own on_event). Full audit trail lives in
             # the subagent's session dir.
             on_event=lambda kind, data: None,
-            # Subagent auto-approves: the parent already approved the
-            # delegation task. Re-prompting for every edit/exec inside
-            # the subagent defeats the purpose of delegating.
-            approver=Approver(sdir, auto_approve=True),
+            approver=self.approver,
             exec_timeout=self.exec_timeout,
             exec_timeout_max=self.exec_timeout_max,
             usage_tracker=None,  # independent metering
@@ -732,60 +729,7 @@ class Loop:
         def _run():
             output, status, error = "", "completed", None
             try:
-                # Subagents loop until they signal completion with [DONE].
-                # A single run_turn returns on the first text-only reply,
-                # which is often an intermediate update, not the final
-                # answer. We detect "intermediate" vs "final" by heuristic:
-                # intermediate updates are short, end with a colon, or
-                # contain continuation phrases. Final answers are
-                # substantial. This avoids requiring [DONE] from mocks and
-                # older prompts while still catching truncated results.
-                def _looks_intermediate(text: str) -> bool:
-                    t = text.strip()
-                    if not t:
-                        return True
-                    # Ends with colon: clearly about to do more.
-                    if t.endswith(":"):
-                        return True
-                    low = t.lower()
-                    # Explicit continuation phrases.
-                    for phrase in ("let me check", "let me verify",
-                                   "checking", "verifying", "one moment",
-                                   "stand by", "working on it",
-                                   "let me confirm"):
-                        if phrase in low:
-                            return True
-                    return False
-
-                done_task = (task + "\n\nWhen you have completed the task, "
-                           "end your final reply with [DONE] on its own line. "
-                           "Do not validate, verify, or double-check your work "
-                           "unless the task explicitly asks for validation. "
-                           "Write the answer and stop.")
-                output = sub_loop.run_turn(sub_session, done_task) or ""
-                # Loop only if the output looks like an intermediate update.
-                # If the model said [DONE] or gave a substantial answer,
-                # we're done.
-                while ("[DONE]" not in output
-                       and _looks_intermediate(output)):
-                    if slot["cancelled"]:
-                        break
-                    # Budget check: stop if over budget.
-                    try:
-                        from .context import count_tokens
-                        from .assembly import assemble
-                        ctx_text = assemble(sdir)
-                        if count_tokens(ctx_text) > sub_loop.budget.hard:
-                            break
-                    except Exception:
-                        pass
-                    cont = sub_loop.run_turn(
-                        sub_session,
-                        "Continue working on the task. When finished, "
-                        "end your reply with [DONE].") or ""
-                    output = (output + "\n\n" + cont).strip()
-                # Strip the marker from the final result.
-                output = output.replace("[DONE]", "").strip()
+                output = sub_loop.run_turn(sub_session, task) or ""
             except Exception as e:  # never let a thread die silent
                 status, error = "failed", f"{type(e).__name__}: {e}"
             if slot["cancelled"]:
