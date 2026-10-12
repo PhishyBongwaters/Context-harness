@@ -744,22 +744,24 @@ class Loop:
                     t = text.strip()
                     if not t:
                         return True
+                    # Ends with colon: clearly about to do more.
                     if t.endswith(":"):
                         return True
                     low = t.lower()
+                    # Explicit continuation phrases.
                     for phrase in ("let me check", "let me verify",
                                    "checking", "verifying", "one moment",
-                                   "stand by", "working on it"):
+                                   "stand by", "working on it",
+                                   "let me confirm"):
                         if phrase in low:
                             return True
-                    # Very short replies are likely intermediate updates,
-                    # not final findings. (Threshold is conservative.)
-                    if len(t) < 100:
-                        return True
                     return False
 
                 done_task = (task + "\n\nWhen you have completed the task, "
-                           "end your final reply with [DONE] on its own line.")
+                           "end your final reply with [DONE] on its own line. "
+                           "Do not validate, verify, or double-check your work "
+                           "unless the task explicitly asks for validation. "
+                           "Write the answer and stop.")
                 output = sub_loop.run_turn(sub_session, done_task) or ""
                 # Loop only if the output looks like an intermediate update.
                 # If the model said [DONE] or gave a substantial answer,
