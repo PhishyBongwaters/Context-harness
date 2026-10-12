@@ -939,6 +939,15 @@ if _HAS:
 
         async def on_mount(self) -> None:
             self.title = self._title or "harness"
+            # Ctrl+C must never kill the harness (documented: it copies).
+            # On Windows the console sends SIGINT which terminates the
+            # process before Textual sees the keypress. Swallow it so the
+            # ctrl+c binding (copy_selection) can work.
+            try:
+                import signal
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+            except Exception:
+                pass
             self._wire_approver()
             self.set_interval(0.1, self._poll)
             await self._apply_chrome(self.theme == "lcars")
