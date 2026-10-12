@@ -729,7 +729,7 @@ class Loop:
         def _run():
             output, status, error = "", "completed", None
             try:
-                output = sub_loop.run_turn(sub_session, task) or ""
+                output = sub_loop.run_turn(sub_session, task + "\n\nIMPORTANT: Do your work and give the final answer in ONE reply. Do not give intermediate updates like 'Let me check...' or 'Let me verify...'. If you need to do multiple steps, do them all with tool calls, then give ONE final complete answer. Do not validate or double-check unless asked.") or ""
             except Exception as e:  # never let a thread die silent
                 status, error = "failed", f"{type(e).__name__}: {e}"
             if slot["cancelled"]:
