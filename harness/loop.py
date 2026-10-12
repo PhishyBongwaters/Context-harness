@@ -704,7 +704,11 @@ class Loop:
             # the parent's own on_event). Full audit trail lives in
             # the subagent's session dir.
             on_event=lambda kind, data: None,
-            approver=self.approver,
+            # Subagent has no approver: the parent already approved the
+            # delegation. Approval prompts inside the subagent (47 of them)
+            # defeat the purpose. The subagent is still constrained by
+            # _subagent_gate and the tool allowlist.
+            approver=None,
             exec_timeout=self.exec_timeout,
             exec_timeout_max=self.exec_timeout_max,
             usage_tracker=None,  # independent metering
