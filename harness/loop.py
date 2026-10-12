@@ -729,7 +729,27 @@ class Loop:
         def _run():
             output, status, error = "", "completed", None
             try:
-                output = sub_loop.run_turn(sub_session, task) or ""
+                # Subagents loop until they signal completion with [DONE].
+                # A single run_turn returns on the first text-only reply,
+                # which is often an intermediate update, not the final
+                # answer. Loop with a continue prompt until [DONE] appears.
+                done_task = (task + "\n\nWhen you have completed the task, "
+                           "end your final reply with [DONE] on its own line.")
+                output = sub_loop.run_turn(sub_session, done_task) or ""
+                turns = 1
+                max_turns = 10
+                while "[DONE]" not in output and turns < max_turns:
+                    if slot["cancelled"]:
+                        break
+                    cont = sub_loop.run_turn(
+                        sub_session,
+                        "Continue working on the task. When finished, "
+                        "end your reply with [DONE].") or ""
+                    # Accumulate: keep the full trace, not just the last bit.
+                    output = (output + "\n\n" + cont).strip()
+                    turns += 1
+                # Strip the marker from the final result.
+                output = output.replace("[DONE]", "").strip()
             except Exception as e:  # never let a thread die silent
                 status, error = "failed", f"{type(e).__name__}: {e}"
             if slot["cancelled"]:
