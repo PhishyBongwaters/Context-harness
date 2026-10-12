@@ -732,22 +732,53 @@ class Loop:
                 # Subagents loop until they signal completion with [DONE].
                 # A single run_turn returns on the first text-only reply,
                 # which is often an intermediate update, not the final
-                # answer. Loop with a continue prompt until [DONE] appears.
+                # answer. We detect "intermediate" vs "final" by heuristic:
+                # intermediate updates are short, end with a colon, or
+                # contain continuation phrases. Final answers are
+                # substantial. This avoids requiring [DONE] from mocks and
+                # older prompts while still catching truncated results.
+                def _looks_intermediate(text: str) -> bool:
+                    t = text.strip()
+                    if not t:
+                        return True
+                    if t.endswith(":"):
+                        return True
+                    low = t.lower()
+                    for phrase in ("let me check", "let me verify",
+                                   "checking", "verifying", "one moment",
+                                   "stand by", "working on it"):
+                        if phrase in low:
+                            return True
+                    # Very short replies are likely intermediate updates,
+                    # not final findings. (Threshold is conservative.)
+                    if len(t) < 100:
+                        return True
+                    return False
+
                 done_task = (task + "\n\nWhen you have completed the task, "
                            "end your final reply with [DONE] on its own line.")
                 output = sub_loop.run_turn(sub_session, done_task) or ""
-                turns = 1
-                max_turns = 10
-                while "[DONE]" not in output and turns < max_turns:
+                # Loop only if the output looks like an intermediate update.
+                # If the model said [DONE] or gave a substantial answer,
+                # we're done.
+                while ("[DONE]" not in output
+                       and _looks_intermediate(output)):
                     if slot["cancelled"]:
                         break
+                    # Budget check: stop if over budget.
+                    try:
+                        from .context import count_tokens
+                        from .assembly import assemble
+                        ctx_text = assemble(sdir)
+                        if count_tokens(ctx_text) > sub_loop.budget.hard:
+                            break
+                    except Exception:
+                        pass
                     cont = sub_loop.run_turn(
                         sub_session,
                         "Continue working on the task. When finished, "
                         "end your reply with [DONE].") or ""
-                    # Accumulate: keep the full trace, not just the last bit.
                     output = (output + "\n\n" + cont).strip()
-                    turns += 1
                 # Strip the marker from the final result.
                 output = output.replace("[DONE]", "").strip()
             except Exception as e:  # never let a thread die silent
