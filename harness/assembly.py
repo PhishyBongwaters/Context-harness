@@ -49,6 +49,9 @@ _PROMPT_ADDENDUM_AMNESIA = (
     "start anything multi-step, write the plan and current state to\n"
     "sats/current.md first and keep it updated as you go -- your notes\n"
     "are cheaper than your memory.\n"
+    "Before answering a question, check history.md: if you already gave\n"
+    "this answer, say so and refer to it instead of re-deriving from\n"
+    "the archive.\n"
 )
 _PROMPT_ADDENDUM_AMNESIA_MARKER = "AMNESIA: you forget between turns"
 _PROMPT_ADDENDUM_DELEGATE = (
