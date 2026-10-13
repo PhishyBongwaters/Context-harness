@@ -18,7 +18,9 @@ from .context import stamp
 SAT_FILES = {
     "current": ("# Current task\n\nWhat you are actively working on right "
                 "now, one line. Update it when the task changes or "
-                "completes.\n"),
+                "completes.\n\n## Next\n\nThe single next actionable step. "
+                "Update this every turn. If you cannot finish this turn, "
+                "the next agent reads this first to know where to resume.\n"),
     "goals": ("# Goals\n\nEnduring objectives, one per line: "
               "`- [active] ...` / `- [done] ...`.\n"),
     "facts": "# Facts\n\nDiscovered truths about the world, one line each.\n",
@@ -247,7 +249,8 @@ def init_subagent_session(parent_dir: str | Path,
         base = SYSTEM_PROMPT
     paths = init_layout(sdir, SUBAGENT_PROMPT_PREFIX + base)
     (sdir / "sats" / "current.md").write_text(
-        f"# Current task\n\n{task.strip()}\n", encoding="utf-8")
+        f"# Current task\n\n{task.strip()}\n\n## Next\n\nBegin the task: read any relevant context, then take the first step.\n",
+        encoding="utf-8")
     (sdir / "sats" / "goals.md").write_text(
         "# Goals\n\n- [active] Complete the task in current.md\n",
         encoding="utf-8")
