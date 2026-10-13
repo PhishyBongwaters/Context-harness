@@ -8,6 +8,17 @@ for the harness to post status updates through the already-running bot.
 Differs from the bot repo's discord-send.py (direct REST, needs token):
 this goes through the local outbox, no token required.
 
+Requirements:
+  1. Discord bot running with TEXT_DIR enabled (default: text_queue/).
+     The bot watches this dir and sends any <channel_id>_<label>.txt
+     files it finds as Discord messages, then deletes them.
+  2. This tool must run on the same host as the bot (it writes to the
+     local filesystem, not over the network).
+  3. DISCORD_DEFAULT_CHANNEL_ID set in .env (cwd or $HOME), OR
+     channel_id passed as a tool parameter each call.
+  4. TEXT_DIR env var if the bot uses a non-default outbox location.
+     If TEXT_DIR is relative, set BOT_DIR so it resolves correctly.
+
 Stdin: JSON {"message": "...", "channel_id": "123...", "label": "harness"}
   channel_id optional if DISCORD_DEFAULT_CHANNEL_ID is set in .env.
 Stdout: JSON {"result": "queued for delivery to channel 123..."}
