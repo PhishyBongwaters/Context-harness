@@ -249,7 +249,7 @@ def init_subagent_session(parent_dir: str | Path,
         base = SYSTEM_PROMPT
     paths = init_layout(sdir, SUBAGENT_PROMPT_PREFIX + base)
     (sdir / "sats" / "current.md").write_text(
-        f"# Current task\n\n{task.strip()}\n\n## Next\n\nBegin the task: read any relevant context, then take the first step.\n",
+        f"# Current task\n\n{task.strip()}\n\n## Next\n\nBegin the task: use the read tool for files, list_dir for directories, search for searching. Use exec only for shell commands with no dedicated tool.\n",
         encoding="utf-8")
     (sdir / "sats" / "goals.md").write_text(
         "# Goals\n\n- [active] Complete the task in current.md\n",
