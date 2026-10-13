@@ -52,9 +52,6 @@ _PROMPT_ADDENDUM_AMNESIA = (
     "Keep a ## Next section at the top of sats/current.md with the single\n"
     "next actionable step. Update it every turn. If you cannot finish this\n"
     "turn, the next agent reads ## Next first to know where to resume.\n"
-    "Before answering a question, check history.md: if you already gave\n"
-    "this answer, say so and refer to it instead of re-deriving from\n"
-    "the archive.\n"
 )
 _PROMPT_ADDENDUM_AMNESIA_MARKER = "AMNESIA: you forget between turns"
 _PROMPT_ADDENDUM_DELEGATE = (
