@@ -18,9 +18,7 @@ from .context import stamp
 SAT_FILES = {
     "current": ("# Current task\n\nWhat you are actively working on right "
                 "now, one line. Update it when the task changes or "
-                "completes.\n\n## Next\n\nThe single next actionable step. "
-                "Update this every turn. If you cannot finish this turn, "
-                "the next agent reads this first to know where to resume.\n"),
+                "completes.\n"),
     "goals": ("# Goals\n\nEnduring objectives, one per line: "
               "`- [active] ...` / `- [done] ...`.\n"),
     "facts": "# Facts\n\nDiscovered truths about the world, one line each.\n",

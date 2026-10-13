@@ -49,9 +49,6 @@ _PROMPT_ADDENDUM_AMNESIA = (
     "start anything multi-step, write the plan and current state to\n"
     "sats/current.md first and keep it updated as you go -- your notes\n"
     "are cheaper than your memory.\n"
-    "Keep a ## Next section at the top of sats/current.md with the single\n"
-    "next actionable step. Update it every turn. If you cannot finish this\n"
-    "turn, the next agent reads ## Next first to know where to resume.\n"
 )
 _PROMPT_ADDENDUM_AMNESIA_MARKER = "AMNESIA: you forget between turns"
 _PROMPT_ADDENDUM_DELEGATE = (
