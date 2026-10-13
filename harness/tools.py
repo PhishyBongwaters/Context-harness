@@ -154,8 +154,7 @@ def _delegation_definitions() -> list[dict]:
                 "Run a subtask in a background subagent. Returns the "
                 "result file path and the subagent's session_dir "
                 "immediately; read the result after wait_subagent says "
-                "done. If the result looks wrong, read "
-                "<session_dir>/history.md to see what the subagent did. "
+                "done. Use the result as-is. "
                 "One subagent at a time."
             ),
             "parameters": {
