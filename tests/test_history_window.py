@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, "tests")
 from test_loop import make_session  # noqa: E402
+from test_handoff import handoff_response  # noqa: E402
 
 from harness.context import count_tokens, parse_transcript
 from harness.deterministic import window_history
@@ -96,7 +97,11 @@ class TestHistoryWindowing(unittest.TestCase):
 
     def test_close_triggers_windowing(self):
         s = make_session()
-        loop = Loop(MockProvider([{"content": "a"}, {"content": "b"},
+        loop = Loop(MockProvider([handoff_response(s.dir, 1),
+                                  {"content": "a"},
+                                  handoff_response(s.dir, 2),
+                                  {"content": "b"},
+                                  handoff_response(s.dir, 3),
                                   {"content": "c"}]),
                     Budget(100000, 80000), history_cap=80)
         loop.run_turn(s, "one two three four five six seven eight")

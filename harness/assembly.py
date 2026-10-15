@@ -12,7 +12,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SAT_ORDER = ("current", "goals", "facts", "decisions", "tasks")
+from .handoff import HANDOFF_PROMPT_MARKER, HANDOFF_PROMPT_PARAGRAPH
+
+# Handoff assembles first: it is the L1 -- the cheapest, highest-priority
+# context. Everything else is durable background; the handoff is the
+# shift board the next turn reads before anything else.
+SAT_ORDER = ("handoff", "current", "goals", "facts", "decisions", "tasks")
 
 
 def _read(path: Path) -> str:
@@ -63,30 +68,43 @@ _PROMPT_NUDGE_LINES = (
 
 def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
                 soft: int, workdir: str | Path | None = None,
-                include_text: str | None = None) -> str:
+                include_text: str | None = None,
+                turn_no: int | None = None) -> str:
     """Read prompt.md fresh and fill the known template placeholders.
 
     Only the harness-known placeholders are substituted; any other
     braces in a custom prompt are left literal (str.format would blow
     up on them).
 
+    turn_no selects the {turn_stamp} value ("t0042"). None reads the
+    harness-owned counter without incrementing it.
+
     If include_text is given (non-empty), it's appended under a
     "# User includes" header.
     """
     import platform
+    from .session import load_state
+    if turn_no is None:
+        turn_no = load_state(sdir)["turn"]
+    turn_stamp = f"t{turn_no:04d}"
     text = _read(Path(sdir) / "prompt.md")
     if _PROMPT_ADDENDUM_MARKER not in text:
         text = text.rstrip("\n") + "\n" + _PROMPT_ADDENDUM_DELEGATE
     elif _PROMPT_NUDGE_MARKER not in text:
         # Has the base guidance but predates the nudge: append it.
         text = text.rstrip("\n") + "\n" + _PROMPT_NUDGE_LINES
+    if HANDOFF_PROMPT_MARKER not in text:
+        # Session predates the handoff mechanic: the guidance rides
+        # along in-memory, same as the delegate addendum.
+        text = text.rstrip("\n") + "\n" + HANDOFF_PROMPT_PARAGRAPH
     text = (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))
                 .replace("{os_name}", platform.system())
                 .replace("{workdir}",
                          str(workdir) if workdir else "")
-                .replace("{sdir}", str(sdir)))
+                .replace("{sdir}", str(sdir))
+                .replace("{turn_stamp}", turn_stamp))
     if include_text and include_text.strip():
         text = (text.rstrip("\n") + "\n\n# User includes\n\n"
                 + include_text.strip() + "\n")

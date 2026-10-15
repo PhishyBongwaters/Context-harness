@@ -14,6 +14,7 @@ sessions/2026-10-10-abc123/
 ├── scratch.md           # Working notes, pruned deterministically
 ├── result.md            # Final answer (written at turn end)
 ├── sats/
+│   ├── handoff.md       # Shift handoff: rewritten every turn (Now/Next/Blockers/Pointers); assembles first
 │   ├── current.md       # What the agent is doing right now
 │   ├── goals.md         # User's stated goals for this session
 │   ├── facts.md         # Confirmed facts (promoted from hypotheses)
@@ -30,7 +31,7 @@ sessions/2026-10-10-abc123/
 |------|------------|---------|
 | `prompt.md` | Harness (`init_layout`) | System prompt template. Never clobbered if it exists. |
 | `state.json` | Harness | Session id, provider/model, timestamps, budget. |
-| `index.md` | Model (curated), harness (verified) | Stable anchors into history/sats. "Holy and must be pure." |
+| `index.md` | Harness (model reads, never writes) | Harness-owned pointer map: `## satellites` + `## episodes`. "Holy and must be pure." |
 | `context.md` | Harness (`assemble`) | Full transcript: system + history + sats + scratch. What the model sees. |
 | `history.md` | Harness (janitor) | Episodes: condensed turn summaries. Survives pruning. |
 | `scratch.md` | Model (via tools) | Working space. Pruned by the deterministic ladder. |

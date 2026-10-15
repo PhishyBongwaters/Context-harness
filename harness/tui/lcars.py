@@ -10,7 +10,9 @@ need the textual extra and skip cleanly without it.
 """
 from __future__ import annotations
 
+import subprocess
 import time
+from pathlib import Path
 
 # Classic TNG LCARS palette (hex).
 LCARS = {
@@ -54,8 +56,15 @@ def header_segments(title: str, width: int, phase: int = 0,
     segs: list[tuple[str, str, str]] = []
     segs.append((" LCARS ", LCARS["orange"], _FG))
     segs.append((" ", LCARS["black"], _FG))
+    # BUILD pill: commit ID. Dropped on narrow screens to preserve
+    # the title-truncation contract.
+    build_pill = f" BUILD {build_id()} " if width >= 60 else ""
+    if build_pill:
+        segs.append((build_pill, LCARS["peach"], _FG))
+        segs.append((" ", LCARS["black"], _FG))
 
-    max_title = max(8, width - 48 - (4 if alert else 0))
+    max_title = max(8, width - 48 - len(build_pill) - (1 if build_pill else 0)
+                   - (4 if alert else 0))
     if len(title) > max_title:
         # Marquee: slide a window through the title instead of
         # truncating; wraps around.
@@ -102,6 +111,32 @@ def header_segments(title: str, width: int, phase: int = 0,
     segs.append((" " * filler_w, LCARS["black"], _FG))
     segs.extend(right)
     return segs
+
+
+def build_id() -> str:
+    """Short git commit hash of the harness checkout, for the BUILD pill.
+
+    Best-effort: returns "dev" when git is unavailable or this isn't a
+    git checkout. Cached per process.
+    """
+    global _BUILD_ID
+    try:
+        return _BUILD_ID
+    except NameError:
+        pass
+    bid = "dev"
+    try:
+        repo = Path(__file__).resolve().parent.parent.parent
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            bid = out.stdout.strip()
+    except Exception:
+        pass
+    _BUILD_ID = bid
+    return bid
 
 
 def _charm_stream(n: int = 256) -> str:

@@ -107,11 +107,13 @@ class TestAssembly(unittest.TestCase):
         # full addendum present: untouched
         (sdir / "prompt.md").write_text(
             "SYS {ctx_path} prefer\n  `delegate` x\n"
-            "This is not laziness y", encoding="utf-8")
+            "This is not laziness y\n"
+            "HANDOFF (every turn ends with one z", encoding="utf-8")
         out3 = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
         self.assertEqual(out3,
                          "SYS CTX prefer\n  `delegate` x\n"
-                         "This is not laziness y")
+                         "This is not laziness y\n"
+                         "HANDOFF (every turn ends with one z")
 
     def test_load_prompt_fills_os_and_workdir(self):
         import platform

@@ -22,9 +22,9 @@ from pathlib import Path
 from .assembly import assemble, load_prompt, write_assembled
 from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
-                      render_history_user, render_tool,
+                      render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import next_turn
+from .session import active_goals, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -32,19 +32,39 @@ from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
 from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
+from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
+                      HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
+                      ensure_handoff_file, handoff_size, is_over_cap,
+                      trim_handoff, validate_handoff)
 
 MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
+
+# Goal-driven auto-continue (docs/goal-auto-continue-spec.md): the
+# synthesized turn-opening message for a harness-initiated turn.
+# Recorded verbatim in history.md under `## auto tNNNN`.
+# NOTE: %-style placeholders, not str.format -- the goal text is
+# model/user-controlled and may contain curly braces; %-formatting
+# only interprets the template, never the values.
+AUTO_CONTINUE_TEMPLATE = (
+    "[auto-continue %d/%d] Active goal: %s. "
+    "Continue working it; your handoff's Next says where."
+)
 
 SYSTEM_PROMPT = """You are a helpful AI assistant running inside a context-as-file harness.
 Answer the user directly and concisely; use tools only when the task
 genuinely needs them. You are on {os_name}; your working directory is
 {workdir}.
 
+Tool choice: prefer the `search` tool for code search (it works on any
+OS and needs no approval). On Windows, `grep` is not installed -- do
+not `exec` it; `rg` (ripgrep) is available if you must shell out.
+
 Each turn the harness assembles your context from sources, in order:
-satellite files (current task, goals, facts, decisions, tasks --
-durable one-liners), history.md (the conversation record), and
+satellite files (handoff -- this turn's shift board -- plus current task,
+goals, facts, decisions, tasks -- durable one-liners), history.md (the
+conversation record), and
 scratch.md (this episode's working notes: recent replies and tool
 results). There is no other memory. The assembled text below IS your context -- it is also saved
 to {ctx_path}, but never read that file: it duplicates what you can
@@ -63,6 +83,18 @@ new_text, which must match exactly once):
     decisions with reasons, open tasks
   {sdir}/sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
 
+  Write live: update sats/current.md as you make progress, not just
+  at turn end. If the turn is interrupted, current.md is what survives
+  -- scratch is wiped and the handoff may never be written. A turn
+  that dies with its progress only in scratch has lost that progress.
+
+  The sats above are already IN your context this turn, assembled as
+  `## sat <name>` sections. Never `read` a sat file to see its
+  contents -- that burns a tool call and bloats scratch with a copy
+  of what you can already see, exactly like reading context.md would.
+  When a sat needs updating, `edit` it directly; you already know
+  what it says.
+
   Heavy curation (large histories, many files to triage): prefer
   `delegate` -- a subagent does the reading and editing in its own
   context; you read back only its result file. The noise never enters
@@ -71,6 +103,16 @@ new_text, which must match exactly once):
   budget on a subagent to keep it clean is the win. Never apologize
   for delegating; apologize for bloating your own context instead.
 
+GOALS: a `- [active]` goal in sats/goals.md is a standing order, not a
+note. While any goal is still [active], keep working it: make tool
+calls toward it rather than ending the turn with a text-only reply.
+The "reply with a text summary after tools" rule applies when no goal
+is active -- with an active goal, the summary comes when the goal is
+[done]. End the turn text-only when every goal is [done], when you are
+blocked (record the blocker in the handoff and say so), or when you
+need the user (a question, an approval). Mark [done] only when it is
+actually done.
+""" + HANDOFF_PROMPT_PARAGRAPH + """
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
 session sources -- use edit. Read is rejected on {ctx_path}: the
@@ -112,12 +154,14 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
   {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
-  {sats_dir}/decisions.md, {sats_dir}/tasks.md,
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md, {sats_dir}/handoff.md,
   {sats_dir}/hypotheses.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to
-one-liners and drop what no longer serves the task. Each edit needs
+one-liners and drop what no longer serves the task. {sats_dir}/handoff.md
+is the resume plan: keep its Now/Next/Blockers/Pointers sections and its
+`## Handoff -- tNNNN` stamp -- trim the bodies, never the shape. Each edit needs
 old_text matching exactly once -- include enough surrounding context.
 Keep the `## ` section format parseable.
 Do not attempt the user's task now -- just curate.
@@ -202,7 +246,9 @@ class Loop:
                  provider_factory=None,
                  include_text: str | None = None,
                  include_subagents: bool = False,
-                 user_tool_paths: list | None = None):
+                 user_tool_paths: list | None = None,
+                 auto_continue: bool = False,
+                 auto_continue_max_turns: int = 10):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -221,6 +267,17 @@ class Loop:
         # User include text: appended to system prompt under "# User includes".
         self.include_text = include_text
         self.include_subagents = include_subagents
+        # Goal-driven auto-continue (docs/goal-auto-continue-spec.md):
+        # when a turn ends with any `- [active]` goal, the harness
+        # starts another full turn instead of waiting for input, up to
+        # auto_continue_max_turns per user message. Default off.
+        # Subagents never auto-continue (out of scope for v1).
+        self.auto_continue = bool(auto_continue)
+        try:
+            self._auto_continue_max_turns = max(
+                0, int(auto_continue_max_turns))
+        except (TypeError, ValueError):
+            self._auto_continue_max_turns = 0
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -400,6 +457,127 @@ class Loop:
                 self._emit("auto-dedupe", {"dropped": dropped})
         except Exception:
             pass
+
+    def _ensure_handoff(self, session: Session, turn_no: int,
+                          system: str, messages: list[dict]) -> bool:
+        """Validate sats/handoff.md at the turn boundary (issue #5).
+
+        Freshness, shape and size are machine-checked. A stale, missing
+        or malformed handoff triggers forced handoff rounds: the model
+        gets the assembled context plus a nudge and edit-only tools,
+        and must rewrite the handoff before the turn may end.
+
+        Returns True when the handoff is valid. After
+        HANDOFF_MAX_ATTEMPTS failed rounds it emits "handoff-invalid"
+        and returns False -- the turn still closes. Loud, never
+        blocking: a broken handoff must not wedge the session.
+
+        Phase 2: when the only remaining failure is the size cap, the
+        deterministic trim backstop fires instead of giving up; every
+        valid handoff is recorded in the size ledger (the canary).
+        """
+        ok, reason = validate_handoff(session.dir, turn_no)
+        if ok:
+            self._record_handoff_ok(session, turn_no)
+            return True
+        turn_stamp = f"t{turn_no:04d}"
+        handoff_path = str(session.dir / "sats" / "handoff.md")
+        for attempt in range(HANDOFF_MAX_ATTEMPTS):
+            self._check_stop()
+            # Defensive: the model has exec, so the file can vanish
+            # between validation and the forced round. Restore the
+            # shape; the model still has to fill it.
+            ensure_handoff_file(session.dir)
+            nudge = HANDOFF_NUDGE.format(handoff_path=handoff_path,
+                                         turn_stamp=turn_stamp,
+                                         reason=reason)
+            handoff_messages = (messages
+                                + [{"role": "user", "content": nudge}])
+            try:
+                bd = self._measure(self.provider, system,
+                                   handoff_messages, self._prune_tools)
+                self._emit("request",
+                           {"phase": "handoff",
+                            "attempt": attempt + 1,
+                            "tokens_est": bd["total"],
+                            "breakdown": bd,
+                            "hard": self.budget.hard,
+                            "soft": self.budget.soft,
+                            "window": self.budget.window,
+                            "status": self.budget.status(bd["total"])})
+                resp = self.provider.chat(
+                    system=system,
+                    messages=handoff_messages + self._note(bd),
+                    tools=self._prune_tools)
+            except Exception as e:  # provider blew up: count the
+                # attempt, keep the turn closable.
+                reason = (f"handoff round {attempt + 1} failed: "
+                          f"{type(e).__name__}")
+                continue
+            self._check_stop()
+            for tc in resp.get("tool_calls") or []:
+                self._execute_tool(session, tc)
+            ok, reason = validate_handoff(session.dir, turn_no)
+            if ok:
+                self._record_handoff_ok(session, turn_no)
+                return True
+        if is_over_cap(session.dir):
+            # The model wouldn't trim: deterministic backstop.
+            if self._trim_handoff_backstop(session, turn_no):
+                ok, reason = validate_handoff(session.dir, turn_no)
+                if ok:
+                    self._record_handoff_ok(session, turn_no)
+                    return True
+        self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
+        return False
+
+    def _record_handoff_ok(self, session: Session,
+                           turn_no: int) -> None:
+        """Ledger + events for a valid handoff (Phase 2 canary).
+
+        Records per-turn size and checks the trend: a climbing handoff
+        is the dumping signal, emitted as "handoff-bloat" while it is
+        still under the cap.
+        """
+        lines, tokens = handoff_size(session.dir)
+        self._emit("handoff", {"turn": turn_no, "lines": lines,
+                               "tokens": tokens})
+        ledger = HandoffLedger(session.dir)
+        ledger.record(turn_no, lines, tokens)
+        if ledger.trend() == "climbing":
+            self._emit("handoff-bloat",
+                       {"turn": turn_no, "lines": lines,
+                        "tokens": tokens,
+                        "note": ("handoff size is climbing -- the agent "
+                                 "is dumping instead of curating")})
+
+    def _trim_handoff_backstop(self, session: Session,
+                               turn_no: int) -> bool:
+        """Deterministic trim when the model won't get under the cap.
+
+        The model had its forced rounds; the harness now trims
+        mechanically (headers kept, bodies cut from the end, marker
+        appended). The pre-trim content is backed up, and the trim is
+        announced -- the harness never silently rewrites model-curated
+        state.
+        """
+        target = session.dir / "sats" / "handoff.md"
+        try:
+            before = target.read_text(encoding="utf-8",
+                                      errors="replace")
+        except OSError:
+            return False
+        trimmed, cut = trim_handoff(before)
+        if cut <= 0:
+            return False
+        self._backup_context(session, target, before, "handoff-trim")
+        try:
+            target.write_text(trimmed, encoding="utf-8")
+        except OSError:
+            return False
+        self._emit("handoff-trimmed", {"turn": turn_no,
+                                       "lines_cut": cut})
+        return True
 
     @staticmethod
     def _append_source(session: Session, name: str, text: str) -> None:
@@ -959,16 +1137,72 @@ class Loop:
         return gate(messages) < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
+        """Run one user turn, then auto-continue while goals are active.
+
+        Goal-driven auto-continue
+        (docs/goal-auto-continue-spec.md): when a turn ends with any
+        `- [active]` goal in sats/goals.md and auto_continue is enabled,
+        the harness starts another full turn instead of waiting for
+        input, up to auto_continue_max_turns per user message. Each
+        auto-turn is a complete turn (assembly, budget, model steps,
+        handoff validation, episode close) recorded under
+        `## auto tNNNN`. The chain stops on: no active goals, cap
+        reached, user interrupt, or a stop arriving between turns.
+        Returns the last turn's reply.
+        """
+        max_auto = (self._auto_continue_max_turns
+                    if self.auto_continue else 0)
+        text = user_text
+        is_auto = False
+        auto_index = 0
+        content = ""
+        while True:
+            content, interrupted = self._run_turn_once(
+                session, text, is_auto=is_auto)
+            if interrupted:
+                # User interrupt stops the whole chain, not just the turn.
+                return content
+            if self._stop_event.is_set():
+                # Stop arrived between turns: honor it, don't chain.
+                self._stop_event.clear()
+                self._emit("interrupted", {})
+                return content
+            if auto_index >= max_auto:
+                return content
+            goals = active_goals(session.dir)
+            if not goals:
+                return content
+            auto_index += 1
+            is_auto = True
+            # %-formatting: the goal text may contain braces; it must
+            # never be interpreted as a format string.
+            text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
+                                             goals[0])
+            self._emit("auto-continue",
+                       {"index": auto_index, "max_turns": max_auto,
+                        "goal": goals[0]})
+
+    def _run_turn_once(self, session: Session, user_text: str, *,
+                       is_auto: bool = False) -> tuple[str, bool]:
+        """Run a single turn. Returns (reply, interrupted).
+
+        interrupted is True when the user stopped the turn; the caller
+        (run_turn's auto-continue chain) must not start another turn.
+        """
+        # The harness-owned turn counter increments first: the handoff
+        # the model writes this turn must carry this turn's stamp.
+        turn_no = next_turn(session.dir)
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
                              workdir=session.workdir,
-                             include_text=self.include_text)
+                             include_text=self.include_text,
+                             turn_no=turn_no)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
             self._emit("interrupted", {})
-            return ""
+            return "", True
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -976,11 +1210,15 @@ class Loop:
                                  for t in self.tracker.turns) + 1
         else:
             self._turn_seq += 1
-        # The user's message joins history.md first, stamped with the
-        # harness-owned turn counter (T6).
-        turn_no = next_turn(session.dir)
+        # The turn's opening message joins history.md first, stamped with
+        # the harness-owned turn counter (T6). turn_no was assigned at the
+        # top of _run_turn_once so the handoff stamp matches this turn.
+        # Auto-turns are labeled `## auto`, never `## user`: the record
+        # must distinguish user-initiated from harness-initiated turns.
+        render_opening = (render_history_auto if is_auto
+                          else render_history_user)
         self._append_source(session, "history.md",
-                            render_history_user(user_text, turn_no))
+                            render_opening(user_text, turn_no))
         warned = False
 
         try:
@@ -1069,11 +1307,19 @@ class Loop:
                     # leak into and kill the next turn.
                     self._stop_event.clear()
                     self._auto_dedupe(session)
+                    # Handoff-per-turn (issue #5): the turn may only end
+                    # with a fresh handoff. Stale/missing triggers a
+                    # forced handoff round; persistent failure is loud
+                    # but never blocks the close. Skip when no goals are
+                    # active -- there's no work to hand off.
+                    if active_goals(session.dir):
+                        self._ensure_handoff(session, turn_no, system,
+                                             messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
                     self._close_episode(session, turn_no, content or "")
-                    return content or ""
+                    return content or "", False
                 for tc in tool_calls:
                     self._check_stop()
                     result = self._execute_tool(session, tc)
@@ -1084,6 +1330,6 @@ class Loop:
         except TurnInterrupted:
             self._stop_event.clear()
             self._emit("interrupted", {})
-            return ""
+            return "", True
         raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
                             f"finishing.")

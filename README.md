@@ -24,7 +24,8 @@ deliberately.
 There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
-1. **satellites** — `sats/current.md`, `sats/goals.md`,
+1. **satellites** — `sats/handoff.md` (the shift handoff: rewritten
+   every turn, assembles first), `sats/current.md`, `sats/goals.md`,
    `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`,
    `sats/hypotheses.md`
    (durable one-liners, sent as `## sat <name>` sections)
@@ -37,7 +38,9 @@ The prompt loads fresh from `prompt.md` through the API system parameter
 each turn. The assembled text is written to `context.md` as an
 inspectable build artifact — rebuilt every turn. The model neither
 reads nor edits it: the assembled text is already its injected
-messages. No hidden transcript, no special compact tool.
+messages. No hidden transcript, no special compact tool. The turn
+lifecycle is diagrammed in `docs/loop-diagram.svg` — a design doc:
+it must stay true to the implementation.
 
 ## Who owns what
 
@@ -48,11 +51,23 @@ management is deterministic harness behavior, not model judgment.
 
 **The model may edit** (exact `old_text`/`new_text`, must match exactly
 once):
-- `history.md` — the conversation record (`## user t<NNNN>`,
+- `history.md` — the conversation record (`## user t<NNNN>` for user-opened
+  turns, `## auto t<NNNN>` for harness-opened auto-continue turns,
   `## episode t<NNNN>`)
+- `sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers);
+  rewrite it at the end of every turn. The harness validates
+  freshness, shape and the 40-line cap at the turn boundary; a stale
+  or missing handoff triggers a forced handoff round, and persistent
+  dumping trips the size canary (`handoff-bloat`) or the deterministic
+  trim backstop
 - `sats/current.md` — the active task (update when it changes)
 - `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
-  add one with `/goal "text"` or `--goal "text"`
+  add one with `/goal "text"` or `--goal "text"`. With `auto_continue`
+  enabled (config, or `--auto-continue` for one session), the harness
+  opens a new turn itself while any goal is `[active]` — up to
+  `auto_continue_max_turns` (default 10, or `--auto-continue-max-turns N`)
+  per user message; each auto-turn is a full turn recorded as
+  `## auto t<NNNN>`
 - `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
   facts, decisions with reasons, open tasks
 - `sats/hypotheses.md` — half-formed ideas, unproven suspicions
@@ -73,7 +88,9 @@ the harness archives scratch to `archive/<date>-t<NNNN>.md`, clears it,
 and appends a `## episode t<NNNN>` pointer to history (archive path,
 turn range, tool-call count). The closing reply is recorded to history
 automatically. Archived detail stays out of hot context but can be
-re-read deliberately by path — visible cost, no silent bloat.
+re-read deliberately by path — visible cost, no silent bloat. The
+memory architecture is diagrammed in `docs/memory-diagram.svg` — a
+design doc: it must stay true to the implementation.
 
 ## Budget
 
@@ -195,7 +212,8 @@ Windows, `~/.config/context-harness/config.json` elsewhere):
 OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
-`prune_section_cap`. API key comes from the environment (`api_key_env`) —
+`prune_section_cap`, `auto_continue` (default `false`: open a new turn
+while a goal is `[active]`), `auto_continue_max_turns` (default `3`). API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 

@@ -648,6 +648,14 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 include_subagents=(getattr(args, "include_subagents", False)
                                    or getattr(cfg, "include_subagents", False)),
                 user_tool_paths=user_tool_paths,
+                auto_continue=(getattr(args, "auto_continue", False)
+                               or cfg.auto_continue)
+                and not getattr(args, "no_auto_continue", False),
+                auto_continue_max_turns=(
+                    args.auto_continue_max_turns
+                    if getattr(args, "auto_continue_max_turns", None)
+                    is not None
+                    else cfg.auto_continue_max_turns),
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
@@ -1005,6 +1013,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="Ceiling on exec runtime in seconds (default 300).")
     ap.add_argument("--no-usage-note", action="store_true",
                     help="Omit the ephemeral per-request usage line.")
+    ap.add_argument("--auto-continue", action="store_true",
+                    help="Start another turn while a goal is [active], "
+                         "up to auto_continue_max_turns per user message.")
+    ap.add_argument("--no-auto-continue", action="store_true",
+                    help="Disable goal-driven auto-continue for this session.")
+    ap.add_argument("--auto-continue-max-turns", type=int, default=None,
+                    help="Cap on auto-continue turns per user message "
+                         "(default from config, 10).")
     ap.add_argument("--request-timeout", type=int, default=None,
                     help="HTTP seconds per model call (default 120; raise "
                          "for huge prompts on slow local servers).")
