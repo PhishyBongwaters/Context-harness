@@ -22,7 +22,9 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
             "description": (
                 "Run a shell command and capture its output. "
                 "Runs with your user privileges in the session working directory. "
-                "Output is truncated to ~30k chars."
+                "Output is truncated to ~30k chars. "
+                "Do not use for reading files, listing directories, or searching "
+                "— use the dedicated read, list_dir, and search tools."
             ),
             "parameters": {
                 "type": "object",
@@ -39,7 +41,8 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
         },
         {
             "name": "read",
-            "description": "Read a file. Returns line-numbered text, optionally paged.",
+            "description": ("Read a file. Returns line-numbered text, optionally paged. "
+                            "Use this instead of exec/cat for reading files."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -154,8 +157,7 @@ def _delegation_definitions() -> list[dict]:
                 "Run a subtask in a background subagent. Returns the "
                 "result file path and the subagent's session_dir "
                 "immediately; read the result after wait_subagent says "
-                "done. If the result looks wrong, read "
-                "<session_dir>/history.md to see what the subagent did. "
+                "done. Use the result as-is. "
                 "One subagent at a time."
             ),
             "parameters": {
