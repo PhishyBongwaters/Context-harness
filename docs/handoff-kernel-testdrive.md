@@ -62,3 +62,24 @@ The handoff carries Now *and* Next across every turn boundary; dead
 ends, blockers, and pointers survive where the old compaction lost
 them; the agent reaches the right answer without re-tracing ground it
 already covered.
+
+## Experiment log (live run, 2026-10-15)
+
+Model: Nvidia muse-glimmer-30b via llama.cpp on Rob's rig. Session
+`20261013-132353`, kernel tree at
+`D:\Projects\Tricorder-Testing-Repos\linux`.
+
+- **Baseline (no goal).** Agent traced syscall entry → page cache
+  correctly and wrote textbook handoffs (t0011/t0013: one-line Now,
+  numbered Next with exact function names, honest Blockers, Pointers
+  with files read). But it yielded mid-task and needed "keep going"
+  nudges.
+- **Goal on (`/goal` set ~t0013, no prompt change).** Nudges still
+  needed — the goal alone did not change the yielding. The prompt
+  describes goals.md as "enduring objectives" but never ties
+  `[active]` to continued action, so the goal is visible but inert.
+- **Prompt fix (GOALS paragraph in SYSTEM_PROMPT).** Makes
+  `- [active]` a standing order: while any goal is active, prefer
+  tool calls toward it over ending the turn text-only; the
+  summarize-after-tools rule applies when no goal is active. Result
+  pending pull/restart and re-run.

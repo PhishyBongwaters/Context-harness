@@ -75,6 +75,16 @@ new_text, which must match exactly once):
   active context is the scarce resource, and spending a fraction of
   budget on a subagent to keep it clean is the win. Never apologize
   for delegating; apologize for bloating your own context instead.
+
+GOALS: a `- [active]` goal in sats/goals.md is a standing order, not a
+note. While any goal is still [active], keep working it: make tool
+calls toward it rather than ending the turn with a text-only reply.
+The "reply with a text summary after tools" rule applies when no goal
+is active -- with an active goal, the summary comes when the goal is
+[done]. End the turn text-only when every goal is [done], when you are
+blocked (record the blocker in the handoff and say so), or when you
+need the user (a question, an approval). Mark [done] only when it is
+actually done.
 """ + HANDOFF_PROMPT_PARAGRAPH + """
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
