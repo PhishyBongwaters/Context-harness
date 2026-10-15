@@ -248,7 +248,7 @@ class Loop:
                  include_subagents: bool = False,
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
-                 auto_continue_max_turns: int = 3):
+                 auto_continue_max_turns: int = 10):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
