@@ -179,6 +179,10 @@ python -m harness --tui
 
 Same session, same provider registry, same ledger as the CLI.
 
+The top bar shows a `BUILD <short-hash>` pill (LCARS-styled) identifying
+the running commit — useful for confirming which version is live after
+a pull. It hides on narrow terminals (< 60 columns).
+
 - transcript pane (assistant text, tool calls, budget/prune lines),
   budget bar, status line, input box
 - chat-style message panels: blue for you, dark for assistant, black for
@@ -213,7 +217,7 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
 `prune_section_cap`, `auto_continue` (default `false`: open a new turn
-while a goal is `[active]`), `auto_continue_max_turns` (default `3`). API key comes from the environment (`api_key_env`) —
+while a goal is `[active]`), `auto_continue_max_turns` (default `10`). API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
