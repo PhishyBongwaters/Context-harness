@@ -279,6 +279,8 @@ class Loop:
                  auto_continue_max_turns: int = 10,
                  handoff_canary_tokens: int = 38000,
                  sat_max_lines: int = 100,
+                 sat_cold_after_hours: int = 24,
+                 history_warn_after_turns: int = 50,
                  mode: str = "analyze"):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
@@ -321,6 +323,19 @@ class Loop:
             self._sat_max_lines = max(0, int(sat_max_lines))
         except (TypeError, ValueError):
             self._sat_max_lines = 0
+        # Stale sats (issue #8): hours after which a sat is "cold".
+        # 0 disables the check.
+        try:
+            self._sat_cold_after_hours = max(0, int(sat_cold_after_hours))
+        except (TypeError, ValueError):
+            self._sat_cold_after_hours = 0
+        # History size (issue #9): warn when history exceeds this many turns.
+        # 0 disables the check.
+        try:
+            self._history_warn_after_turns = max(
+                0, int(history_warn_after_turns))
+        except (TypeError, ValueError):
+            self._history_warn_after_turns = 0
         # Mode: "analyze" (read-only) or "build" (may modify code).
         self._mode = mode if mode in ("analyze", "build") else "analyze"
         # Redundant reads (issue #10): files read this episode, for
@@ -624,6 +639,58 @@ class Loop:
             if lines > cap:
                 self._emit("sat-bloat",
                            {"file": f.name, "lines": lines, "cap": cap})
+
+    def _check_sat_staleness(self, session: Session) -> None:
+        """Warn if any sat hasn't been modified in the cold threshold.
+
+        Issue #8: sats that go cold stay in every assembly at full
+        weight. This emits a `sat-cold` event so the agent can archive
+        or summarize. Warning only; no auto-archive in v1.
+        """
+        import time as _time
+        threshold = getattr(self, "_sat_cold_after_hours", 24)
+        if not threshold:
+            return
+        cutoff = _time.time() - (threshold * 3600)
+        sats_dir = session.dir / "sats"
+        try:
+            files = list(sats_dir.glob("*.md"))
+        except OSError:
+            return
+        for f in files:
+            if f.name == "handoff.md":
+                continue
+            try:
+                mtime = f.stat().st_mtime
+            except OSError:
+                continue
+            if mtime < cutoff:
+                age_h = int((_time.time() - mtime) / 3600)
+                self._emit("sat-cold",
+                           {"file": f.name, "age_hours": age_h,
+                            "threshold_hours": threshold})
+
+    def _check_history_size(self, session: Session) -> None:
+        """Warn when history exceeds the turn threshold.
+
+        Issue #9: old turns sit at full weight until a budget breach
+        forces a prune. This emits a `history-long` event so the agent
+        can summarize. Full auto-summarization is future work.
+        """
+        threshold = getattr(self, "_history_warn_after_turns", 50)
+        if not threshold:
+            return
+        try:
+            import re as _re
+            hist = (session.dir / "history.md").read_text(
+                encoding="utf-8", errors="replace")
+            # Count turn headers: ## user tNNNN or ## auto tNNNN
+            turns = len(_re.findall(r"(?m)^## (user|auto) t\d+", hist))
+        except OSError:
+            return
+        if turns > threshold:
+            self._emit("history-long",
+                       {"turns": turns, "threshold": threshold})
 
     def _trim_handoff_backstop(self, session: Session,
                                turn_no: int) -> bool:
@@ -1419,6 +1486,10 @@ class Loop:
                     # Sat bloat check (issue #7): warn if any sat other
                     # than handoff.md exceeds the line cap.
                     self._check_sat_sizes(session)
+                    # Stale sat check (issue #8): warn on cold sats.
+                    self._check_sat_staleness(session)
+                    # History size check (issue #9): warn on long history.
+                    self._check_history_size(session)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
