@@ -104,16 +104,32 @@ class TestAssembly(unittest.TestCase):
         out2 = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
         self.assertIn("not laziness", out2)
         self.assertEqual(out2.count("prefer\n  `delegate`"), 1)
-        # full addendum present: untouched
+        # full delegate addendum present but amnesia missing: amnesia
+        # appended, delegate parts not duplicated
         (sdir / "prompt.md").write_text(
             "SYS {ctx_path} prefer\n  `delegate` x\n"
             "This is not laziness y\n"
             "HANDOFF (every turn ends with one z", encoding="utf-8")
         out3 = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
-        self.assertEqual(out3,
-                         "SYS CTX prefer\n  `delegate` x\n"
-                         "This is not laziness y\n"
-                         "HANDOFF (every turn ends with one z")
+        # Both handoff and amnesia markers are appended (independently).
+        self.assertEqual(out3.count("prefer\n  `delegate`"), 1)
+        self.assertIn("HANDOFF (every turn ends with one z", out3)
+        self.assertIn("AMNESIA: you forget between turns", out3)
+
+    def test_load_prompt_appends_amnesia_addendum(self):
+        from harness.loop import SYSTEM_PROMPT
+        # New sessions carry it in SYSTEM_PROMPT.
+        self.assertIn("AMNESIA: you forget between turns", SYSTEM_PROMPT)
+        sdir = make_session()  # prompt lacks the marker
+        out = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
+        self.assertIn("AMNESIA: you forget between turns", out)
+        self.assertIn("sats/current.md", out)
+        # Marker present: not duplicated.
+        (sdir / "prompt.md").write_text(
+            "SYS {ctx_path}\nAMNESIA: you forget between turns x",
+            encoding="utf-8")
+        out2 = load_prompt(sdir, ctx_path="CTX", hard=1000, soft=800)
+        self.assertEqual(out2.count("AMNESIA: you forget between turns"), 1)
 
     def test_load_prompt_fills_os_and_workdir(self):
         import platform
