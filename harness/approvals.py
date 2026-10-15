@@ -39,7 +39,7 @@ EXEC_TIMEOUT_MAX = 300  # hard ceiling even if the model asks for more
 # First-token allowlist for probing commands that don't mutate state.
 READONLY_EXEC = {
     "ls", "dir", "cat", "type", "echo", "pwd", "whoami", "hostname",
-    "python", "node", "git", "grep", "rg", "find",
+    "python", "node", "git", "grep", "rg", "find", "findstr",
 }
 GIT_READONLY_SUBCOMMANDS = {"status", "diff", "log", "show", "branch", "rev-parse"}
 
