@@ -228,6 +228,10 @@ def format_event(kind: str, data, *, user_name: str = "me",
         return f"[error: {msg}]"
     if kind == "interrupted":
         return "[turn interrupted]"
+    if kind == "auto-continue":
+        data = data or {}
+        return (f"[auto-continue {data.get('index', '?')}/"
+                f"{data.get('max_turns', '?')}: {data.get('goal', '')}]")
     if kind == "approval-wait":
         data = data or {}
         brief = ((data.get("args") or {}).get("command")
