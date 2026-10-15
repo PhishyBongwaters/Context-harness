@@ -739,6 +739,12 @@ if _HAS:
                "margin-bottom: 1; width: 1fr; } "
                ".message-tool { background: #232323; padding: 0 1; "
                "margin-bottom: 1; width: 1fr; } "
+               # Diff cards: subtle warm tint, distinct from chat.
+               ".message-context-diff { background: #2b251c; padding: 0 1; "
+               "margin-bottom: 1; width: 1fr; } "
+               # Navigation cursor: accent bar on the current message
+               # (opencode-style jump-to-message).
+               ".message-current { border-left: solid $accent; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#lcars-footer LcarsPill { width: auto; height: 1; } "
                "#std-footer { height: 1; } "
@@ -771,7 +777,14 @@ if _HAS:
                     # Priority binding: screen selection first, else the
                     # focused widget's own copy. Never quits.
                     Binding("ctrl+c", "copy_selection",
-                            "Copy selection", show=False, priority=True)]
+                            "Copy selection", show=False, priority=True),
+                    # opencode-style message navigation: step through
+                    # messages, jump to the last user message, copy the
+                    # current (or last) message's full text.
+                    ("alt+k", "message_next", "Next message"),
+                    ("alt+j", "message_prev", "Prev message"),
+                    ("alt+u", "message_last_user", "Last user msg"),
+                    ("alt+c", "copy_message", "Copy message")]
 
         def action_copy_selection(self) -> None:
             """ctrl+c: copy the screen text selection, else the focused
@@ -787,6 +800,47 @@ if _HAS:
             act = getattr(focused, "action_copy", None)
             if callable(act):
                 act()
+
+        def _transcript_box(self):
+            try:
+                return self.query_one("#transcript", TranscriptContainer)
+            except Exception:
+                return None
+
+        def action_message_next(self) -> None:
+            box = self._transcript_box()
+            if box is not None:
+                box.nav_step(1)
+
+        def action_message_prev(self) -> None:
+            box = self._transcript_box()
+            if box is not None:
+                box.nav_step(-1)
+
+        def action_message_last_user(self) -> None:
+            box = self._transcript_box()
+            if box is not None:
+                box.nav_last_user()
+
+        def action_copy_message(self) -> None:
+            """alt+c: copy the navigated-to message, else the last one."""
+            box = self._transcript_box()
+            if box is None:
+                return
+            w = box.current_message()
+            if w is None:
+                msgs = box.message_widgets()
+                w = msgs[-1] if msgs else None
+            if w is None:
+                return
+            try:
+                self.copy_to_clipboard(w.plain_text)
+            except Exception:
+                return
+            try:
+                self.notify("Message copied", timeout=1)
+            except Exception:
+                pass
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -885,6 +939,15 @@ if _HAS:
 
         async def on_mount(self) -> None:
             self.title = self._title or "harness"
+            # Ctrl+C must never kill the harness (documented: it copies).
+            # On Windows the console sends SIGINT which terminates the
+            # process before Textual sees the keypress. Swallow it so the
+            # ctrl+c binding (copy_selection) can work.
+            try:
+                import signal
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+            except Exception:
+                pass
             self._wire_approver()
             self.set_interval(0.1, self._poll)
             await self._apply_chrome(self.theme == "lcars")
@@ -1095,7 +1158,9 @@ if _HAS:
 
         # Event kinds that are system instrumentation, not conversation:
         # they go to the top SystemPanel, never the chat transcript.
-        _SYSTEM_KINDS = {"error", "prune", "context-diff", "budget",
+        # context-diff is the exception: it renders as an opencode-style
+        # diff card in the transcript (message-context-diff widget).
+        _SYSTEM_KINDS = {"error", "prune", "budget",
                          "interrupted", "approval-wait", "approval-result"}
 
         def _poll(self) -> None:
