@@ -51,6 +51,7 @@ DEFAULTS = {
     "auto_continue_max_turns": 10,  # auto-turn cap per user message
     "handoff_canary_tokens": 38000,  # warn agent to wrap up when turn context hits this
     "sat_max_lines": 100,  # warn when any sat (other than handoff.md) exceeds this
+    "mode": "analyze",  # analyze (read-only on target) or build (may modify code)
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -427,6 +428,9 @@ class Config:
     # Sat bloat (issue #7): warn when any sat other than handoff.md
     # exceeds this many lines.
     sat_max_lines: int = 100
+    # Mode: "analyze" (read-only on the target codebase; writes go to
+    # sats/ only) or "build" (may modify code in the workdir).
+    mode: str = "analyze"
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
