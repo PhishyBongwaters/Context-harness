@@ -65,8 +65,9 @@ once):
   add one with `/goal "text"` or `--goal "text"`. With `auto_continue`
   enabled (config, or `--auto-continue` for one session), the harness
   opens a new turn itself while any goal is `[active]` — up to
-  `auto_continue_max_turns` (default 3) per user message; each
-  auto-turn is a full turn recorded as `## auto t<NNNN>`
+  `auto_continue_max_turns` (default 3, or `--auto-continue-max-turns N`)
+  per user message; each auto-turn is a full turn recorded as
+  `## auto t<NNNN>`
 - `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
   facts, decisions with reasons, open tasks
 - `sats/hypotheses.md` — half-formed ideas, unproven suspicions
