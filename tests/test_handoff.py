@@ -8,9 +8,11 @@ from pathlib import Path
 from harness.assembly import SAT_ORDER, assemble, load_prompt
 from harness.context import Budget
 from harness.handoff import (HANDOFF_MAX_LINES, HANDOFF_SECTIONS,
-                             HANDOFF_TEMPLATE, ensure_handoff_file,
-                             handoff_size, parse_handoff, validate_handoff)
-from harness.loop import Loop, Session
+                             HANDOFF_TEMPLATE, HandoffLedger,
+                             ensure_handoff_file, handoff_size,
+                             is_over_cap, parse_handoff, trim_handoff,
+                             validate_handoff)
+from harness.loop import PRUNE_SYSTEM, Loop, Session
 from harness.providers import MockProvider
 from harness.tools import classify_source, source_gate
 
@@ -227,6 +229,137 @@ class TestEnforcement(unittest.TestCase):
         self.assertIn("handoff", events)
         # No second provider call: no forced round was needed.
         self.assertEqual(len(loop.provider.calls), 1)
+
+
+def write_sized_handoff(sdir, stamp, total_lines):
+    """Write a handoff with exactly total_lines lines (filler in Now)."""
+    p = Path(sdir) / "sats" / "handoff.md"
+    lines = ["# Handoff", "", f"## Handoff -- {stamp}"]
+    for name in HANDOFF_SECTIONS:
+        lines += [f"### {name}", f"{name} body"]
+    pad = total_lines - len(lines)
+    assert pad >= 0, f"total_lines {total_lines} too small"
+    lines[5:5] = [f"filler {i}" for i in range(pad)]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert len(p.read_text(encoding="utf-8").splitlines()) == total_lines
+    return p
+
+
+class TestHandoffLedger(unittest.TestCase):
+    def test_trend_climbing(self):
+        s = make_session()
+        ledger = HandoffLedger(s.dir)
+        for i, n in enumerate([25, 28, 31, 34, 37], start=1):
+            ledger.record(i, n, n * 10)
+        self.assertEqual(ledger.trend(), "climbing")
+
+    def test_trend_stable(self):
+        s = make_session()
+        ledger = HandoffLedger(s.dir)
+        for i, n in enumerate([20, 21, 20, 22, 20], start=1):
+            ledger.record(i, n, n * 10)
+        self.assertEqual(ledger.trend(), "stable")
+
+    def test_trend_small_climb_below_threshold(self):
+        # Climbing but tiny: not worth warning about.
+        s = make_session()
+        ledger = HandoffLedger(s.dir)
+        for i, n in enumerate([5, 8, 11, 14], start=1):
+            ledger.record(i, n, n * 10)
+        self.assertEqual(ledger.trend(), "stable")
+
+    def test_trend_insufficient_data(self):
+        s = make_session()
+        ledger = HandoffLedger(s.dir)
+        ledger.record(1, 30, 300)
+        ledger.record(2, 35, 350)
+        self.assertEqual(ledger.trend(), "insufficient-data")
+
+    def test_ledger_bounded(self):
+        s = make_session()
+        ledger = HandoffLedger(s.dir)
+        for i in range(1, 36):
+            ledger.record(i, 10, 100)
+        self.assertEqual(len(ledger._load()), 30)
+        self.assertEqual(ledger._load()[0]["turn"], 6)
+
+
+class TestTrimHandoff(unittest.TestCase):
+    def test_under_cap_untouched(self):
+        text = "# Handoff\n\n## Handoff -- t0001\n### Now\nx\n"
+        out, cut = trim_handoff(text)
+        self.assertEqual(out, text)
+        self.assertEqual(cut, 0)
+
+    def test_over_cap_trimmed(self):
+        s = make_session()
+        p = write_sized_handoff(s.dir, "t0001", 60)
+        out, cut = trim_handoff(p.read_text(encoding="utf-8"))
+        self.assertLessEqual(len(out.splitlines()), HANDOFF_MAX_LINES)
+        self.assertGreater(cut, 0)
+        # Shape preserved: stamp + all four section headers.
+        self.assertIn("## Handoff -- t0001", out)
+        for name in HANDOFF_SECTIONS:
+            self.assertIn(f"### {name}", out)
+        # The next turn is told content was clipped.
+        self.assertIn("trimmed by harness", out)
+
+    def test_trim_keeps_front_load(self):
+        s = make_session()
+        p = write_sized_handoff(s.dir, "t0001", 60)
+        out, _ = trim_handoff(p.read_text(encoding="utf-8"))
+        self.assertIn("filler 0", out)      # front kept
+        self.assertNotIn("filler 48", out)  # tail cut
+
+    def test_is_over_cap(self):
+        s = make_session()
+        write_sized_handoff(s.dir, "t0001", 60)
+        self.assertTrue(is_over_cap(s.dir))
+        write_sized_handoff(s.dir, "t0001", 20)
+        self.assertFalse(is_over_cap(s.dir))
+
+
+class TestPhase2Enforcement(unittest.TestCase):
+    def test_backstop_trims_when_model_wont(self):
+        # Over-cap handoff; the model burns both forced rounds without
+        # trimming. The deterministic backstop fires instead of giving
+        # up: handoff-trimmed, backup kept, turn still closes.
+        s = make_session()
+        write_sized_handoff(s.dir, "t0001", 60)
+        events = []
+        loop = Loop(MockProvider([{"content": "done"},
+                                  {"content": "x"},
+                                  {"content": "y"}]),
+                    Budget(hard=100000, soft=80000),
+                    on_event=lambda k, v: events.append(k))
+        out = loop.run_turn(s, "hi")
+        self.assertEqual(out, "done")
+        self.assertIn("handoff-trimmed", events)
+        self.assertIn("handoff", events)
+        self.assertNotIn("handoff-invalid", events)
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
+        backups = list((s.dir / "sats").glob(
+            "handoff.pre-handoff-trim-*.bak"))
+        self.assertEqual(len(backups), 1)
+
+    def test_bloat_event_on_climbing_handoff(self):
+        s = make_session()
+        events = []
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000),
+                    on_event=lambda k, v: events.append(k))
+        for i, n in enumerate([25, 28, 31], start=1):
+            write_sized_handoff(s.dir, f"t{i:04d}", n)
+            self.assertTrue(loop._ensure_handoff(s, i, "sys", []))
+        # Three points: insufficient data, no warning yet.
+        self.assertNotIn("handoff-bloat", events)
+        write_sized_handoff(s.dir, "t0004", 34)
+        self.assertTrue(loop._ensure_handoff(s, 4, "sys", []))
+        self.assertIn("handoff-bloat", events)
+
+    def test_prune_system_preserves_handoff_shape(self):
+        self.assertIn("handoff.md", PRUNE_SYSTEM)
+        self.assertIn("resume plan", PRUNE_SYSTEM)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,20 @@ Pure functions here; the Loop owns the enforcement timing.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 HANDOFF_SECTIONS = ("Now", "Next", "Blockers", "Pointers")
 HANDOFF_MAX_LINES = 40
 HANDOFF_MAX_ATTEMPTS = 2
+
+# Canary tuning: how the ledger decides the handoff is "climbing"
+# (dumping). Heuristic, deliberately simple and explainable.
+HANDOFF_LEDGER_KEEP = 30      # entries kept in handoff.json
+HANDOFF_CLIMB_WINDOW = 5      # turns of history the slope is measured over
+HANDOFF_CLIMB_MIN_SLOPE = 1.0  # lines/turn above this counts as climbing
+HANDOFF_CLIMB_MIN_LINES = HANDOFF_MAX_LINES // 2  # only warn when sizable
 
 HANDOFF_TEMPLATE = """# Handoff
 
@@ -55,7 +63,9 @@ HANDOFF (every turn ends with one -- this is how you survive the night):
     ### Pointers -- where the state lives (file paths, sat sections),
       never copies of the state itself
   Rules: rewrite, never append. Under 40 lines -- it is a shift board,
-  not a biography. "Unchanged -- still <reason>" is a legal handoff,
+  not a biography. If it's still over 40 lines after your round, the
+  harness trims it mechanically -- and it won't trim kindly. Write
+  tight. "Unchanged -- still <reason>" is a legal handoff,
   but the stamp must read {turn_stamp}. The harness checks the handoff
   before your turn ends; a stale or missing handoff sends you back for
   one more round.
@@ -146,3 +156,117 @@ def handoff_size(sdir: str | Path) -> tuple[int, int]:
     except OSError:
         return 0, 0
     return len(text.splitlines()), count_tokens(text)
+
+
+def is_over_cap(sdir: str | Path) -> bool:
+    """True when sats/handoff.md exceeds the line cap."""
+    try:
+        text = (Path(sdir) / "sats" / "handoff.md").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return len(text.splitlines()) > HANDOFF_MAX_LINES
+
+
+def trim_handoff(text: str) -> tuple[str, int]:
+    """Deterministically trim an over-cap handoff to the line cap.
+
+    Keeps the "# Handoff" title, the handoff header and all four
+    section headers; cuts body lines from the END of the longest
+    sections first (agents front-load the important lines -- documented
+    assumption). Appends a one-line marker noting the harness cut, so
+    the next turn knows content was clipped.
+
+    Pure function. Returns (trimmed_text, lines_cut).
+    """
+    lines = (text or "").splitlines()
+    if len(lines) <= HANDOFF_MAX_LINES:
+        return text, 0
+    # Split into: preamble (title + header) and per-section bodies.
+    # A section starts at a "### <Name>" line; everything before the
+    # first section header is preamble.
+    preamble: list[str] = []
+    sections: list[tuple[str, list[str]]] = []  # (header, body lines)
+    for ln in lines:
+        m = re.match(r"^### (\S+)\s*$", ln)
+        if m and m.group(1) in HANDOFF_SECTIONS:
+            sections.append((ln, []))
+        elif sections:
+            sections[-1][1].append(ln)
+        else:
+            preamble.append(ln)
+    # Guarantee the four headers exist even in a mangled file.
+    have = {h for h, _ in sections}
+    for name in HANDOFF_SECTIONS:
+        header = f"### {name}"
+        if header not in have:
+            sections.append((header, []))
+    marker = "<!-- trimmed by harness: content cut to fit the cap -->"
+    # Budget: cap minus preamble, headers and marker; bodies share it.
+    fixed = len(preamble) + len(sections) + 1  # +1 marker
+    body_budget = max(0, HANDOFF_MAX_LINES - fixed)
+    bodies = [b for _, b in sections]
+    total_body = sum(len(b) for b in bodies)
+    cut = max(0, total_body - body_budget)
+    # Cut from the end of the longest bodies first.
+    remaining = cut
+    while remaining > 0:
+        longest = max(range(len(bodies)),
+                      key=lambda i: len(bodies[i]),
+                      default=None)
+        if longest is None or not bodies[longest]:
+            break
+        bodies[longest].pop()
+        remaining -= 1
+    actual_cut = total_body - sum(len(b) for b in bodies)
+    out: list[str] = list(preamble)
+    for (header, _), body in zip(sections, bodies):
+        out.append(header)
+        out.extend(body)
+    out.append(marker)
+    return "\n".join(out) + "\n", actual_cut
+
+
+class HandoffLedger:
+    """Per-turn handoff size ledger: the dumping canary.
+
+    Stored at <sdir>/handoff.json, bounded to the last
+    HANDOFF_LEDGER_KEEP entries. trend() reports "climbing" when the
+    line count rises steadily over the recent window -- the signal that
+    the agent is dumping into the handoff instead of curating it.
+    """
+
+    def __init__(self, sdir: str | Path):
+        self.path = Path(sdir) / "handoff.json"
+
+    def _load(self) -> list[dict]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except (OSError, ValueError):
+            pass
+        return []
+
+    def record(self, turn_no: int, lines: int, tokens: int) -> None:
+        entries = self._load()
+        entries.append({"turn": turn_no, "lines": lines,
+                        "tokens": tokens})
+        entries = entries[-HANDOFF_LEDGER_KEEP:]
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(entries), encoding="utf-8")
+        except OSError:
+            pass  # best effort: the ledger must never block a turn
+
+    def trend(self) -> str:
+        """One of "climbing", "stable", "insufficient-data"."""
+        entries = self._load()[-HANDOFF_CLIMB_WINDOW:]
+        if len(entries) < 4:
+            return "insufficient-data"
+        first, last = entries[0]["lines"], entries[-1]["lines"]
+        slope = (last - first) / (len(entries) - 1)
+        if (slope > HANDOFF_CLIMB_MIN_SLOPE
+                and last > HANDOFF_CLIMB_MIN_LINES):
+            return "climbing"
+        return "stable"

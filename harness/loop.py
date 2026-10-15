@@ -33,8 +33,9 @@ from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
 from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
-                      HANDOFF_PROMPT_PARAGRAPH, ensure_handoff_file,
-                      handoff_size, validate_handoff)
+                      HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
+                      ensure_handoff_file, handoff_size, is_over_cap,
+                      trim_handoff, validate_handoff)
 
 MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
@@ -121,7 +122,9 @@ You may ONLY use the edit tool, and ONLY on these files:
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to
-one-liners and drop what no longer serves the task. Each edit needs
+one-liners and drop what no longer serves the task. {sats_dir}/handoff.md
+is the resume plan: keep its Now/Next/Blockers/Pointers sections and its
+`## Handoff -- tNNNN` stamp -- trim the bodies, never the shape. Each edit needs
 old_text matching exactly once -- include enough surrounding context.
 Keep the `## ` section format parseable.
 Do not attempt the user's task now -- just curate.
@@ -418,12 +421,14 @@ class Loop:
         HANDOFF_MAX_ATTEMPTS failed rounds it emits "handoff-invalid"
         and returns False -- the turn still closes. Loud, never
         blocking: a broken handoff must not wedge the session.
+
+        Phase 2: when the only remaining failure is the size cap, the
+        deterministic trim backstop fires instead of giving up; every
+        valid handoff is recorded in the size ledger (the canary).
         """
         ok, reason = validate_handoff(session.dir, turn_no)
         if ok:
-            lines, tokens = handoff_size(session.dir)
-            self._emit("handoff", {"turn": turn_no, "lines": lines,
-                                   "tokens": tokens})
+            self._record_handoff_ok(session, turn_no)
             return True
         turn_stamp = f"t{turn_no:04d}"
         handoff_path = str(session.dir / "sats" / "handoff.md")
@@ -460,13 +465,65 @@ class Loop:
                 self._execute_tool(session, tc)
             ok, reason = validate_handoff(session.dir, turn_no)
             if ok:
-                lines, tokens = handoff_size(session.dir)
-                self._emit("handoff", {"turn": turn_no,
-                                       "attempt": attempt + 1,
-                                       "lines": lines, "tokens": tokens})
+                self._record_handoff_ok(session, turn_no)
                 return True
+        if is_over_cap(session.dir):
+            # The model wouldn't trim: deterministic backstop.
+            if self._trim_handoff_backstop(session, turn_no):
+                ok, reason = validate_handoff(session.dir, turn_no)
+                if ok:
+                    self._record_handoff_ok(session, turn_no)
+                    return True
         self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
         return False
+
+    def _record_handoff_ok(self, session: Session,
+                           turn_no: int) -> None:
+        """Ledger + events for a valid handoff (Phase 2 canary).
+
+        Records per-turn size and checks the trend: a climbing handoff
+        is the dumping signal, emitted as "handoff-bloat" while it is
+        still under the cap.
+        """
+        lines, tokens = handoff_size(session.dir)
+        self._emit("handoff", {"turn": turn_no, "lines": lines,
+                               "tokens": tokens})
+        ledger = HandoffLedger(session.dir)
+        ledger.record(turn_no, lines, tokens)
+        if ledger.trend() == "climbing":
+            self._emit("handoff-bloat",
+                       {"turn": turn_no, "lines": lines,
+                        "tokens": tokens,
+                        "note": ("handoff size is climbing -- the agent "
+                                 "is dumping instead of curating")})
+
+    def _trim_handoff_backstop(self, session: Session,
+                               turn_no: int) -> bool:
+        """Deterministic trim when the model won't get under the cap.
+
+        The model had its forced rounds; the harness now trims
+        mechanically (headers kept, bodies cut from the end, marker
+        appended). The pre-trim content is backed up, and the trim is
+        announced -- the harness never silently rewrites model-curated
+        state.
+        """
+        target = session.dir / "sats" / "handoff.md"
+        try:
+            before = target.read_text(encoding="utf-8",
+                                      errors="replace")
+        except OSError:
+            return False
+        trimmed, cut = trim_handoff(before)
+        if cut <= 0:
+            return False
+        self._backup_context(session, target, before, "handoff-trim")
+        try:
+            target.write_text(trimmed, encoding="utf-8")
+        except OSError:
+            return False
+        self._emit("handoff-trimmed", {"turn": turn_no,
+                                       "lines_cut": cut})
+        return True
 
     @staticmethod
     def _append_source(session: Session, name: str, text: str) -> None:
