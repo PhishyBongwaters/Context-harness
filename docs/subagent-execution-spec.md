@@ -332,7 +332,7 @@ access the parent's session directory are denied.
 Subagents use the same blank-slate assembly as the parent:
 
 ```
-sats (current, goals, facts, decisions, tasks)
+sats (handoff, current, goals, facts, decisions, tasks)
 → history.md
 → scratch.md
 ```

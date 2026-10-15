@@ -24,7 +24,8 @@ deliberately.
 There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
-1. **satellites** — `sats/current.md`, `sats/goals.md`,
+1. **satellites** — `sats/handoff.md` (the shift handoff: rewritten
+   every turn, assembles first), `sats/current.md`, `sats/goals.md`,
    `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`,
    `sats/hypotheses.md`
    (durable one-liners, sent as `## sat <name>` sections)
@@ -50,6 +51,12 @@ management is deterministic harness behavior, not model judgment.
 once):
 - `history.md` — the conversation record (`## user t<NNNN>`,
   `## episode t<NNNN>`)
+- `sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers);
+  rewrite it at the end of every turn. The harness validates
+  freshness, shape and the 40-line cap at the turn boundary; a stale
+  or missing handoff triggers a forced handoff round, and persistent
+  dumping trips the size canary (`handoff-bloat`) or the deterministic
+  trim backstop
 - `sats/current.md` — the active task (update when it changes)
 - `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
   add one with `/goal "text"` or `--goal "text"`

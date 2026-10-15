@@ -58,10 +58,13 @@ Each turn the harness:
    prompt text so the model cannot echo or duplicate it. Revisit only
    if a provider mishandles large system blocks.)
 2. Assembles the transcript in fixed order:
-   `sats/` (current, goals, facts, decisions, tasks) → `history.md`
+   `sats/` (handoff, current, goals, facts, decisions, tasks) → `history.md`
    → `scratch.md`.
    Rationale: stable knowledge first (primacy), working memory last
-   (recency), conversation in the middle.
+   (recency), conversation in the middle. `handoff` leads: it is the
+   L1 -- the shift board (Now/Next/Blockers/Pointers) the next turn
+   reads before anything else. The harness validates it at every turn
+   boundary (freshness/shape/40-line cap; see issue #5).
 3. Writes the assembled text to `context.md` (inspectable artifact).
 4. Parses it with the existing `parse_transcript` into API messages.
 5. Appends the ephemeral usage note (`_note`, unchanged: sent, never

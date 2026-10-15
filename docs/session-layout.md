@@ -14,6 +14,7 @@ sessions/2026-10-10-abc123/
 ├── scratch.md           # Working notes, pruned deterministically
 ├── result.md            # Final answer (written at turn end)
 ├── sats/
+│   ├── handoff.md       # Shift handoff: rewritten every turn (Now/Next/Blockers/Pointers); assembles first
 │   ├── current.md       # What the agent is doing right now
 │   ├── goals.md         # User's stated goals for this session
 │   ├── facts.md         # Confirmed facts (promoted from hypotheses)
