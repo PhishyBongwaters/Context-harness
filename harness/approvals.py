@@ -161,6 +161,11 @@ class Policy:
             target = self.resolve(args.get("path") or "")
             key = f"tokens:{target}"
             return ALLOW, "tokens globally allowed", key
+        if name == "search":
+            # Read-only grep: safe like read/list_dir.
+            target = self.resolve(args.get("path") or ".")
+            key = f"search:{target}:{args.get('pattern')}"
+            return ALLOW, "search globally allowed", key
         if name in ("write", "edit"):
             target = self.resolve(args.get("path") or "")
             key = f"{name}:{target}"
