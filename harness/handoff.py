@@ -35,7 +35,7 @@ not in the sats or history is gone when this turn ends.
 ### Now
 (nothing yet -- first turn)
 ### Next
-(read the task and decide the first step)
+- [ ] (read the task and decide the first step)
 ### Blockers
 (none yet)
 ### Pointers
@@ -58,7 +58,9 @@ HANDOFF (every turn ends with one -- this is how you survive the night):
     ### Now -- where things stand (2-4 lines, not a biography)
     ### Next -- the intended next steps, in order; the hypothesis in
       flight and what would prove or disprove it; dead ends already
-      tried, one line each
+      tried, one line each. Each step is a board card: `- [ ]` open,
+      `- [x]` done -- check them off as you finish, so the next turn
+      sees what remains at a glance
     ### Blockers -- what is stuck, and what would unstick it
     ### Pointers -- where the state lives (file paths, sat sections),
       never copies of the state itself
@@ -101,6 +103,46 @@ def parse_handoff(text: str) -> dict | None:
                      for n, rx in _SECTION_RES.items()},
         "lines": len(text.splitlines()),
     }
+
+
+# Board card states in ### Next: `- [ ]` open, `- [x]`/`- [X]` done.
+# Plain lines (numbered or otherwise) predate the card states and count
+# as open, so old handoffs still parse.
+_NEXT_DONE_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?- \[[xX]\]\s*(.+?)\s*$")
+_NEXT_OPEN_RE = re.compile(r"^\s*(?:\d+[.)]\s*)?- \[ \]\s*(.+?)\s*$")
+
+
+def parse_next_items(handoff_text: str) -> list[tuple[bool, str]]:
+    """Parse the ### Next section into (done, text) board cards.
+
+    Returns [] when there is no Next section. Never raises on odd
+    input: an unparseable section is no cards, not an exception.
+    """
+    try:
+        text = handoff_text or ""
+        m = _SECTION_RES["Next"].search(text)
+        if not m:
+            return []
+        body = text[m.end():]
+        nxt = re.search(r"(?m)^### \S+", body)
+        if nxt:
+            body = body[:nxt.start()]
+        cards = []
+        for line in body.splitlines():
+            if not line.strip():
+                continue
+            dm = _NEXT_DONE_RE.match(line)
+            if dm:
+                cards.append((True, dm.group(1)))
+                continue
+            om = _NEXT_OPEN_RE.match(line)
+            if om:
+                cards.append((False, om.group(1)))
+                continue
+            cards.append((False, line.strip()))
+        return cards
+    except (AttributeError, TypeError, IndexError):
+        return []
 
 
 def validate_handoff(sdir: str | Path, turn_no: int) -> tuple[bool, str]:
