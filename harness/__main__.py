@@ -158,14 +158,23 @@ def _print_event(kind: str, data) -> None:
         rec = data["recovered"]
         sign = "+" if rec >= 0 else ""
         print(f"\n[context diff: {sign}{rec:,} tokens]", flush=True)
-        for r in data["removed"][:5]:
-            print(f"  - {r['header']} ({r['tokens']:,} tokens)", flush=True)
-        if len(data["removed"]) > 5:
-            print(f"  - ... +{len(data['removed']) - 5} more", flush=True)
-        for a in data["added"][:5]:
-            print(f"  + {a['header']} ({a['tokens']:,} tokens)", flush=True)
-        if len(data["added"]) > 5:
-            print(f"  + ... +{len(data['added']) - 5} more", flush=True)
+        for sec in (data.get("section_diffs") or []):
+            print(f"  {sec.get('header')}", flush=True)
+            for ln in (sec.get("lines") or []):
+                print(f"  {ln}", flush=True)
+        if not (data.get("section_diffs") or []):
+            for r in data["removed"][:5]:
+                print(f"  - {r['header']} ({r['tokens']:,} tokens)",
+                      flush=True)
+            if len(data["removed"]) > 5:
+                print(f"  - ... +{len(data['removed']) - 5} more",
+                      flush=True)
+            for a in data["added"][:5]:
+                print(f"  + {a['header']} ({a['tokens']:,} tokens)",
+                      flush=True)
+            if len(data["added"]) > 5:
+                print(f"  + ... +{len(data['added']) - 5} more",
+                      flush=True)
     elif kind == "request" and "tokens_est" in (data or {}):
         toks, hard = data["tokens_est"], data.get("hard") or 0
         pct = 100.0 * toks / hard if hard else 0
@@ -745,29 +754,20 @@ def _autosize_budget(cfg, loop, model: str | None,
                 return source
             return None
         elif reset:
-            # Undetectable model on a switch: fall back so the previous
-            # model's window never sticks around enforcing the wrong
-            # limit. Pinned budgets are untouched.
-            if getattr(cfg, "budget_hard_auto", True):
-                cfg.budget_hard, auto_soft = split_budgets(
-                    DEFAULTS["budget_hard"])
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.hard = cfg.budget_hard
-            if getattr(cfg, "budget_soft_auto", True):
-                if getattr(cfg, "budget_hard_auto", True):
-                    new_soft = auto_soft
-                else:
-                    new_soft = int(cfg.budget_hard * 0.8)
-                cfg.budget_soft = new_soft
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.soft = new_soft
-            if getattr(cfg, "budget_hard_auto", True):
-                # Only relabel when hard itself fell back; a pinned
-                # hard keeps its explicit provenance.
-                cfg.budget_source = "default"
-                cfg.context_window = None
-                if hasattr(loop, "budget") and loop.budget:
-                    loop.budget.window = None
+            # Undetectable model on a switch: do NOT clobber the previous
+            # window. A stale-but-detected value beats a silent drop to
+            # the default (which poses 50k as the limit). The user sees
+            # the unchanged budget; explicit pin overrides.
+            # (Pinned budgets were never touched; auto budgets now aren't
+            # either on detection failure.)
+            #
+            # Exception: if hard is pinned, soft must track it (80% of
+            # hard) even when detection fails — otherwise soft goes stale.
+            if not getattr(cfg, "budget_hard_auto", True):
+                if getattr(cfg, "budget_soft_auto", True):
+                    cfg.budget_soft = int(cfg.budget_hard * 0.8)
+                    if hasattr(loop, "budget") and loop.budget:
+                        loop.budget.soft = cfg.budget_soft
     except Exception:
         pass
     return None
