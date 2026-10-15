@@ -254,7 +254,9 @@ class Loop:
                  include_subagents: bool = False,
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
-                 auto_continue_max_turns: int = 10):
+                 auto_continue_max_turns: int = 10,
+                 handoff_canary_tokens: int = 38000,
+                 sat_max_lines: int = 100):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -284,6 +286,21 @@ class Loop:
                 0, int(auto_continue_max_turns))
         except (TypeError, ValueError):
             self._auto_continue_max_turns = 0
+        # Handoff canary (issue #11): tokens at which to warn the agent
+        # to wrap up. 0 disables.
+        try:
+            self._handoff_canary_tokens = max(0, int(handoff_canary_tokens))
+        except (TypeError, ValueError):
+            self._handoff_canary_tokens = 0
+        # Sat bloat (issue #7): line cap for sats other than handoff.md.
+        # 0 disables the check.
+        try:
+            self._sat_max_lines = max(0, int(sat_max_lines))
+        except (TypeError, ValueError):
+            self._sat_max_lines = 0
+        # Redundant reads (issue #10): files read this episode, for
+        # duplicate detection. Cleared on episode close.
+        self._files_read = set()
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -557,6 +574,32 @@ class Loop:
                         "note": ("handoff size is climbing -- the agent "
                                  "is dumping instead of curating")})
 
+    def _check_sat_sizes(self, session: Session) -> None:
+        """Warn if any sat (other than handoff.md) exceeds the line cap.
+
+        Issue #7: handoff.md has its own 40-line cap with enforcement;
+        other sats get a warning event so the agent can trim them.
+        """
+        cap = getattr(self, "_sat_max_lines", 100)
+        if not cap:
+            return
+        sats_dir = session.dir / "sats"
+        try:
+            files = list(sats_dir.glob("*.md"))
+        except OSError:
+            return
+        for f in files:
+            if f.name == "handoff.md":
+                continue
+            try:
+                lines = len(f.read_text(encoding="utf-8",
+                                        errors="replace").splitlines())
+            except OSError:
+                continue
+            if lines > cap:
+                self._emit("sat-bloat",
+                           {"file": f.name, "lines": lines, "cap": cap})
+
     def _trim_handoff_backstop(self, session: Session,
                                turn_no: int) -> bool:
         """Deterministic trim when the model won't get under the cap.
@@ -672,6 +715,8 @@ class Loop:
                 self._append_source(
                     session, "history.md",
                     f"## assistant {tag}\n{reply.strip()}\n")
+            # Issue #10: clear the per-episode read tracking.
+            self._files_read.clear()
             # H2: deterministic history windowing.
             self._window_history(session)
             # Refresh the inspectable artifact so it reflects the
@@ -774,6 +819,14 @@ class Loop:
             except Exception as e:  # never let a user tool crash the loop
                 result = f"ERROR executing user tool {name}: {e}"
         else:
+            # Issue #10: warn on redundant reads (file already read this
+            # episode). Non-blocking; the read still happens.
+            if name == "read":
+                fpath = (args or {}).get("path", "")
+                if fpath and fpath in self._files_read:
+                    self._emit("redundant-read", {"path": fpath})
+                elif fpath:
+                    self._files_read.add(fpath)
             result = run_tool(name, args, session.workdir)
         if target is not None and before is not None:
             after = target.read_text(encoding="utf-8", errors="replace")
@@ -1226,6 +1279,7 @@ class Loop:
         self._append_source(session, "history.md",
                             render_opening(user_text, turn_no))
         warned = False
+        handoff_warned = False
 
         try:
             for step in range(MAX_STEPS):
@@ -1258,6 +1312,22 @@ class Loop:
                     warned = True
                     self._emit("budget", {"status": "warn", "tokens": est,
                                           "breakdown": bd})
+                # Handoff canary (issue #11): once per turn, warn the agent
+                # to start wrapping up when context hits the threshold.
+                canary = self._handoff_canary_tokens
+                if canary and est >= canary and not handoff_warned:
+                    handoff_warned = True
+                    self._emit("handoff-canary",
+                               {"tokens": est, "threshold": canary})
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            f"[handoff-canary] Context at {est:,} tokens "
+                            f"(threshold {canary:,}). Begin wrapping up: "
+                            f"ensure sats/handoff.md is rewritten before "
+                            f"the turn ends."
+                        ),
+                    })
 
                 self._emit("request", {"phase": "main", "step": step,
                                        "turn": self._turn_seq,
@@ -1321,6 +1391,9 @@ class Loop:
                     if active_goals(session.dir):
                         self._ensure_handoff(session, turn_no, system,
                                              messages)
+                    # Sat bloat check (issue #7): warn if any sat other
+                    # than handoff.md exceeds the line cap.
+                    self._check_sat_sizes(session)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
