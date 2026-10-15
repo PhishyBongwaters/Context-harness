@@ -26,11 +26,13 @@ class TestPolicy(unittest.TestCase):
         d, _, _ = policy_for(s).check("read", {"path": "notes.txt"})
         self.assertEqual(d, "allow")
 
-    def test_read_outside_roots_asks(self):
+    def test_read_outside_roots_allowed(self):
+        # Standing rule (d71649a): read is globally allowed; only
+        # destructive tools are gated.
         s = make_session()
         d, _, _ = policy_for(s).check(
             "read", {"path": str(Path(tempfile.mkdtemp()) / "x")})
-        self.assertEqual(d, "ask")
+        self.assertEqual(d, "allow")
 
     def test_tokens_literal_allowed(self):
         s = make_session()
