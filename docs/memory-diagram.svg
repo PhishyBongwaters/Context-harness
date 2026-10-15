@@ -72,10 +72,11 @@
     <rect x="120" y="492" width="560" height="150" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
     <text x="140" y="520" class="boxtitle" fill="#7ba7e0">L2 · HISTORY.MD — the stamped record</text>
     <text x="660" y="520" text-anchor="end" class="note">WARM · curated transcript</text>
-    <text x="140" y="548" class="code">## user tNNNN — every user message, stamped</text>
-    <text x="140" y="570" class="code">## episode tNNNN — closing reply (H1) + pointer to archived scratch</text>
-    <text x="140" y="592" class="body">windowing (H2) — recent episodes in full, older collapse to pointers</text>
-    <text x="140" y="616" class="note">episodes are never rewritten, only windowed</text>
+    <text x="140" y="548" class="code">## user tNNNN — a user message opens the turn, stamped</text>
+    <text x="140" y="570" class="code">## auto tNNNN — the harness opens the turn (auto-continue), stamped</text>
+    <text x="140" y="592" class="code">## episode tNNNN — closing reply (H1) + pointer to archived scratch</text>
+    <text x="140" y="614" class="body">windowing (H2) — recent episodes in full, older collapse to pointers</text>
+    <text x="140" y="636" class="note">episodes are never rewritten, only windowed</text>
   </g>
 
   <line x1="200" y1="642" x2="200" y2="670" stroke="#5a6b82" stroke-width="2" marker-end="url(#marrow)"/>

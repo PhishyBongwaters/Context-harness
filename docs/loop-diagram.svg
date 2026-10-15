@@ -2,7 +2,8 @@
   DESIGN DOC — keep true.
   This diagram is a design document for the context-harness agent loop.
   Update it whenever the loop changes. Sources of truth:
-    harness/loop.py      (run_turn, _ensure_handoff, prune_turn, _close_episode)
+    harness/loop.py      (run_turn, _run_turn_once, _ensure_handoff,
+                          prune_turn, _close_episode)
     harness/assembly.py  (blank-slate assembly order)
     harness/handoff.py   (handoff schema, validation, ledger, trim)
   Rendered at 1040x1500. Dark LCARS-flavored theme to match the TUI.
@@ -45,8 +46,8 @@
   <!-- Entry -->
   <g>
     <rect x="330" y="158" width="380" height="66" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
-    <text x="520" y="182" text-anchor="middle" class="body">user_text arrives</text>
-    <text x="520" y="202" text-anchor="middle" class="code">next_turn() -> tNNNN · stamp -> history.md</text>
+    <text x="520" y="182" text-anchor="middle" class="body">turn opens — user_text or auto-continue</text>
+    <text x="520" y="202" text-anchor="middle" class="code">next_turn() -> tNNNN · ## user|auto -> history.md</text>
   </g>
   <line x1="520" y1="224" x2="520" y2="244" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
 
@@ -144,11 +145,34 @@
   <!-- return -->
   <g>
     <rect x="410" y="1092" width="220" height="48" rx="24" fill="#123324" stroke="#4caf7d" stroke-width="1.5"/>
-    <text x="520" y="1122" text-anchor="middle" class="body" font-weight="700" fill="#8fd8ab">return reply</text>
+    <text x="520" y="1122" text-anchor="middle" class="body" font-weight="700" fill="#8fd8ab">reply ready</text>
+  </g>
+  <line x1="520" y1="1140" x2="520" y2="1160" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- AUTO-CONTINUE decision -->
+  <g>
+    <polygon points="520,1160 625,1200 520,1240 415,1200" fill="#1f1830" stroke="#9b7ede" stroke-width="1.5"/>
+    <text x="520" y="1196" text-anchor="middle" class="body" font-weight="700">goal still</text>
+    <text x="520" y="1214" text-anchor="middle" class="body" font-weight="700">[active]?</text>
+    <text x="390" y="1188" text-anchor="end" class="branch">yes</text>
+    <text x="650" y="1188" class="branch">no</text>
+  </g>
+  <text x="250" y="1188" text-anchor="middle" class="note">enabled · under cap</text>
+
+  <!-- YES: loop back up the left side into a new turn -->
+  <polyline points="415,1200 72,1200 72,191 330,191" fill="none" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="201" y="183" text-anchor="middle" class="note">new turn · ## auto tNNNN</text>
+
+  <!-- NO: return to the user -->
+  <line x1="625" y1="1200" x2="690" y2="1200" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <g>
+    <rect x="700" y="1176" width="220" height="48" rx="24" fill="#123324" stroke="#4caf7d" stroke-width="1.5"/>
+    <text x="810" y="1206" text-anchor="middle" class="body" font-weight="700" fill="#8fd8ab">return to user</text>
   </g>
 
   <!-- Footer: amnesia rule -->
   <text x="520" y="1312" text-anchor="middle" class="foot">There is no other memory — the next turn wakes up knowing ONLY what is in the assembled sources.</text>
+  <text x="520" y="1334" text-anchor="middle" class="foot">Auto-continue: while a goal is [active], the turn may open itself — same loop, stamped ## auto.</text>
 
   <!-- Legend -->
   <g font-size="12" fill="#8a94a6">
