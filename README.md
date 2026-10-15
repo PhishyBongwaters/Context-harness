@@ -38,7 +38,9 @@ The prompt loads fresh from `prompt.md` through the API system parameter
 each turn. The assembled text is written to `context.md` as an
 inspectable build artifact — rebuilt every turn. The model neither
 reads nor edits it: the assembled text is already its injected
-messages. No hidden transcript, no special compact tool.
+messages. No hidden transcript, no special compact tool. The turn
+lifecycle is diagrammed in `docs/loop-diagram.svg` — a design doc:
+it must stay true to the implementation.
 
 ## Who owns what
 

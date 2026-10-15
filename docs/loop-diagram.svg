@@ -1,0 +1,166 @@
+<!--
+  DESIGN DOC — keep true.
+  This diagram is a design document for the context-harness agent loop.
+  Update it whenever the loop changes. Sources of truth:
+    harness/loop.py      (run_turn, _ensure_handoff, prune_turn, _close_episode)
+    harness/assembly.py  (blank-slate assembly order)
+    harness/handoff.py   (handoff schema, validation, ledger, trim)
+  Rendered at 1040x1500. Dark LCARS-flavored theme to match the TUI.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1500" viewBox="0 0 1040 1500" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#5a6b82"/>
+    </marker>
+    <style>
+      .title { font-size: 32px; font-weight: 800; letter-spacing: 8px; fill: #f0f4fa; }
+      .subtitle { font-size: 14px; fill: #8a94a6; }
+      .pill { font-size: 12.5px; font-weight: 700; letter-spacing: 2px; }
+      .boxtitle { font-size: 14px; font-weight: 800; letter-spacing: 1.5px; }
+      .body { font-size: 12.5px; fill: #c9d3e2; }
+      .code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12.5px; fill: #c9d3e2; }
+      .branch { font-size: 12px; font-style: italic; fill: #8a94a6; }
+      .note { font-size: 11px; fill: #6b7688; }
+      .foot { font-size: 13px; font-style: italic; fill: #8a94a6; }
+      .gold { fill: #e8b93e; }
+    </style>
+  </defs>
+
+  <rect width="1040" height="1500" fill="#0a0e14"/>
+
+  <!-- Title -->
+  <text x="520" y="54" text-anchor="middle" class="title">THE LOOP</text>
+  <text x="520" y="82" text-anchor="middle" class="subtitle">context-harness run_turn — blank-slate assembly, governed writes</text>
+
+  <!-- Triad pills -->
+  <g>
+    <rect x="140" y="104" width="220" height="36" rx="18" fill="#2a1f14" stroke="#e08a3c" stroke-width="1.5"/>
+    <text x="250" y="127" text-anchor="middle" class="pill" fill="#e8a45c">MODEL CURATES</text>
+    <rect x="400" y="104" width="240" height="36" rx="18" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
+    <text x="520" y="127" text-anchor="middle" class="pill" fill="#7ba7e0">MACHINE VERIFIES</text>
+    <rect x="680" y="104" width="220" height="36" rx="18" fill="#1f1830" stroke="#9b7ede" stroke-width="1.5"/>
+    <text x="790" y="127" text-anchor="middle" class="pill" fill="#b39df0">BUDGET GOVERNS</text>
+  </g>
+
+  <!-- Entry -->
+  <g>
+    <rect x="330" y="158" width="380" height="66" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
+    <text x="520" y="182" text-anchor="middle" class="body">user_text arrives</text>
+    <text x="520" y="202" text-anchor="middle" class="code">next_turn() -> tNNNN · stamp -> history.md</text>
+  </g>
+  <line x1="520" y1="224" x2="520" y2="244" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step loop container -->
+  <rect x="60" y="248" width="920" height="1012" rx="18" fill="#0d1219" stroke="#2a3342" stroke-width="1.5"/>
+  <text x="88" y="276" class="pill" fill="#6b7688">STEP LOOP · ≤ 50 STEPS</text>
+
+  <!-- ASSEMBLE -->
+  <g>
+    <rect x="250" y="296" width="540" height="128" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
+    <text x="270" y="322" class="boxtitle" fill="#7ba7e0">ASSEMBLE — blank-slate, deterministic</text>
+    <text x="270" y="346" class="body"><tspan class="gold" font-weight="700">sats/handoff.md</tspan>  L1 · the shift board</text>
+    <text x="270" y="366" class="body">sats/current, goals, facts, decisions, tasks</text>
+    <text x="270" y="386" class="code">history.md  ->  scratch.md</text>
+    <text x="270" y="406" class="note">written to context.md (inspectable artifact)</text>
+  </g>
+  <line x1="520" y1="424" x2="520" y2="448" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- BUDGET diamond -->
+  <g>
+    <polygon points="520,452 632,497 520,542 408,497" fill="#1f1830" stroke="#9b7ede" stroke-width="1.5"/>
+    <text x="520" y="493" text-anchor="middle" class="body" font-weight="700">over hard</text>
+    <text x="520" y="511" text-anchor="middle" class="body" font-weight="700">budget?</text>
+    <text x="576" y="472" class="branch">yes</text>
+  </g>
+  <line x1="632" y1="497" x2="696" y2="497" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- PRUNE -->
+  <g>
+    <rect x="700" y="447" width="250" height="110" rx="10" fill="#1f1830" stroke="#9b7ede" stroke-width="1.5"/>
+    <text x="720" y="471" class="boxtitle" fill="#b39df0">PRUNE TURN</text>
+    <text x="720" y="493" class="body">deterministic ladder on scratch.md</text>
+    <text x="720" y="513" class="body">janitor: edit-only curation</text>
+    <text x="720" y="533" class="note">re-measure until under hard</text>
+  </g>
+  <polyline points="825,447 825,360 794,360" fill="none" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="834" y="404" class="note">re-measure</text>
+
+  <!-- NO from budget -->
+  <text x="534" y="568" class="branch">no</text>
+  <line x1="520" y1="542" x2="520" y2="576" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- provider.chat -->
+  <g>
+    <rect x="250" y="580" width="540" height="54" rx="10" fill="#2a1f14" stroke="#e08a3c" stroke-width="1.5"/>
+    <text x="520" y="613" text-anchor="middle" class="code">provider.chat(system, messages, tools)</text>
+  </g>
+  <line x1="520" y1="634" x2="520" y2="658" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- TOOLS? diamond -->
+  <g>
+    <polygon points="520,662 620,702 520,742 420,702" fill="#1f1830" stroke="#9b7ede" stroke-width="1.5"/>
+    <text x="520" y="707" text-anchor="middle" class="body" font-weight="700">tool calls?</text>
+    <text x="636" y="688" class="branch">yes</text>
+  </g>
+  <line x1="620" y1="702" x2="696" y2="702" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- EXECUTE -->
+  <g>
+    <rect x="700" y="652" width="250" height="100" rx="10" fill="#2a1f14" stroke="#e08a3c" stroke-width="1.5"/>
+    <text x="720" y="676" class="boxtitle" fill="#e8a45c">EXECUTE</text>
+    <text x="720" y="698" class="body">source gates -> approvals -> run</text>
+    <text x="720" y="718" class="body">results -> scratch.md</text>
+    <text x="720" y="736" class="note">auto-dedupe</text>
+  </g>
+  <polyline points="700,707 150,707 150,360 246,360" fill="none" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="158" y="530" class="note">next step</text>
+
+  <!-- NO from tools? -->
+  <text x="534" y="774" class="branch">no</text>
+  <line x1="520" y1="742" x2="520" y2="776" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- HANDOFF GATE -->
+  <g>
+    <rect x="250" y="780" width="540" height="148" rx="10" fill="#2a2113" stroke="#d9a53b" stroke-width="1.5"/>
+    <text x="270" y="806" class="boxtitle gold">HANDOFF GATE</text>
+    <text x="270" y="830" class="body">validate stamp / shape / 40-line cap</text>
+    <text x="270" y="852" class="body">stale? -> forced round · edit-only · ≤ 2</text>
+    <text x="270" y="874" class="body">still over cap? -> deterministic trim</text>
+    <text x="270" y="896" class="note">persistent failure -> handoff-invalid (loud; turn still closes)</text>
+    <text x="270" y="914" class="note">sizes -> handoff.json ledger (dumping canary)</text>
+  </g>
+  <line x1="520" y1="928" x2="520" y2="952" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- EPISODE CLOSE -->
+  <g>
+    <rect x="250" y="956" width="540" height="108" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
+    <text x="270" y="982" class="boxtitle" fill="#7ba7e0">EPISODE CLOSE</text>
+    <text x="270" y="1004" class="body">closing reply -> history.md (H1, stamped)</text>
+    <text x="270" y="1024" class="code">scratch.md -> archive/  +  ## episode pointer</text>
+    <text x="270" y="1044" class="body">window history (H2)</text>
+  </g>
+  <line x1="520" y1="1064" x2="520" y2="1088" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- return -->
+  <g>
+    <rect x="410" y="1092" width="220" height="48" rx="24" fill="#123324" stroke="#4caf7d" stroke-width="1.5"/>
+    <text x="520" y="1122" text-anchor="middle" class="body" font-weight="700" fill="#8fd8ab">return reply</text>
+  </g>
+
+  <!-- Footer: amnesia rule -->
+  <text x="520" y="1312" text-anchor="middle" class="foot">There is no other memory — the next turn wakes up knowing ONLY what is in the assembled sources.</text>
+
+  <!-- Legend -->
+  <g font-size="12" fill="#8a94a6">
+    <rect x="200" y="1368" width="14" height="14" rx="3" fill="#14202f" stroke="#5b8dd9"/>
+    <text x="220" y="1380">harness-owned</text>
+    <rect x="348" y="1368" width="14" height="14" rx="3" fill="#2a1f14" stroke="#e08a3c"/>
+    <text x="368" y="1380">model action</text>
+    <rect x="486" y="1368" width="14" height="14" rx="3" fill="#1f1830" stroke="#9b7ede"/>
+    <text x="506" y="1380">decision</text>
+    <rect x="600" y="1368" width="14" height="14" rx="3" fill="#2a2113" stroke="#d9a53b"/>
+    <text x="620" y="1380">handoff</text>
+    <rect x="706" y="1368" width="14" height="14" rx="3" fill="#123324" stroke="#4caf7d"/>
+    <text x="726" y="1380">terminal</text>
+  </g>
+</svg>
