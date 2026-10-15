@@ -217,7 +217,11 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
 `prune_section_cap`, `auto_continue` (default `false`: open a new turn
-while a goal is `[active]`), `auto_continue_max_turns` (default `10`). API key comes from the environment (`api_key_env`) —
+while a goal is `[active]`), `auto_continue_max_turns` (default `10`),
+`mode` (default `"analyze"`: read-only on the target codebase; `"build"`
+allows modifying code), `handoff_canary_tokens` (default `38000`: warn
+the agent to wrap up when turn context hits this), `sat_max_lines`
+(default `100`: warn when a sat exceeds this). API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
