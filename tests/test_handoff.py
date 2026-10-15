@@ -7,11 +7,11 @@ from pathlib import Path
 
 from harness.assembly import SAT_ORDER, assemble, load_prompt
 from harness.context import Budget
-from harness.handoff import (HANDOFF_MAX_LINES, HANDOFF_SECTIONS,
-                             HANDOFF_TEMPLATE, HandoffLedger,
-                             ensure_handoff_file, handoff_size,
-                             is_over_cap, parse_handoff, trim_handoff,
-                             validate_handoff)
+from harness.handoff import (HANDOFF_MAX_LINES, HANDOFF_PROMPT_PARAGRAPH,
+                             HANDOFF_SECTIONS, HANDOFF_TEMPLATE,
+                             HandoffLedger, ensure_handoff_file, handoff_size,
+                             is_over_cap, parse_handoff, parse_next_items,
+                             trim_handoff, validate_handoff)
 from harness.loop import PRUNE_SYSTEM, Loop, Session
 from harness.providers import MockProvider
 from harness.tools import classify_source, source_gate
@@ -19,7 +19,13 @@ from harness.tools import classify_source, source_gate
 
 def make_session():
     d = tempfile.mkdtemp()
-    return Session(id="t", dir=Path(d), workdir=d)
+    s = Session(id="t", dir=Path(d), workdir=d)
+    # Enforcement tests need an active goal; without one the handoff
+    # is skipped (no work to hand off).
+    (Path(d) / "sats").mkdir(parents=True, exist_ok=True)
+    (Path(d) / "sats" / "goals.md").write_text(
+        "- [active] Test goal\n", encoding="utf-8")
+    return s
 
 
 def handoff_response(sdir, turn_no):
@@ -360,6 +366,57 @@ class TestPhase2Enforcement(unittest.TestCase):
     def test_prune_system_preserves_handoff_shape(self):
         self.assertIn("handoff.md", PRUNE_SYSTEM)
         self.assertIn("resume plan", PRUNE_SYSTEM)
+
+
+class TestNextBoardCards(unittest.TestCase):
+    def test_template_shows_checkbox(self):
+        self.assertIn("- [ ]", HANDOFF_TEMPLATE)
+
+    def test_prompt_paragraph_teaches_cards(self):
+        self.assertIn("- [ ]", HANDOFF_PROMPT_PARAGRAPH)
+        self.assertIn("- [x]", HANDOFF_PROMPT_PARAGRAPH)
+
+    def test_parse_mixed_cards(self):
+        text = ("## Handoff -- t0007\n### Now\nx\n### Next\n"
+                "- [x] traced syscall entry\n"
+                "- [ ] enumerate sleep points\n"
+                "3. consolidate the list\n"
+                "### Blockers\nnone\n")
+        self.assertEqual(parse_next_items(text),
+                         [(True, "traced syscall entry"),
+                          (False, "enumerate sleep points"),
+                          (False, "3. consolidate the list")])
+
+    def test_parse_case_insensitive_done(self):
+        text = "## Handoff -- t0001\n### Next\n- [X] done thing\n"
+        self.assertEqual(parse_next_items(text), [(True, "done thing")])
+
+    def test_parse_no_next_section(self):
+        self.assertEqual(parse_next_items("## Handoff -- t0001\n### Now\nx\n"),
+                         [])
+        self.assertEqual(parse_next_items(""), [])
+        self.assertEqual(parse_next_items(None), [])
+
+    def test_parse_ignores_other_sections(self):
+        text = ("## Handoff -- t0002\n### Next\n- [ ] real item\n"
+                "### Blockers\n- [x] not a next item\n")
+        self.assertEqual(parse_next_items(text), [(False, "real item")])
+
+    def test_validate_accepts_checkbox_next(self):
+        s = make_session()
+        write_handoff(s.dir, "t0001",
+                      {"Next": "- [x] did one\n- [ ] do two"})
+        self.assertTrue(validate_handoff(s.dir, 1)[0])
+
+    def test_handoff_skipped_when_no_active_goals(self):
+        # No active goals -> the handoff gate is closed. Verify via
+        # active_goals(): empty list means _ensure_handoff is skipped.
+        from harness.session import active_goals
+        d = tempfile.mkdtemp()
+        (Path(d) / "sats").mkdir(parents=True, exist_ok=True)
+        (Path(d) / "sats" / "goals.md").write_text(
+            "- [done] Finished work\n", encoding="utf-8")
+        self.assertEqual(active_goals(Path(d)), [])
 
 
 if __name__ == "__main__":
