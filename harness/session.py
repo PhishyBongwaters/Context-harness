@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from .context import stamp
+from .handoff import HANDOFF_TEMPLATE
 
 SAT_FILES = {
     "current": ("# Current task\n\nWhat you are actively working on right "
@@ -28,6 +29,7 @@ SAT_FILES = {
                    "one line each. Things you suspect but haven't verified. "
                    "Prune ruthlessly -- promote to facts when confirmed, "
                    "delete when disproven.\n"),
+    "handoff": HANDOFF_TEMPLATE,
 }
 
 INDEX_TEMPLATE = """# Index
@@ -42,6 +44,7 @@ writes it.
 - sats/decisions.md
 - sats/tasks.md
 - sats/hypotheses.md
+- sats/handoff.md
 
 ## episodes
 """

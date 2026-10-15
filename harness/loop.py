@@ -32,6 +32,9 @@ from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
 from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
+from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
+                      HANDOFF_PROMPT_PARAGRAPH, ensure_handoff_file,
+                      handoff_size, validate_handoff)
 
 MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
@@ -43,8 +46,9 @@ genuinely needs them. You are on {os_name}; your working directory is
 {workdir}.
 
 Each turn the harness assembles your context from sources, in order:
-satellite files (current task, goals, facts, decisions, tasks --
-durable one-liners), history.md (the conversation record), and
+satellite files (handoff -- this turn's shift board -- plus current task,
+goals, facts, decisions, tasks -- durable one-liners), history.md (the
+conversation record), and
 scratch.md (this episode's working notes: recent replies and tool
 results). There is no other memory. The assembled text below IS your context -- it is also saved
 to {ctx_path}, but never read that file: it duplicates what you can
@@ -70,7 +74,7 @@ new_text, which must match exactly once):
   active context is the scarce resource, and spending a fraction of
   budget on a subagent to keep it clean is the win. Never apologize
   for delegating; apologize for bloating your own context instead.
-
+""" + HANDOFF_PROMPT_PARAGRAPH + """
 Harness-owned files cannot be touched: prompt.md, state.json,
 index.md, scratch.md, archive/, {ctx_path}. Write is rejected on all
 session sources -- use edit. Read is rejected on {ctx_path}: the
@@ -112,7 +116,7 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
   {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
-  {sats_dir}/decisions.md, {sats_dir}/tasks.md,
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md, {sats_dir}/handoff.md,
   {sats_dir}/hypotheses.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
@@ -400,6 +404,69 @@ class Loop:
                 self._emit("auto-dedupe", {"dropped": dropped})
         except Exception:
             pass
+
+    def _ensure_handoff(self, session: Session, turn_no: int,
+                          system: str, messages: list[dict]) -> bool:
+        """Validate sats/handoff.md at the turn boundary (issue #5).
+
+        Freshness, shape and size are machine-checked. A stale, missing
+        or malformed handoff triggers forced handoff rounds: the model
+        gets the assembled context plus a nudge and edit-only tools,
+        and must rewrite the handoff before the turn may end.
+
+        Returns True when the handoff is valid. After
+        HANDOFF_MAX_ATTEMPTS failed rounds it emits "handoff-invalid"
+        and returns False -- the turn still closes. Loud, never
+        blocking: a broken handoff must not wedge the session.
+        """
+        ok, reason = validate_handoff(session.dir, turn_no)
+        if ok:
+            lines, tokens = handoff_size(session.dir)
+            self._emit("handoff", {"turn": turn_no, "lines": lines,
+                                   "tokens": tokens})
+            return True
+        turn_stamp = f"t{turn_no:04d}"
+        handoff_path = str(session.dir / "sats" / "handoff.md")
+        for attempt in range(HANDOFF_MAX_ATTEMPTS):
+            self._check_stop()
+            # Defensive: the model has exec, so the file can vanish
+            # between validation and the forced round. Restore the
+            # shape; the model still has to fill it.
+            ensure_handoff_file(session.dir)
+            nudge = HANDOFF_NUDGE.format(handoff_path=handoff_path,
+                                         turn_stamp=turn_stamp,
+                                         reason=reason)
+            handoff_messages = (messages
+                                + [{"role": "user", "content": nudge}])
+            try:
+                bd = self._measure(self.provider, system,
+                                   handoff_messages, self._prune_tools)
+                self._emit("request",
+                           {"phase": "handoff",
+                            "attempt": attempt + 1,
+                            "tokens_est": bd["total"],
+                            "status": self.budget.status(bd["total"])})
+                resp = self.provider.chat(
+                    system=system,
+                    messages=handoff_messages + self._note(bd),
+                    tools=self._prune_tools)
+            except Exception as e:  # provider blew up: count the
+                # attempt, keep the turn closable.
+                reason = (f"handoff round {attempt + 1} failed: "
+                          f"{type(e).__name__}")
+                continue
+            self._check_stop()
+            for tc in resp.get("tool_calls") or []:
+                self._execute_tool(session, tc)
+            ok, reason = validate_handoff(session.dir, turn_no)
+            if ok:
+                lines, tokens = handoff_size(session.dir)
+                self._emit("handoff", {"turn": turn_no,
+                                       "attempt": attempt + 1,
+                                       "lines": lines, "tokens": tokens})
+                return True
+        self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
+        return False
 
     @staticmethod
     def _append_source(session: Session, name: str, text: str) -> None:
@@ -959,11 +1026,15 @@ class Loop:
         return gate(messages) < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
+        # The harness-owned turn counter increments first: the handoff
+        # the model writes this turn must carry this turn's stamp.
+        turn_no = next_turn(session.dir)
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
                              workdir=session.workdir,
-                             include_text=self.include_text)
+                             include_text=self.include_text,
+                             turn_no=turn_no)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
@@ -977,8 +1048,8 @@ class Loop:
         else:
             self._turn_seq += 1
         # The user's message joins history.md first, stamped with the
-        # harness-owned turn counter (T6).
-        turn_no = next_turn(session.dir)
+        # harness-owned turn counter (T6). turn_no was assigned at the
+        # top of run_turn so the handoff stamp matches this turn.
         self._append_source(session, "history.md",
                             render_history_user(user_text, turn_no))
         warned = False
@@ -1069,6 +1140,12 @@ class Loop:
                     # leak into and kill the next turn.
                     self._stop_event.clear()
                     self._auto_dedupe(session)
+                    # Handoff-per-turn (issue #5): the turn may only end
+                    # with a fresh handoff. Stale/missing triggers a
+                    # forced handoff round; persistent failure is loud
+                    # but never blocks the close.
+                    self._ensure_handoff(session, turn_no, system,
+                                         messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.

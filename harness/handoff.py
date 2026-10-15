@@ -1,0 +1,148 @@
+"""Handoff-per-turn: every turn ends with a shift handoff (issue #5).
+
+The model tracks "next" as well as "now" in sats/handoff.md, rewritten
+every turn. The harness validates freshness / shape / size at the turn
+boundary; a stale or missing handoff triggers a forced handoff round.
+This is the write-path thesis applied to the handoff itself: governed
+writes, not polite requests.
+
+Pure functions here; the Loop owns the enforcement timing.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+HANDOFF_SECTIONS = ("Now", "Next", "Blockers", "Pointers")
+HANDOFF_MAX_LINES = 40
+HANDOFF_MAX_ATTEMPTS = 2
+
+HANDOFF_TEMPLATE = """# Handoff
+
+Your shift handoff to your next self. Rewrite this whole file at the
+end of every turn -- never append. There is no other memory: anything
+not in the sats or history is gone when this turn ends.
+
+## Handoff -- t0000
+### Now
+(nothing yet -- first turn)
+### Next
+(read the task and decide the first step)
+### Blockers
+(none yet)
+### Pointers
+(sats/current.md)
+"""
+
+# Single source for the handoff guidance. loop.py splices it into
+# SYSTEM_PROMPT for new sessions; assembly.py appends it as a load-time
+# addendum for sessions whose prompt.md predates it. {sdir} and
+# {turn_stamp} are filled by load_prompt's placeholder substitution.
+HANDOFF_PROMPT_PARAGRAPH = """
+HANDOFF (every turn ends with one -- this is how you survive the night):
+  {sdir}/sats/handoff.md -- your shift handoff to your next self. There
+    is no other memory: pruned and archived turns leave your context,
+    and anything not written into the sats or history is gone. Assume
+    each turn is a handoff -- the next turn wakes up knowing ONLY what
+    is in the assembled sources.
+  Rewrite the whole handoff at the end of every turn, before you finish:
+    ## Handoff -- {turn_stamp}
+    ### Now -- where things stand (2-4 lines, not a biography)
+    ### Next -- the intended next steps, in order; the hypothesis in
+      flight and what would prove or disprove it; dead ends already
+      tried, one line each
+    ### Blockers -- what is stuck, and what would unstick it
+    ### Pointers -- where the state lives (file paths, sat sections),
+      never copies of the state itself
+  Rules: rewrite, never append. Under 40 lines -- it is a shift board,
+  not a biography. "Unchanged -- still <reason>" is a legal handoff,
+  but the stamp must read {turn_stamp}. The harness checks the handoff
+  before your turn ends; a stale or missing handoff sends you back for
+  one more round.
+"""
+HANDOFF_PROMPT_MARKER = "HANDOFF (every turn ends with one"
+
+# Forced-round nudge: a user-role message, built per turn in the Loop.
+# {reason} carries the validator's complaint so the model knows exactly
+# what failed. .format() fields only -- no other braces in this string.
+HANDOFF_NUDGE = (
+    "HANDOFF REQUIRED before this turn can end: rewrite "
+    "{handoff_path} with the edit tool so its header reads "
+    "\"## Handoff -- {turn_stamp}\" and all four sections "
+    "(Now / Next / Blockers / Pointers) are current. {reason} "
+    "Do the handoff now -- no other work this round."
+)
+
+_HEADER_RE = re.compile(r"(?m)^## Handoff -- t(\d{4})\s*$")
+_SECTION_RES = {
+    name: re.compile(r"(?m)^### " + re.escape(name) + r"\s*$")
+    for name in HANDOFF_SECTIONS
+}
+
+
+def parse_handoff(text: str) -> dict | None:
+    """Parse a handoff file. None when there is no handoff header."""
+    m = _HEADER_RE.search(text or "")
+    if not m:
+        return None
+    return {
+        "stamp": int(m.group(1)),
+        "sections": {n: bool(rx.search(text))
+                     for n, rx in _SECTION_RES.items()},
+        "lines": len(text.splitlines()),
+    }
+
+
+def validate_handoff(sdir: str | Path, turn_no: int) -> tuple[bool, str]:
+    """Check sats/handoff.md for this turn.
+
+    Returns (True, "") or (False, reason). Freshness, not novelty: an
+    "Unchanged" handoff is legal as long as the stamp is this turn's.
+    """
+    p = Path(sdir) / "sats" / "handoff.md"
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False, "sats/handoff.md is missing -- rewrite it"
+    parsed = parse_handoff(text)
+    if parsed is None:
+        return False, ("sats/handoff.md has no '## Handoff -- tNNNN' "
+                       "header -- rewrite it in the required shape")
+    if parsed["stamp"] != turn_no:
+        return False, (
+            f"handoff stamp is t{parsed['stamp']:04d} but this turn is "
+            f"t{turn_no:04d} -- rewrite it")
+    missing = [n for n, ok in parsed["sections"].items() if not ok]
+    if missing:
+        return False, (
+            "handoff is missing section(s): "
+            + ", ".join(f"### {n}" for n in missing))
+    if parsed["lines"] > HANDOFF_MAX_LINES:
+        return False, (
+            f"handoff is {parsed['lines']} lines (cap {HANDOFF_MAX_LINES}) "
+            "-- trim it to a shift board, not a biography")
+    return True, ""
+
+
+def ensure_handoff_file(sdir: str | Path) -> None:
+    """Recreate sats/handoff.md from the template when absent.
+
+    Defensive: the model has exec, so the file can disappear between
+    validation and the forced round. The harness restores the shape;
+    the model still has to fill it.
+    """
+    p = Path(sdir) / "sats" / "handoff.md"
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(HANDOFF_TEMPLATE, encoding="utf-8")
+
+
+def handoff_size(sdir: str | Path) -> tuple[int, int]:
+    """(lines, tokens) of the current handoff -- the dumping canary."""
+    from .context import count_tokens
+    try:
+        text = (Path(sdir) / "sats" / "handoff.md").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, 0
+    return len(text.splitlines()), count_tokens(text)
