@@ -79,6 +79,11 @@ new_text, which must match exactly once):
     decisions with reasons, open tasks
   {sdir}/sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
 
+  Write live: update sats/current.md as you make progress, not just
+  at turn end. If the turn is interrupted, current.md is what survives
+  -- scratch is wiped and the handoff may never be written. A turn
+  that dies with its progress only in scratch has lost that progress.
+
   The sats above are already IN your context this turn, assembled as
   `## sat <name>` sections. Never `read` a sat file to see its
   contents -- that burns a tool call and bloats scratch with a copy
