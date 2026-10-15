@@ -51,6 +51,8 @@ DEFAULTS = {
     "auto_continue_max_turns": 10,  # auto-turn cap per user message
     "handoff_canary_tokens": 38000,  # warn agent to wrap up when turn context hits this
     "sat_max_lines": 100,  # warn when any sat (other than handoff.md) exceeds this
+    "sat_cold_after_hours": 24,  # warn when a sat hasn't been modified in this long
+    "history_warn_after_turns": 50,  # warn when history exceeds this many turns
     "mode": "analyze",  # analyze (read-only on target) or build (may modify code)
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
@@ -428,6 +430,13 @@ class Config:
     # Sat bloat (issue #7): warn when any sat other than handoff.md
     # exceeds this many lines.
     sat_max_lines: int = 100
+    # Stale sats (issue #8): warn when a sat hasn't been modified in
+    # this many hours. 0 disables.
+    sat_cold_after_hours: int = 24
+    # History compression (issue #9): warn when history exceeds this many
+    # turns. 0 disables. Full auto-summarization is future work; v1 just
+    # surfaces the signal so the agent can curate.
+    history_warn_after_turns: int = 50
     # Mode: "analyze" (read-only on the target codebase; writes go to
     # sats/ only) or "build" (may modify code in the workdir).
     mode: str = "analyze"
