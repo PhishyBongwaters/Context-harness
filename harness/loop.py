@@ -1310,9 +1310,11 @@ class Loop:
                     # Handoff-per-turn (issue #5): the turn may only end
                     # with a fresh handoff. Stale/missing triggers a
                     # forced handoff round; persistent failure is loud
-                    # but never blocks the close.
-                    self._ensure_handoff(session, turn_no, system,
-                                         messages)
+                    # but never blocks the close. Skip when no goals are
+                    # active -- there's no work to hand off.
+                    if active_goals(session.dir):
+                        self._ensure_handoff(session, turn_no, system,
+                                             messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
