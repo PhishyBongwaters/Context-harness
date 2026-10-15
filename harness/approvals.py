@@ -143,6 +143,10 @@ class Policy:
             target = self.resolve(args.get("path") or ".")
             key = f"list_dir:{target}"
             return ALLOW, "list globally allowed", key
+        if name == "search":
+            target = self.resolve(args.get("path") or ".")
+            key = f"search:{target}"
+            return ALLOW, "search globally allowed", key
         if name == "tokens":
             if not args.get("path"):
                 return ALLOW, "counting literal text", "tokens:<literal>"
