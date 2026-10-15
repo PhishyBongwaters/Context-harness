@@ -69,7 +69,7 @@ def _new_session(cfg, workdir: str) -> Session:
     sdir = sessions / sid
     sdir.mkdir(parents=True, exist_ok=True)
     _set_current(sessions, sid)
-    return Session(id=sid, dir=sdir, workdir=workdir)
+    return Session(id=sid, dir=sdir, workdir=workdir, mode=cfg.mode)
 
 
 def _dry_run(cfg, args, sess: Session) -> int:
@@ -111,7 +111,8 @@ def _open_session(cfg, sid: str | None, workdir: str) -> Session:
     if sid is None:
         return _new_session(cfg, workdir)
     _set_current(sessions, sid)
-    return Session(id=sid, dir=sessions / sid, workdir=workdir)
+    return Session(id=sid, dir=sessions / sid, workdir=workdir,
+                   mode=cfg.mode)
 
 
 def _save_session_model(session: Session, provider: str, model: str) -> None:
@@ -667,6 +668,7 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                     else cfg.auto_continue_max_turns),
                 handoff_canary_tokens=cfg.handoff_canary_tokens,
                 sat_max_lines=cfg.sat_max_lines,
+                mode=cfg.mode,
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
