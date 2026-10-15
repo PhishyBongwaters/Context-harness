@@ -130,6 +130,14 @@ class Policy:
     def in_roots(self, path: Path) -> bool:
         return any(_is_within(path, r) for r in self.roots())
 
+    def _is_curated(self, path: Path) -> bool:
+        """The agent's own memory files: history.md and sats/*. The
+        system prompt grants standing permission to curate these
+        without approval; the policy honors that here."""
+        if path == self.session_dir / "history.md":
+            return True
+        return _is_within(path, self.session_dir / "sats")
+
     def check(self, name: str, args: dict) -> tuple[str, str, str]:
         """Return (decision, reason, session_key)."""
         args = args or {}
@@ -161,6 +169,8 @@ class Policy:
             bad = _has_deny_part(target)
             if bad:
                 return DENY, f"never writes under *.{bad} directories", key
+            if self._is_curated(target):
+                return ALLOW, "model curating its own memory", key
             if self.in_roots(target):
                 return ASK, f"{name} {target} (approvable for session)", key
             return ASK, f"{name} outside allowed roots: {target}", key
