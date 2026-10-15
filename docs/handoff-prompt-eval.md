@@ -113,3 +113,11 @@ Residuals for later phases: empty-section gaming, multi-turn
 cap and by the fact that the handoff's victim is the agent itself.
 Phase 2 (caps/canary/prune integration) can tighten these if the
 kernel-scale acceptance run shows they matter in practice.
+
+## Next: live test drive
+
+The kernel-scale acceptance run is specified in
+`docs/handoff-kernel-testdrive.md`: a buffered `write()` trace on ext4
+from syscall entry to block-layer submission, chosen because it forces
+long-horizon tracking, deliberate dead ends, and bloat pressure — the
+three things the handoff exists to handle.
