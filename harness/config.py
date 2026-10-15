@@ -48,7 +48,7 @@ DEFAULTS = {
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "auto_continue": False,  # start another turn while a goal is [active]
-    "auto_continue_max_turns": 3,  # auto-turn cap per user message
+    "auto_continue_max_turns": 10,  # auto-turn cap per user message
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -418,7 +418,7 @@ class Config:
     # Goal-driven auto-continue: start another full turn while any goal
     # is [active] (docs/goal-auto-continue-spec.md). Default off.
     auto_continue: bool = False
-    auto_continue_max_turns: int = 3
+    auto_continue_max_turns: int = 10
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
