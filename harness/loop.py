@@ -79,6 +79,13 @@ new_text, which must match exactly once):
     decisions with reasons, open tasks
   {sdir}/sats/hypotheses.md -- half-formed ideas, unproven suspicions (prune ruthlessly)
 
+  The sats above are already IN your context this turn, assembled as
+  `## sat <name>` sections. Never `read` a sat file to see its
+  contents -- that burns a tool call and bloats scratch with a copy
+  of what you can already see, exactly like reading context.md would.
+  When a sat needs updating, `edit` it directly; you already know
+  what it says.
+
   Heavy curation (large histories, many files to triage): prefer
   `delegate` -- a subagent does the reading and editing in its own
   context; you read back only its result file. The noise never enters
