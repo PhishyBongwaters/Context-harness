@@ -89,7 +89,7 @@ machinery.
 
 ```ini
 auto_continue = false          # default off; existing behavior unchanged
-auto_continue_max_turns = 3    # cap per user message
+auto_continue_max_turns = 10   # cap per user message
 ```
 
 Session flags `--auto-continue` / `--no-auto-continue` override the
