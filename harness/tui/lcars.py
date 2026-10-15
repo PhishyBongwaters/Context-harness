@@ -14,6 +14,12 @@ import subprocess
 import time
 from pathlib import Path
 
+try:
+    from .._build import get_build as _get_build
+    _BUILD = _get_build()
+except Exception:
+    _BUILD = "dev"
+
 # Classic TNG LCARS palette (hex).
 LCARS = {
     "orange":     "#FF9900",
@@ -42,6 +48,7 @@ def header_segments(title: str, width: int, phase: int = 0,
                     running: bool = False, spin: int = 0,
                     alert: str | None = None, flash: bool = False,
                     turn_flash: bool = False, marquee: int = 0,
+                    build: str | None = None,
                     ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS header bar.
 
@@ -94,8 +101,11 @@ def header_segments(title: str, width: int, phase: int = 0,
     right = [(turn_txt, turn_bg, _FG),
              (" ", LCARS["black"], _FG),
              (budget_txt, LCARS["peach"], _FG),
-             (" ", LCARS["black"], _FG),
-             (spin_txt, accent, _FG)]
+             (" ", LCARS["black"], _FG)]
+    if build:
+        right.append((f" {build} ", LCARS["sky"], _FG))
+        right.append((" ", LCARS["black"], _FG))
+    right.append((spin_txt, accent, _FG))
     if alert:
         # Blinking alert pill; always present (dim when "off") so the
         # bar width never jumps between phases.
@@ -340,7 +350,8 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 alert=self._alert,
                 flash=now < self._flash_until,
                 turn_flash=now < self._turn_flash_until,
-                marquee=self._marquee))
+                marquee=self._marquee,
+                build=_BUILD))
 
     class LcarsCharms(Static):
         """LCARS charm strip under the header: decorative pills,
