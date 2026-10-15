@@ -244,3 +244,39 @@ Red-first per task, existing suite stays green throughout:
    count, wired to the model as a plain user-role message.
 4. Stamps are stripped on the wire. Harness bookkeeping only; recency
    is communicated by section order.
+
+## 12. Context Hygiene (2026-10-15, issues #7, #10, #11)
+
+### Handoff Canary (#11)
+When the measured turn context reaches `handoff_canary_tokens` (default
+38000), the harness emits a `handoff-canary` event and injects a
+system-role message telling the model to start wrapping up and rewrite
+`sats/handoff.md`. Fires once per turn; resets on the next turn. Set to
+0 to disable.
+
+### Sat Bloat Check (#7)
+At turn end, the harness checks all sats (except `handoff.md`, which has
+its own 40-line cap with enforcement). If any sat exceeds `sat_max_lines`
+(default 100), a `sat-bloat` event is emitted. Warning only; the agent is
+expected to trim.
+
+### Redundant Reads (#10)
+The harness tracks files read via the `read` tool per episode. If the
+agent reads the same file twice in one episode, a `redundant-read` event
+is emitted. Non-blocking; the read still happens. Tracking clears on
+episode close.
+
+## 13. Mode: Analyze vs Build (2026-10-15)
+
+The harness declares an explicit `mode` (config `mode`, default
+`"analyze"`):
+
+- **`analyze`**: The agent is here to analyze, not to modify. The target
+  codebase is read-only. Writes go to `sats/` (working notes) and
+  `history.md` only.
+- **`build`**: The agent is here to build. It may `write` and `edit`
+  files in the workdir to implement the task.
+
+The mode is injected into the system prompt at session init. This
+prevents the agent from trying to write to the repo during trace/analysis
+tasks.
