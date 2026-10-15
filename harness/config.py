@@ -49,6 +49,8 @@ DEFAULTS = {
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "auto_continue": False,  # start another turn while a goal is [active]
     "auto_continue_max_turns": 10,  # auto-turn cap per user message
+    "handoff_canary_tokens": 38000,  # warn agent to wrap up when turn context hits this
+    "sat_max_lines": 100,  # warn when any sat (other than handoff.md) exceeds this
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -419,6 +421,12 @@ class Config:
     # is [active] (docs/goal-auto-continue-spec.md). Default off.
     auto_continue: bool = False
     auto_continue_max_turns: int = 10
+    # Handoff canary (issue #11): warn the agent mid-turn when context
+    # hits this many tokens, so it starts wrapping up for the handoff.
+    handoff_canary_tokens: int = 38000
+    # Sat bloat (issue #7): warn when any sat other than handoff.md
+    # exceeds this many lines.
+    sat_max_lines: int = 100
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
