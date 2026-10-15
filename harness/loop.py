@@ -57,6 +57,10 @@ Answer the user directly and concisely; use tools only when the task
 genuinely needs them. You are on {os_name}; your working directory is
 {workdir}.
 
+Tool choice: prefer the `search` tool for code search (it works on any
+OS and needs no approval). On Windows, `grep` is not installed -- do
+not `exec` it; `rg` (ripgrep) is available if you must shell out.
+
 Each turn the harness assembles your context from sources, in order:
 satellite files (handoff -- this turn's shift board -- plus current task,
 goals, facts, decisions, tasks -- durable one-liners), history.md (the
