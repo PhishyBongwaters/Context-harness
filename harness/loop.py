@@ -52,6 +52,21 @@ AUTO_CONTINUE_TEMPLATE = (
     "Continue working it; your handoff's Next says where."
 )
 
+# Mode-specific write rules for the system prompt.
+MODE_WRITE_RULES = {
+    "analyze": (
+        "You are here to analyze, not to modify. Never `write` or `edit` "
+        "files in the codebase you are studying -- those are read-only. "
+        "Your writes go to `sats/` (your working notes) and `history.md` "
+        "only."
+    ),
+    "build": (
+        "You are here to build. You may `write` and `edit` files in the "
+        "workdir to implement the task. Do not modify files outside the "
+        "workdir unless the task explicitly says to."
+    ),
+}
+
 SYSTEM_PROMPT = """You are a helpful AI assistant running inside a context-as-file harness.
 Answer the user directly and concisely; use tools only when the task
 genuinely needs them. You are on {os_name}; your working directory is
@@ -61,11 +76,8 @@ Tool choice: prefer the `search` tool for code search (it works on any
 OS and needs no approval). On Windows, `grep` is not installed -- do
 not `exec` it; `rg` (ripgrep) is available if you must shell out.
 
-Write discipline: you are here to analyze, not to modify. Never
-`write` or `edit` files in the codebase you are studying -- those are
-read-only. Your writes go to `sats/` (your working notes) and
-`history.md` only. If the task explicitly asks you to modify code,
-it will say so.
+Write discipline (mode: {mode}):
+{MODE_WRITE_RULES}
 
 Each turn the harness assembles your context from sources, in order:
 satellite files (handoff -- this turn's shift board -- plus current task,
@@ -193,6 +205,7 @@ class Session:
     id: str
     dir: Path
     workdir: str
+    mode: str = "analyze"
     context: ContextFile = field(init=False)
 
     def __post_init__(self):
@@ -200,7 +213,10 @@ class Session:
         # scratch, archive. Idempotent -- re-opening keeps everything.
         # context.md is the assembled artifact (T3/T6), not a transcript.
         from .session import init_layout
-        init_layout(self.dir, SYSTEM_PROMPT)
+        rules = MODE_WRITE_RULES.get(self.mode, MODE_WRITE_RULES["analyze"])
+        prompt = SYSTEM_PROMPT.replace("{mode}", self.mode).replace(
+            "{MODE_WRITE_RULES}", rules)
+        init_layout(self.dir, prompt)
         self.context = ContextFile(self.dir / "context.md")
 
 
@@ -262,7 +278,8 @@ class Loop:
                  auto_continue: bool = False,
                  auto_continue_max_turns: int = 10,
                  handoff_canary_tokens: int = 38000,
-                 sat_max_lines: int = 100):
+                 sat_max_lines: int = 100,
+                 mode: str = "analyze"):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -304,6 +321,8 @@ class Loop:
             self._sat_max_lines = max(0, int(sat_max_lines))
         except (TypeError, ValueError):
             self._sat_max_lines = 0
+        # Mode: "analyze" (read-only) or "build" (may modify code).
+        self._mode = mode if mode in ("analyze", "build") else "analyze"
         # Redundant reads (issue #10): files read this episode, for
         # duplicate detection. Cleared on episode close.
         self._files_read = set()
