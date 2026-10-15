@@ -112,8 +112,8 @@
     <text x="720" y="718" class="body">results -> scratch.md</text>
     <text x="720" y="736" class="note">auto-dedupe</text>
   </g>
-  <polyline points="700,707 150,707 150,360 246,360" fill="none" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="158" y="530" class="note">next step</text>
+  <polyline points="950,707 965,707 965,330 790,330" fill="none" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="958" y="620" text-anchor="end" class="note">next step</text>
 
   <!-- NO from tools? -->
   <text x="534" y="774" class="branch">no</text>
