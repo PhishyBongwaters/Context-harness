@@ -1,7 +1,8 @@
 # Goal-driven auto-continue — specification
 
-Status: **proposed** (spec only; no implementation). Follow-on to the
-handoff-per-turn feature (issue #5).
+Status: **implemented** on `feat/handoff-per-turn` (12 tests in
+`tests/test_auto_continue.py`). Follow-on to the handoff-per-turn
+feature (issue #5).
 
 ## Problem
 

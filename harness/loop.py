@@ -22,9 +22,9 @@ from pathlib import Path
 from .assembly import assemble, load_prompt, write_assembled
 from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
-                      render_history_user, render_tool,
+                      render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import next_turn
+from .session import active_goals, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -40,6 +40,17 @@ from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
 MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
+
+# Goal-driven auto-continue (docs/goal-auto-continue-spec.md): the
+# synthesized turn-opening message for a harness-initiated turn.
+# Recorded verbatim in history.md under `## auto tNNNN`.
+# NOTE: %-style placeholders, not str.format -- the goal text is
+# model/user-controlled and may contain curly braces; %-formatting
+# only interprets the template, never the values.
+AUTO_CONTINUE_TEMPLATE = (
+    "[auto-continue %d/%d] Active goal: %s. "
+    "Continue working it; your handoff's Next says where."
+)
 
 SYSTEM_PROMPT = """You are a helpful AI assistant running inside a context-as-file harness.
 Answer the user directly and concisely; use tools only when the task
@@ -219,7 +230,9 @@ class Loop:
                  provider_factory=None,
                  include_text: str | None = None,
                  include_subagents: bool = False,
-                 user_tool_paths: list | None = None):
+                 user_tool_paths: list | None = None,
+                 auto_continue: bool = False,
+                 auto_continue_max_turns: int = 3):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -238,6 +251,17 @@ class Loop:
         # User include text: appended to system prompt under "# User includes".
         self.include_text = include_text
         self.include_subagents = include_subagents
+        # Goal-driven auto-continue (docs/goal-auto-continue-spec.md):
+        # when a turn ends with any `- [active]` goal, the harness
+        # starts another full turn instead of waiting for input, up to
+        # auto_continue_max_turns per user message. Default off.
+        # Subagents never auto-continue (out of scope for v1).
+        self.auto_continue = bool(auto_continue)
+        try:
+            self._auto_continue_max_turns = max(
+                0, int(auto_continue_max_turns))
+        except (TypeError, ValueError):
+            self._auto_continue_max_turns = 0
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -1093,6 +1117,58 @@ class Loop:
         return gate(messages) < self.budget.hard
 
     def run_turn(self, session: Session, user_text: str) -> str:
+        """Run one user turn, then auto-continue while goals are active.
+
+        Goal-driven auto-continue
+        (docs/goal-auto-continue-spec.md): when a turn ends with any
+        `- [active]` goal in sats/goals.md and auto_continue is enabled,
+        the harness starts another full turn instead of waiting for
+        input, up to auto_continue_max_turns per user message. Each
+        auto-turn is a complete turn (assembly, budget, model steps,
+        handoff validation, episode close) recorded under
+        `## auto tNNNN`. The chain stops on: no active goals, cap
+        reached, user interrupt, or a stop arriving between turns.
+        Returns the last turn's reply.
+        """
+        max_auto = (self._auto_continue_max_turns
+                    if self.auto_continue else 0)
+        text = user_text
+        is_auto = False
+        auto_index = 0
+        content = ""
+        while True:
+            content, interrupted = self._run_turn_once(
+                session, text, is_auto=is_auto)
+            if interrupted:
+                # User interrupt stops the whole chain, not just the turn.
+                return content
+            if self._stop_event.is_set():
+                # Stop arrived between turns: honor it, don't chain.
+                self._stop_event.clear()
+                self._emit("interrupted", {})
+                return content
+            if auto_index >= max_auto:
+                return content
+            goals = active_goals(session.dir)
+            if not goals:
+                return content
+            auto_index += 1
+            is_auto = True
+            # %-formatting: the goal text may contain braces; it must
+            # never be interpreted as a format string.
+            text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
+                                             goals[0])
+            self._emit("auto-continue",
+                       {"index": auto_index, "max_turns": max_auto,
+                        "goal": goals[0]})
+
+    def _run_turn_once(self, session: Session, user_text: str, *,
+                       is_auto: bool = False) -> tuple[str, bool]:
+        """Run a single turn. Returns (reply, interrupted).
+
+        interrupted is True when the user stopped the turn; the caller
+        (run_turn's auto-continue chain) must not start another turn.
+        """
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
@@ -1106,7 +1182,7 @@ class Loop:
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
             self._emit("interrupted", {})
-            return ""
+            return "", True
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -1114,11 +1190,15 @@ class Loop:
                                  for t in self.tracker.turns) + 1
         else:
             self._turn_seq += 1
-        # The user's message joins history.md first, stamped with the
-        # harness-owned turn counter (T6). turn_no was assigned at the
-        # top of run_turn so the handoff stamp matches this turn.
+        # The turn's opening message joins history.md first, stamped with
+        # the harness-owned turn counter (T6). turn_no was assigned at the
+        # top of _run_turn_once so the handoff stamp matches this turn.
+        # Auto-turns are labeled `## auto`, never `## user`: the record
+        # must distinguish user-initiated from harness-initiated turns.
+        render_opening = (render_history_auto if is_auto
+                          else render_history_user)
         self._append_source(session, "history.md",
-                            render_history_user(user_text, turn_no))
+                            render_opening(user_text, turn_no))
         warned = False
 
         try:
@@ -1217,7 +1297,7 @@ class Loop:
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
                     self._close_episode(session, turn_no, content or "")
-                    return content or ""
+                    return content or "", False
                 for tc in tool_calls:
                     self._check_stop()
                     result = self._execute_tool(session, tc)
@@ -1228,6 +1308,6 @@ class Loop:
         except TurnInterrupted:
             self._stop_event.clear()
             self._emit("interrupted", {})
-            return ""
+            return "", True
         raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
                             f"finishing.")
