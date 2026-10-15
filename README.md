@@ -82,7 +82,9 @@ the harness archives scratch to `archive/<date>-t<NNNN>.md`, clears it,
 and appends a `## episode t<NNNN>` pointer to history (archive path,
 turn range, tool-call count). The closing reply is recorded to history
 automatically. Archived detail stays out of hot context but can be
-re-read deliberately by path — visible cost, no silent bloat.
+re-read deliberately by path — visible cost, no silent bloat. The
+memory architecture is diagrammed in `docs/memory-diagram.svg` — a
+design doc: it must stay true to the implementation.
 
 ## Budget
 
