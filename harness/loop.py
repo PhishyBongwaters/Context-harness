@@ -61,6 +61,12 @@ Tool choice: prefer the `search` tool for code search (it works on any
 OS and needs no approval). On Windows, `grep` is not installed -- do
 not `exec` it; `rg` (ripgrep) is available if you must shell out.
 
+Write discipline: you are here to analyze, not to modify. Never
+`write` or `edit` files in the codebase you are studying -- those are
+read-only. Your writes go to `sats/` (your working notes) and
+`history.md` only. If the task explicitly asks you to modify code,
+it will say so.
+
 Each turn the harness assembles your context from sources, in order:
 satellite files (handoff -- this turn's shift board -- plus current task,
 goals, facts, decisions, tasks -- durable one-liners), history.md (the
