@@ -665,6 +665,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                     if getattr(args, "auto_continue_max_turns", None)
                     is not None
                     else cfg.auto_continue_max_turns),
+                handoff_canary_tokens=cfg.handoff_canary_tokens,
+                sat_max_lines=cfg.sat_max_lines,
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
