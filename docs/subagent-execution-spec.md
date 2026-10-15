@@ -341,6 +341,23 @@ The key difference: the subagent's `sats/current.md` is initialized to
 the task string, and its `sats/goals.md` is derived from the parent's
 task context (e.g., "complete the subtask described in current.md").
 
+### 8.1 The handoff gate applies to subagents
+
+Deliberate decision (issue #5): subagents run the same `run_turn`, so
+`_ensure_handoff` fires with no `is_subagent` exemption. A subagent
+turn cannot end without a valid `sats/handoff.md`; stale/missing
+triggers forced rounds billed to the sub-budget, and persistent
+failure goes loud with `handoff-invalid` without blocking the close.
+
+Rationale: one loop, one rule — no special cases. The cost is one
+handoff write plus machine-side validation per delegate call. Today
+that handoff is written once and never read (each delegate spins up a
+fresh session; the parent harvests `result.md` and discards the
+rest), so the benefit is latent. It pays off the moment subagents get
+multi-turn sessions, and the discipline is already in place when they
+do. Revisit only if forced rounds ever measurably burn sub-budgets in
+practice.
+
 ## 9. Result passing
 
 When the parent calls `wait_subagent(id)`, the harness:
