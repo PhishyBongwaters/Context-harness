@@ -1020,7 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Disable goal-driven auto-continue for this session.")
     ap.add_argument("--auto-continue-max-turns", type=int, default=None,
                     help="Cap on auto-continue turns per user message "
-                         "(default from config, 3).")
+                         "(default from config, 10).")
     ap.add_argument("--request-timeout", type=int, default=None,
                     help="HTTP seconds per model call (default 120; raise "
                          "for huge prompts on slow local servers).")
