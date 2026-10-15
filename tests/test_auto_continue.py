@@ -55,12 +55,12 @@ class TestAutoContinueDefaults(unittest.TestCase):
     def test_config_defaults_off(self):
         cfg = Config()
         self.assertFalse(cfg.auto_continue)
-        self.assertEqual(cfg.auto_continue_max_turns, 3)
+        self.assertEqual(cfg.auto_continue_max_turns, 10)
 
     def test_loop_defaults_off(self):
         loop, _ = make_loop(MockProvider([]))
         self.assertFalse(loop.auto_continue)
-        self.assertEqual(loop._auto_continue_max_turns, 3)
+        self.assertEqual(loop._auto_continue_max_turns, 10)
 
     def test_bad_max_turns_coerced_safe(self):
         loop, _ = make_loop(MockProvider([]), auto_continue=True,
