@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, "tests")
 from test_loop import make_session  # noqa: E402
+from test_handoff import handoff_response  # noqa: E402
 
 from harness.assembly import assemble
 from harness.context import parse_transcript
@@ -79,7 +80,10 @@ class TestEpisodeClose(unittest.TestCase):
 
     def test_next_turn_sees_pointer_not_trace(self):
         s = make_session()
-        loop = Loop(MockProvider(tool_script() + [{"content": "again"}]),
+        script = ([tool_script()[0], handoff_response(s.dir, 1),
+                   {"content": "done"},
+                   handoff_response(s.dir, 2), {"content": "again"}])
+        loop = Loop(MockProvider(script),
                     Budget(100000, 80000))
         loop.run_turn(s, "do the thing")
         seen = []
@@ -115,7 +119,10 @@ class TestEpisodeClose(unittest.TestCase):
 
     def test_second_turn_closes_second_episode(self):
         s = make_session()
-        loop = Loop(MockProvider([{"content": "a"}, {"content": "b"}]),
+        loop = Loop(MockProvider([handoff_response(s.dir, 1),
+                                  {"content": "a"},
+                                  handoff_response(s.dir, 2),
+                                  {"content": "b"}]),
                     Budget(100000, 80000))
         loop.run_turn(s, "one")
         loop.run_turn(s, "two")

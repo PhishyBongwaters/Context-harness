@@ -10,6 +10,7 @@ import unittest
 
 sys.path.insert(0, "tests")
 from test_loop import make_session  # noqa: E402
+from test_handoff import handoff_response  # noqa: E402
 
 from harness.assembly import assemble
 from harness.context import parse_transcript
@@ -119,7 +120,10 @@ class TestParserOnAssembly(unittest.TestCase):
 
     def test_two_episode_pointers_in_order(self):
         s = make_session()
-        loop = Loop(MockProvider([{"content": "a"}, {"content": "b"}]),
+        loop = Loop(MockProvider([handoff_response(s.dir, 1),
+                                  {"content": "a"},
+                                  handoff_response(s.dir, 2),
+                                  {"content": "b"}]),
                     Budget(100000, 80000))
         loop.run_turn(s, "one")
         loop.run_turn(s, "two")

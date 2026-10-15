@@ -1,8 +1,12 @@
 import glob
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, "tests")
+from test_handoff import handoff_response  # noqa: E402
 
 from harness.context import (Budget, parse_transcript, render_history_user,
                                render_tool, render_user)
@@ -214,12 +218,12 @@ class TestLoop(unittest.TestCase):
         seen = [m for m in loop2.provider.calls[0]["messages"]
                 if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
-        # T7+H1: turn 2 assembles sats (5 user: current, goals,
-        # facts, decisions, tasks) + history (2 users + 1 episode
-        # pointer as user + 1 recorded closing reply as assistant).
-        # The tool trace is archived, not in hot context.
+        # T7+H1: turn 2 assembles sats (6 user: handoff first, then
+        # current, goals, facts, decisions, tasks) + history (2 users +
+        # 1 episode pointer as user + 1 recorded closing reply as
+        # assistant). The tool trace is archived, not in hot context.
         # The trailing harness note is filtered above.
-        self.assertEqual(roles, ["user"] * 7 + ["assistant", "user"])
+        self.assertEqual(roles, ["user"] * 8 + ["assistant", "user"])
         self.assertFalse(any(m["role"] == "tool" for m in seen))
         self.assertTrue(any("archive/" in (m.get("content") or "")
                             for m in seen))
@@ -252,13 +256,17 @@ class TestLoop(unittest.TestCase):
         # Separate janitor model handles the prune turn; the main model
         # only sees the resumed normal turn.
         s = self._bloated_session()
-        main = MockProvider([{"content": "all good"}])
+        main = MockProvider([handoff_response(s.dir, 1),
+                             {"content": "all good"}])
         janitor = MockProvider(self._curate_history_script(s))
         loop = Loop(main, prune_test_budget(s),
                     prune_provider=janitor)
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         self.assertEqual(len(janitor.calls), 2)  # prune chats
-        self.assertEqual(len(main.calls), 1)     # resumed normal chat
+        # Resumed normal chat: handoff-edit round + final reply. The
+        # scripted agent writes its handoff in-turn (the new contract),
+        # so no forced handoff round fires.
+        self.assertEqual(len(main.calls), 2)
         # Curation turns are edit-only now.
         self.assertEqual(janitor.calls[0]["tools"], ["edit"])
 
