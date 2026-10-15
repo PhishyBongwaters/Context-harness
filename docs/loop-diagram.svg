@@ -57,14 +57,15 @@
 
   <!-- ASSEMBLE -->
   <g>
-    <rect x="250" y="296" width="540" height="128" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
+    <rect x="250" y="296" width="540" height="150" rx="10" fill="#14202f" stroke="#5b8dd9" stroke-width="1.5"/>
     <text x="270" y="322" class="boxtitle" fill="#7ba7e0">ASSEMBLE — blank-slate, deterministic</text>
     <text x="270" y="346" class="body"><tspan class="gold" font-weight="700">sats/handoff.md</tspan>  L1 · the shift board</text>
     <text x="270" y="366" class="body">sats/current, goals, facts, decisions, tasks</text>
     <text x="270" y="386" class="code">history.md  ->  scratch.md</text>
     <text x="270" y="406" class="note">written to context.md (inspectable artifact)</text>
+    <text x="270" y="426" class="body">canary: ctx ≥ 38K? -> handoff-canary (wrap up)</text>
   </g>
-  <line x1="520" y1="424" x2="520" y2="448" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="446" x2="520" y2="470" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- BUDGET diamond -->
   <g>
@@ -122,7 +123,7 @@
 
   <!-- HANDOFF GATE -->
   <g>
-    <rect x="250" y="780" width="540" height="166" rx="10" fill="#2a2113" stroke="#d9a53b" stroke-width="1.5"/>
+    <rect x="250" y="780" width="540" height="188" rx="10" fill="#2a2113" stroke="#d9a53b" stroke-width="1.5"/>
     <text x="270" y="806" class="boxtitle gold">HANDOFF GATE</text>
     <text x="270" y="830" class="body">validate stamp / shape / 40-line cap</text>
     <text x="270" y="852" class="body">stale? -> forced round · edit-only · ≤ 2</text>
@@ -130,6 +131,7 @@
     <text x="270" y="896" class="note">persistent failure -> handoff-invalid (loud; turn still closes)</text>
     <text x="270" y="914" class="note">sizes -> handoff.json ledger (dumping canary)</text>
     <text x="270" y="932" class="note">no [active] goals? -> skip (no work to hand off)</text>
+    <text x="270" y="950" class="body">sat bloat: any sat > 100 lines? -> sat-bloat event</text>
   </g>
   <line x1="520" y1="928" x2="520" y2="952" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
 
