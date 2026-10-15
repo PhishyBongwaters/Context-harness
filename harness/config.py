@@ -47,6 +47,8 @@ DEFAULTS = {
     # or bare "model" (same provider). None = inherit the main model.
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
+    "auto_continue": False,  # start another turn while a goal is [active]
+    "auto_continue_max_turns": 3,  # auto-turn cap per user message
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -413,6 +415,10 @@ class Config:
     delegate_model: str | None = None
     exec_timeout: int = 60
     exec_timeout_max: int = 300
+    # Goal-driven auto-continue: start another full turn while any goal
+    # is [active] (docs/goal-auto-continue-spec.md). Default off.
+    auto_continue: bool = False
+    auto_continue_max_turns: int = 3
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
@@ -592,6 +598,9 @@ def load_config(path: str | Path | None = None,
         approval_timeout=int(merged.get("approval_timeout", 120)),
         exec_timeout=int(merged.get("exec_timeout", 60)),
         exec_timeout_max=int(merged.get("exec_timeout_max", 300)),
+        auto_continue=bool(merged.get("auto_continue", False)),
+        auto_continue_max_turns=int(
+            merged.get("auto_continue_max_turns", 3)),
         usage_note=bool(merged.get("usage_note", True)),
         request_timeout=int(merged.get("request_timeout", 120)),
         prune_request_timeout=(int(merged["prune_request_timeout"])

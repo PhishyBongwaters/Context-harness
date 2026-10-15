@@ -112,6 +112,15 @@ def render_history_user(content: str, turn: int) -> str:
     return f"## user {stamp(turn)}\n{content.rstrip()}\n"
 
 
+def render_history_auto(content: str, turn: int) -> str:
+    """History section for a harness-initiated (auto-continue) turn.
+
+    Labeled `## auto`, never `## user`: the record must always
+    distinguish user-initiated from harness-initiated turns.
+    """
+    return f"## auto {stamp(turn)}\n{content.rstrip()}\n"
+
+
 def render_history_assistant(content: str, turn: int) -> str:
     return f"## assistant {stamp(turn)}\n{content.rstrip()}\n"
 

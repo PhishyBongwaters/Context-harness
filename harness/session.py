@@ -292,6 +292,28 @@ def add_goal(sdir: str | Path, text: str) -> str:
     return "added"
 
 
+def active_goals(sdir: str | Path) -> list[str]:
+    """Return the texts of `- [active]` goals in sats/goals.md.
+
+    Empty list when the file is missing or has no active goals. Never
+    raises: a corrupt or unreadable file is treated as no goals, so a
+    broken goals sat can never wedge the auto-continue check.
+    """
+    try:
+        body = (Path(sdir) / "sats" / "goals.md").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    goals = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [active] "):
+            text = stripped[len("- [active] "):].strip()
+            if text:
+                goals.append(text)
+    return goals
+
+
 def load_state(sdir: str | Path) -> dict:
     """Read the harness-owned counters. Corrupt/missing -> zeros."""
     try:
