@@ -484,6 +484,10 @@ class Loop:
                            {"phase": "handoff",
                             "attempt": attempt + 1,
                             "tokens_est": bd["total"],
+                            "breakdown": bd,
+                            "hard": self.budget.hard,
+                            "soft": self.budget.soft,
+                            "window": self.budget.window,
                             "status": self.budget.status(bd["total"])})
                 resp = self.provider.chat(
                     system=system,
