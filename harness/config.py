@@ -49,6 +49,7 @@ DEFAULTS = {
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "auto_continue": False,  # start another turn while a goal is [active]
     "auto_continue_max_turns": 10,  # auto-turn cap per user message
+    "max_steps": 50,  # per-turn tool-call step limit (handoff written on hit)
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -419,6 +420,9 @@ class Config:
     # is [active] (docs/goal-auto-continue-spec.md). Default off.
     auto_continue: bool = False
     auto_continue_max_turns: int = 10
+    # Per-turn step limit: max tool-call iterations before the turn
+    # is force-closed (handoff written first). Default 50.
+    max_steps: int = 50
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
@@ -601,6 +605,7 @@ def load_config(path: str | Path | None = None,
         auto_continue=bool(merged.get("auto_continue", False)),
         auto_continue_max_turns=int(
             merged.get("auto_continue_max_turns", 3)),
+        max_steps=int(merged.get("max_steps", 50)),
         usage_note=bool(merged.get("usage_note", True)),
         request_timeout=int(merged.get("request_timeout", 120)),
         prune_request_timeout=(int(merged["prune_request_timeout"])
