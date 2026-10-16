@@ -314,22 +314,99 @@ def active_goals(sdir: str | Path) -> list[str]:
     return goals
 
 
+# Agent modes: advisory behavioral states, not restrictions.
+# ANALYZE: investigate and build a plan (no code changes).
+# EXECUTE: implement a spec, layer by layer, verifying each change.
+# REVIEW: read code, identify issues, produce a spec for changes.
+MODES = ("analyze", "execute", "review")
+DEFAULT_MODE = "analyze"
+
+
+def _coerce_mode(value) -> str:
+    """Return a valid mode string, falling back to DEFAULT_MODE."""
+    if isinstance(value, str) and value.lower() in MODES:
+        return value.lower()
+    return DEFAULT_MODE
+
+
 def load_state(sdir: str | Path) -> dict:
     """Read the harness-owned counters. Corrupt/missing -> zeros."""
     try:
         data = json.loads((Path(sdir) / "state.json")
                          .read_text(encoding="utf-8"))
         return {"turn": int(data.get("turn", 0)),
-                "section_seq": int(data.get("section_seq", 0))}
+                "section_seq": int(data.get("section_seq", 0)),
+                "mode": _coerce_mode(data.get("mode"))}
     except (OSError, ValueError, TypeError, AttributeError):
-        return {"turn": 0, "section_seq": 0}
+        return {"turn": 0, "section_seq": 0, "mode": DEFAULT_MODE}
 
 
 def save_state(sdir: str | Path, state: dict) -> None:
     (Path(sdir) / "state.json").write_text(
         json.dumps({"turn": int(state.get("turn", 0)),
-                    "section_seq": int(state.get("section_seq", 0))}),
+                    "section_seq": int(state.get("section_seq", 0)),
+                    "mode": _coerce_mode(state.get("mode"))}),
         encoding="utf-8")
+
+
+def get_mode(sdir: str | Path) -> str:
+    """Return the session's current mode (defaults to analyze)."""
+    return load_state(sdir)["mode"]
+
+
+def set_mode(sdir: str | Path, mode: str) -> str:
+    """Set the session's mode; returns the coerced mode actually stored."""
+    mode = _coerce_mode(mode)
+    state = load_state(sdir)
+    state["mode"] = mode
+    save_state(sdir, state)
+    return mode
+
+
+# Agent modes: advisory behavioral states. The mode guides the model's
+# approach but never restricts tool access. From the agent's own
+# self-review (docs/papers/Agent-Self-Review.md).
+MODE_PROMPTS = {
+    "analyze": """MODE: ANALYZE -- investigate and build a plan.
+
+You are in ANALYZE mode. Your job is to understand, not to change.
+- Reply: "I'll investigate and build a plan."
+- Build a top-level map first (entry points, major components, data flow),
+  then deepen layer by layer (functions, files, dependencies).
+- Track blocking points, side effects, and invariants separately from
+  the call chain.
+- Do NOT make code changes. Trace, document, and produce a spec clear
+  enough for execution.
+- Output: a spec listing every file/function to change, edge cases,
+  and verification steps.""",
+    "execute": """MODE: EXECUTE -- implement the spec, layer by layer.
+
+You are in EXECUTE mode. A spec from ANALYZE (or the user) guides you.
+- Make changes layer by layer, verifying each change before moving on.
+- Update tests alongside the changes.
+- Update sats as you go: current.md tracks progress, tasks.md tracks
+  open items. Do not let a turn end with progress only in scratch.
+- If the spec is ambiguous or wrong, stop and ask -- do not guess.""",
+    "review": """MODE: REVIEW -- read code, identify issues, produce a spec.
+
+You are in REVIEW mode. Your job is critical reading, not changes.
+- Read the existing code carefully.
+- Identify issues, improvements, and risks.
+- Produce a spec for changes: what to change, why, and the edge cases.
+- Do NOT implement the changes -- hand the spec back for EXECUTE mode
+  or the user.""",
+}
+
+_MODE_MARKER = "# Agent mode:"
+
+
+def mode_prompt_section(mode: str) -> str:
+    """Return the mode prompt section for the given mode."""
+    mode = mode.lower() if isinstance(mode, str) else DEFAULT_MODE
+    if mode not in MODE_PROMPTS:
+        mode = DEFAULT_MODE
+    label = mode.upper()
+    return f"{_MODE_MARKER} {label}\n\n{MODE_PROMPTS[mode]}"
 
 
 def next_turn(sdir: str | Path) -> int:
