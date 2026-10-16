@@ -668,6 +668,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                     else cfg.auto_continue_max_turns),
                 handoff_canary_tokens=cfg.handoff_canary_tokens,
                 sat_max_lines=cfg.sat_max_lines,
+                sat_cold_after_hours=cfg.sat_cold_after_hours,
+                history_warn_after_turns=cfg.history_warn_after_turns,
                 mode=cfg.mode,
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
@@ -1177,6 +1179,20 @@ def main(argv: list[str] | None = None) -> int:
             cfg, args, on_event=handler,
             approver=approver,
             usage_tracker=tracker, project=box["project"])
+        # Session provenance (meta.json): provider, model, mode, and the
+        # harness commit the session runs. First write wins; re-opening
+        # keeps the original provenance.
+        try:
+            from .session import write_provenance, harness_commit
+            _prov = box["loop"].provider
+            write_provenance(sess.dir, {
+                "harness_commit": harness_commit(),
+                "provider": getattr(_prov, "name", None),
+                "model": getattr(_prov, "model", None),
+                "mode": cfg.mode,
+            })
+        except Exception:
+            pass
         # Live values before first paint: localhost-only, bounded, so the
         # session header shows the detected window instead of defaults.
         _startup_probe(cfg, box["loop"])
