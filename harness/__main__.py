@@ -665,6 +665,11 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                     if getattr(args, "auto_continue_max_turns", None)
                     is not None
                     else cfg.auto_continue_max_turns),
+                max_steps=(
+                    args.max_steps
+                    if getattr(args, "max_steps", None)
+                    is not None
+                    else cfg.max_steps),
                 provider_factory=(
                     lambda provider=None, model=None: make_provider(
                         cfg, provider=provider, model=model)))
@@ -1021,6 +1026,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--auto-continue-max-turns", type=int, default=None,
                     help="Cap on auto-continue turns per user message "
                          "(default from config, 10).")
+    ap.add_argument("--max-steps", type=int, default=None,
+                    help="Per-turn step limit before force-close with handoff "
+                         "(default from config, 50).")
     ap.add_argument("--request-timeout", type=int, default=None,
                     help="HTTP seconds per model call (default 120; raise "
                          "for huge prompts on slow local servers).")
