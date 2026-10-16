@@ -49,6 +49,7 @@ def header_segments(title: str, width: int, phase: int = 0,
                     alert: str | None = None, flash: bool = False,
                     turn_flash: bool = False, marquee: int = 0,
                     build: str | None = None,
+                    mode: str | None = None,
                     ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS header bar.
 
@@ -69,8 +70,19 @@ def header_segments(title: str, width: int, phase: int = 0,
     if build_pill:
         segs.append((build_pill, LCARS["peach"], _FG))
         segs.append((" ", LCARS["black"], _FG))
+    # MODE pill: analyze (ice, read-only) vs build (orange, may write).
+    # Labeled MODE: to avoid colliding with the BUILD commit pill.
+    # Dropped on narrow screens alongside the BUILD pill.
+    mode_pill = ""
+    if mode and width >= 60:
+        label = mode.upper()
+        bg = LCARS["orange"] if mode == "build" else LCARS["ice"]
+        mode_pill = f" MODE:{label} "
+        segs.append((mode_pill, bg, _FG))
+        segs.append((" ", LCARS["black"], _FG))
 
-    max_title = max(8, width - 48 - len(build_pill) - (1 if build_pill else 0)
+    max_title = max(8, width - 48 - len(build_pill) - len(mode_pill)
+                   - (1 if build_pill else 0) - (1 if mode_pill else 0)
                    - (4 if alert else 0))
     if len(title) > max_title:
         # Marquee: slide a window through the title instead of
@@ -279,9 +291,11 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         spins while the agent runs (pulses gently when idle).
         """
 
-        def __init__(self, title: str = "", **k) -> None:
+        def __init__(self, title: str = "", mode: str | None = None,
+                     **k) -> None:
             super().__init__(**k)
             self._title = title or ""
+            self._mode = mode
             self._phase = 0
             self._turns = 0
             self._budget_pct: float | None = None
@@ -351,7 +365,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 flash=now < self._flash_until,
                 turn_flash=now < self._turn_flash_until,
                 marquee=self._marquee,
-                build=_BUILD))
+                build=_BUILD, mode=self._mode))
 
     class LcarsCharms(Static):
         """LCARS charm strip under the header: decorative pills,
