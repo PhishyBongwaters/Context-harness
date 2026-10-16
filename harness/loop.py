@@ -1337,5 +1337,13 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
+        # Step limit hit: the turn failed, but the handoff must still be
+        # written -- otherwise 50 steps of progress are lost with no
+        # record. Write it before raising.
+        try:
+            if active_goals(session.dir):
+                self._ensure_handoff(session, turn_no, system, messages)
+        except Exception:
+            pass  # Handoff failure must not mask the step-limit error.
         raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
                             f"finishing.")
