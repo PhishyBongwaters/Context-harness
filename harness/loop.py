@@ -331,6 +331,9 @@ class Loop:
         # refusing (keyed on tool, not args: varying the command
         # after a denial is still spamming).
         self._denial_counts: dict[str, int] = {}
+        # Loop detection: if the same (tool, args) repeats 3x, stop it.
+        # The agent is stuck; force it to curate and move on.
+        self._recent_tools: list[tuple[str, str]] = []
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -710,6 +713,26 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+
+        # Loop detection: same (tool, args) 3x in a row = stuck.
+        # Stop it, force curate and move on. Do NOT suggest varying
+        # the query -- that causes semantic loops.
+        import json as _json
+        try:
+            _key = _json.dumps(args, sort_keys=True, default=str)
+        except Exception:
+            _key = str(args)
+        self._recent_tools.append((name, _key))
+        if len(self._recent_tools) > 5:
+            self._recent_tools.pop(0)
+        if (len(self._recent_tools) >= 3 and
+                self._recent_tools[-1] == self._recent_tools[-2] ==
+                self._recent_tools[-3]):
+            return (
+                f"LOOP-BREAK: `{name}` called 3x with identical arguments. "
+                f"Results are not changing. Do NOT call `{name}` again here. "
+                f"Write findings to sats/current.md and move to the next step."
+            )
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
@@ -1233,6 +1256,7 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
+        self._recent_tools = []
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
