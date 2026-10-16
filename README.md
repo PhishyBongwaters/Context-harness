@@ -181,7 +181,9 @@ Same session, same provider registry, same ledger as the CLI.
 
 The top bar shows a `BUILD <short-hash>` pill (LCARS-styled) identifying
 the running commit — useful for confirming which version is live after
-a pull. It hides on narrow terminals (< 60 columns).
+a pull. It hides on narrow terminals (< 60 columns). A `MODE:ANALYZE` /
+`MODE:BUILD` pill shows the current agent mode, and a `CALLS n` pill in
+the footer shows the live tool-call count for the turn.
 
 - transcript pane (assistant text, tool calls, budget/prune lines),
   budget bar, status line, input box
@@ -190,9 +192,11 @@ a pull. It hides on narrow terminals (< 60 columns).
 - mutating tools pop an approval dialog: `a` turn / `s` session /
   `d` or `esc` deny, countdown default-deny (same timeout as CLI)
 - `ctrl+s` session picker, `ctrl+o` provider/model picker,
-  `ctrl+d` debug-log tail, `ctrl+e` export transcript to a file
-- `ctrl+c` copies the current selection (never quits — quit is `/quit`
-  or `ctrl+q`)
+  `ctrl+d` debug-log tail, `ctrl+e` export transcript to a file,
+  `ctrl+y` system panel, `ctrl+g` subagent view, `ctrl+u` delegate
+  model picker, `ctrl+n` newline, `escape` interrupt turn
+- `alt+k` / `alt+j` / `alt+u` / `alt+c` message navigation
+- `ctrl+c` copies the current selection (never quits — quit is `/quit`)
 - slash commands work in the input box exactly like the REPL
   (`/new`, `/open`, `/list`, `/project`, `/usage`, `/config`,
   `/providers`, `/models`, `/help`, `/quit`)
@@ -216,10 +220,14 @@ Windows, `~/.config/context-harness/config.json` elsewhere):
 OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
-`prune_section_cap`, `auto_continue` (default `false`: open a new turn
-while a goal is `[active]`), `auto_continue_max_turns` (default `10`). API key comes from the environment (`api_key_env`) —
-never from the file. `sessions_dir` unset selects the platform default
-(`%LOCALAPPDATA%` on Windows).
+`prune_section_cap`, `prune_enabled` (default `true`), `auto_continue`
+(default `false`: open a new turn while a goal is `[active]`),
+`auto_continue_max_turns` (default `10`), `max_steps` (default `50`:
+per-turn step limit before force-close with handoff),
+`subagent_budget_fraction` (default `0.25`), `delegate_model`,
+`user_name`, `assistant_name`. API key comes from the environment
+(`api_key_env`) — never from the file. `sessions_dir` unset selects
+the platform default (`%LOCALAPPDATA%` on Windows).
 
 Budgets auto-size and report their source. Omit `budget_hard` /
 `budget_soft` for auto: a live server value (`[live]` — llama.cpp,
@@ -315,7 +323,7 @@ model's chat template; results vary.)
 `harness/tui/` — optional Textual interface (`--tui`): app, bridge,
 widgets, commands, modal approvals (needs `requirements-tui.txt`)
 
-`tests/` — 225 unittest tests; the Textual pilots skip cleanly when
+`tests/` — 573 unittest tests; the Textual pilots skip cleanly when
 the extra is missing. `python -m unittest discover -s tests`
 
 ## Deterministic stages
@@ -397,7 +405,7 @@ Tunable (config file, CLI flag wins):
 | `request_timeout` | 120s | `--request-timeout` (raise for ~100k prompts on slow local servers — prefill can take many minutes) |
 | `prune_request_timeout` | 3× `request_timeout` | (config only; prune prompts carry the whole file, so the janitor gets longer — raise both for huge files on slow servers) |
 
-Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`, `--tui`, `--no-mouse`.
+Experiment flags (no config edit needed): `--budget-hard`, `--budget-soft`, `--request-timeout`, `--yes`, `--project`, `--debug`, `--tui`, `--no-mouse`, `--auto-continue`, `--auto-continue-max-turns`, `--max-steps`, `--no-auto-continue`, `--no-prune`, `--provider`, `--model`, `--session`, `--dry-run`, `--export-transcript`, `--include`, `--include-subagents`, `--tool`, `--serve`, `--port`, `--delegate-model`, `--env-file`, `--goal`, `--no-usage-note`.
 
 ## Debugging
 
