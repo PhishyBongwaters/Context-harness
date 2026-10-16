@@ -722,6 +722,12 @@ class Loop:
                     or '"status": "error"' in result):
                 return _failed(result)
             self._denial_counts.pop(name, None)
+            # Truncate massive tool results to prevent in-turn context bloat.
+            # The full result is in the tool's own output; the transcript
+            # keeps a bounded summary.
+            if len(result) > 3000:
+                result = (result[:3000] +
+                          f"\n... [truncated, {len(result)} chars total]")
             return result
 
         # Circuit breaker: stop accepting a tool the harness keeps
