@@ -40,6 +40,7 @@ EXEC_TIMEOUT_MAX = 300  # hard ceiling even if the model asks for more
 READONLY_EXEC = {
     "ls", "dir", "cat", "type", "echo", "pwd", "whoami", "hostname",
     "python", "node", "git", "grep", "rg", "find", "findstr",
+    "head", "tail", "wc", "sort", "uniq",
 }
 GIT_READONLY_SUBCOMMANDS = {"status", "diff", "log", "show", "branch", "rev-parse"}
 
