@@ -7,7 +7,9 @@
 
 ## Abstract
 
-A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 40 functions across 10 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens) while processing 1.3M tokens of cumulative context. This paper documents the trace, validates it, and breaks down the harness mechanics that made it possible.
+A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 40 functions across 10 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens). The session reported 1.3M tokens of cumulative input processed (session-reported; pending verification against the archived session logs — see §7).
+
+**Evidence note:** every number in this paper is labeled with its source. Nothing here is estimated. Where a figure is session-reported but not yet independently verified, it says so.
 
 ## 1. The Task
 
@@ -127,17 +129,17 @@ No hallucinations detected. All 40 functions exist in-tree at the named location
 
 ### 4.1 The Numbers
 
-| Metric | Value |
-|--------|-------|
-| Turns | 6 (t0001–t0006) |
-| Auto-continued turns | 4 of 6 |
-| Final context | 12,392 / 135,168 tokens (9%) |
-| Session input tokens | 1,337,411 |
-| Session output tokens | 15,541 |
-| Model | Qwen 30B, local via llama.cpp |
-| Hardware | RTX 5080, 16GB VRAM |
+| Metric | Value | Source |
+|--------|-------|--------|
+| Turns | 6 (t0001–t0006) | Session transcript |
+| Auto-continued turns | 4 of 6 | Session transcript |
+| Final context | 12,392 / 135,168 tokens (9%) | Session-reported context measurement |
+| Session input tokens | 1,337,411 | Session-reported usage total — **pending verification against archived session logs** |
+| Session output tokens | 15,541 | Session-reported usage total — **pending verification against archived session logs** |
+| Model | Qwen 30B, local via llama.cpp | Session config |
+| Hardware | RTX 5080, 16GB VRAM | Session config |
 
-The critical ratio: **1.3M tokens processed, 12K per turn to the model.** A 30B local model cannot hold 1.3M tokens. It doesn't need to — the harness assembles only 12K per turn.
+The per-turn context figure (12,392 / 135,168) is the measured assembly size at the final turn. The cumulative input/output totals are what the session's usage tracker reported; they have not yet been independently recomputed from the raw session logs. No savings ratio is claimed here — that requires the A/B retention-quiz protocol, which has not been run.
 
 ### 4.2 Handoff-Per-Turn (Issue #5)
 
@@ -195,7 +197,7 @@ Once the goal was marked `[done]`, the harness skipped handoff enforcement — n
 
 > **Memory is a write problem, not a read problem.**
 
-The model didn't succeed because it could *read* 1.3M tokens. It succeeded because the harness *wrote* good state: a handoff every turn, curated sats, bounded history. The read path (12K per turn) was trivial. The write path (what to keep, how to structure it, when to stop) was everything.
+The model didn't succeed because of how much it could *read* in one turn — per-turn context stayed at 12K tokens. It succeeded because the harness *wrote* good state: a handoff every turn, curated sats, bounded history. The read path (12K per turn, measured) was trivial. The write path (what to keep, how to structure it, when to stop) was everything.
 
 A 30B model on a 16GB GPU in a basement traced 40 kernel functions across 10 files. Not because the model is big enough to hold the kernel in context — because the harness is smart enough that it doesn't have to.
 
@@ -206,6 +208,13 @@ A 30B model on a 16GB GPU in a basement traced 40 kernel functions across 10 fil
 - **Model:** Qwen 30B via llama.cpp, 135K context window
 - **Kernel tree:** Linux source (version per session logs)
 - **Validation:** Manual source-tree verification (Section 3)
+
+## 7. References
+
+- **Session logs:** session `20261015-151139`, archived on Rob's machine. Retrieved via Sysops-queue issue #53 (encrypted envelope; plaintext issue #52 was rejected — encryption required). Per-turn usage records in the session directory are the source of truth for the input/output token totals; independent recomputation from these logs is pending.
+- **Harness:** `github.com/PhishyBongwaters/Context-harness` @ `main` (post PR #6, post tui-message-nav merge)
+- **Model:** Qwen 30B via llama.cpp, 135K context window
+- **Kernel tree:** Linux source (version per session logs)
 
 ## Appendix A: Session Log Summary
 
