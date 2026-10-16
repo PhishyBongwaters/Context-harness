@@ -865,6 +865,9 @@ if _HAS:
             self._session_header = session_header
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
+            # Live tool-call counter for the footer display.
+            self._tool_call_count = 0
+            self._last_request_data: dict | None = None
             # LCARS is a toggleable theme (command palette): registered
             # here so it lists alongside the builtins. Default on, to
             # preserve the current look; switching themes swaps the
@@ -1080,6 +1083,9 @@ if _HAS:
             breakdown. Both tint warn/over."""
             gauge = self.query_one("#gauge", BudgetGauge)
             bar = self.query_one("#budget", BudgetBar)
+            data = dict(data or {})
+            data["tool_call_count"] = self._tool_call_count
+            self._last_request_data = data
             bar.set_request(data)
             gauge.set_request(data)
             try:
@@ -1188,6 +1194,17 @@ if _HAS:
                 if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here
                     self._set_status("")
+                if kind == "tool":
+                    self._tool_call_count += 1
+                    # Refresh the footer counter live.
+                    if self._last_request_data is not None:
+                        try:
+                            bar = self.query_one("#budget", BudgetBar)
+                            d = dict(self._last_request_data)
+                            d["tool_call_count"] = self._tool_call_count
+                            bar.set_request(d)
+                        except Exception:
+                            pass
                 shown.append((kind, data, _line))
             chat = [(k, d, l) for k, d, l in shown
                     if k not in self._SYSTEM_KINDS]
