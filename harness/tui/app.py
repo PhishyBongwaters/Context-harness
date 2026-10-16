@@ -908,6 +908,8 @@ if _HAS:
             if lcars:
                 return (
                     [LcarsHeader(title=self._title or "harness",
+                                 mode=getattr(getattr(self, "_cfg", None),
+                                              "mode", "analyze"),
                                  id="lcars-header"),
                      LcarsCharms(id="lcars-charms")],
                     [LcarsFooter(pills=_binding_pills(self.BINDINGS),
