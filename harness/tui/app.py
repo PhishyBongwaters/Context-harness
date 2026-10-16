@@ -909,10 +909,15 @@ if _HAS:
 
         def _chrome_widgets(self, lcars: bool):
             if lcars:
+                # Mode is per-session (state.json), not global config.
+                try:
+                    from harness.session import get_mode
+                    _mode = get_mode(self._session.dir)
+                except Exception:
+                    _mode = "analyze"
                 return (
                     [LcarsHeader(title=self._title or "harness",
-                                 mode=getattr(getattr(self, "_cfg", None),
-                                              "mode", "analyze"),
+                                 mode=_mode,
                                  id="lcars-header"),
                      LcarsCharms(id="lcars-charms")],
                     [LcarsFooter(pills=_binding_pills(self.BINDINGS),
