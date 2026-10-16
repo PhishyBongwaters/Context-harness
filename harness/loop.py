@@ -55,14 +55,15 @@ AUTO_CONTINUE_TEMPLATE = (
 # Mode-specific write rules for the system prompt.
 MODE_WRITE_RULES = {
     "analyze": (
-        "You are here to analyze, not to modify. Never `write` or `edit` "
-        "files in the codebase you are studying -- those are read-only. "
-        "Your writes go to `sats/` (your working notes) and `history.md` "
-        "only."
+        "You are here to analyze. Write and edit freely in `sats/` "
+        "(your working notes) and `history.md` -- that is where your "
+        "writes go. Do not `write` or `edit` files in the codebase you "
+        "are studying -- the target tree is read-only."
     ),
     "build": (
         "You are here to build. You may `write` and `edit` files in the "
-        "workdir to implement the task. Do not modify files outside the "
+        "workdir to implement the task, as well as `sats/` and "
+        "`history.md`. Do not modify files outside the "
         "workdir unless the task explicitly says to."
     ),
 }
