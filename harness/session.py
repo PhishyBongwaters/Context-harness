@@ -16,6 +16,57 @@ from pathlib import Path
 from .context import stamp
 from .handoff import HANDOFF_TEMPLATE
 
+
+def harness_commit() -> str:
+    """Full commit hash of the harness checkout, or 'unknown'.
+
+    Resolves git from the harness package directory upward, so it
+    works regardless of the process working directory.
+    """
+    try:
+        import subprocess
+        d = Path(__file__).resolve().parent
+        for _ in range(5):
+            if (d / ".git").exists():
+                break
+            d = d.parent
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(d),
+                           capture_output=True, text=True, timeout=5)
+        sha = r.stdout.strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
+    return "unknown"
+
+
+def write_provenance(sdir: str | Path, provenance: dict | None) -> None:
+    """Record session provenance in meta.json.
+
+    First write wins (setdefault): re-opening a session keeps the
+    provenance it started with. Best effort; never raises.
+    """
+    import datetime
+    try:
+        p = Path(sdir) / "meta.json"
+        data: dict = {}
+        try:
+            if p.is_file():
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault(
+            "created_at",
+            datetime.datetime.now(datetime.timezone.utc).isoformat())
+        for k, v in (provenance or {}).items():
+            data.setdefault(k, v)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                     encoding="utf-8")
+    except OSError:
+        pass
+
 SAT_FILES = {
     "current": ("# Current task\n\nWhat you are actively working on right "
                 "now, one line. Update it when the task changes or "
