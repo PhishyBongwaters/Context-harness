@@ -24,7 +24,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import active_goals, next_turn
+from .session import active_goals, get_mode, next_turn, MODES, DEFAULT_MODE
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -154,6 +154,9 @@ need human approval: the human may approve once, approve for the session,
 or deny. A denied call returns a DENIED message -- respect it, do not
 retry the same call, work another way or ask the user.
 """
+
+# Agent modes are defined in session.py (MODES, MODE_PROMPTS,
+# mode_prompt_section). They are advisory behavioral states, not restrictions.
 
 PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn.
 
