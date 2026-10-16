@@ -335,6 +335,12 @@ class Loop:
         # If the same (tool, args) repeats 3x in a row, break the loop
         # mechanically instead of letting the model spin.
         self._recent_tools: list[tuple[str, str]] = []
+        # Sat-write enforcement: force the model to curate as it goes.
+        # After N tool calls with zero sat writes, block further tools
+        # until a sat is updated. Mechanical, not a prompt plea.
+        self._turn_tool_calls: int = 0
+        self._turn_sat_writes: int = 0
+        self._sat_write_required: bool = False
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -714,6 +720,35 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+
+        # Sat-write enforcement: if the model has done 10+ tool calls
+        # with zero sat writes, block everything except sat edits until
+        # it curates. This is mechanical -- the turn cannot proceed
+        # without writing to sats.
+        self._turn_tool_calls += 1
+        is_sat_edit = (
+            name == "edit" and
+            "sats/" in str(args.get("path", "")) and
+            str(args.get("path", "")).endswith(".md")
+        )
+        if is_sat_edit:
+            self._turn_sat_writes += 1
+            self._sat_write_required = False
+        if self._sat_write_required and not is_sat_edit:
+            return (
+                "BLOCKED: you have made "
+                f"{self._turn_tool_calls} tool calls without updating sats. "
+                "Your next tool call MUST be an edit to sats/current.md "
+                "(or another sat file) summarizing your progress. No other "
+                "tools will run until you do."
+            )
+        if self._turn_tool_calls >= 10 and self._turn_sat_writes == 0:
+            self._sat_write_required = True
+            return (
+                "HARNESS: you have made 10 tool calls without updating sats. "
+                "Update sats/current.md NOW with what you have learned. "
+                "Further tool calls are blocked until you do."
+            )
 
         # Loop detection: if the same (tool, args) repeats 3x in a row,
         # break it mechanically. The model is stuck; make it try
@@ -1257,6 +1292,9 @@ class Loop:
         turn_no = next_turn(session.dir)
         # Reset loop-detection history for the new turn.
         self._recent_tools = []
+        self._turn_tool_calls = 0
+        self._turn_sat_writes = 0
+        self._sat_write_required = False
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
