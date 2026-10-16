@@ -60,6 +60,17 @@ class HarnessServer:
     def turn(self, session_id: str, message: str) -> str:
         loop = self._get_loop()
         sess = self._get_session(session_id)
+        # Session provenance: first write wins.
+        try:
+            from harness.session import write_provenance, harness_commit
+            _prov = loop.provider
+            write_provenance(sess.dir, {
+                "harness_commit": harness_commit(),
+                "provider": getattr(_prov, "name", None),
+                "model": getattr(_prov, "model", None),
+            })
+        except Exception:
+            pass
         return loop.run_turn(sess, message) or ""
 
 
