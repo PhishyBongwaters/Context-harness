@@ -331,16 +331,6 @@ class Loop:
         # refusing (keyed on tool, not args: varying the command
         # after a denial is still spamming).
         self._denial_counts: dict[str, int] = {}
-        # Loop detection: track recent tool calls to catch repetition.
-        # If the same (tool, args) repeats 3x in a row, break the loop
-        # mechanically instead of letting the model spin.
-        self._recent_tools: list[tuple[str, str]] = []
-        # Sat-write enforcement: force the model to curate as it goes.
-        # After N tool calls with zero sat writes, block further tools
-        # until a sat is updated. Mechanical, not a prompt plea.
-        self._turn_tool_calls: int = 0
-        self._turn_sat_writes: int = 0
-        self._sat_write_required: bool = False
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -720,59 +710,6 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
-
-        # Sat-write enforcement: if the model has done 10+ tool calls
-        # with zero sat writes, block everything except sat edits until
-        # it curates. This is mechanical -- the turn cannot proceed
-        # without writing to sats.
-        self._turn_tool_calls += 1
-        is_sat_edit = (
-            name == "edit" and
-            "sats/" in str(args.get("path", "")) and
-            str(args.get("path", "")).endswith(".md")
-        )
-        if is_sat_edit:
-            self._turn_sat_writes += 1
-            self._sat_write_required = False
-        if self._sat_write_required and not is_sat_edit:
-            return (
-                "BLOCKED: you have made "
-                f"{self._turn_tool_calls} tool calls without updating sats. "
-                "Your next tool call MUST be an edit to sats/current.md "
-                "(or another sat file) summarizing your progress. No other "
-                "tools will run until you do."
-            )
-        if self._turn_tool_calls >= 10 and self._turn_sat_writes == 0:
-            self._sat_write_required = True
-            return (
-                "HARNESS: you have made 10 tool calls without updating sats. "
-                "Update sats/current.md NOW with what you have learned. "
-                "Further tool calls are blocked until you do."
-            )
-
-        # Loop detection: if the same (tool, args) repeats 3x in a row,
-        # break it mechanically. The model is stuck; make it try
-        # something different instead of burning more steps.
-        import json as _json
-        try:
-            _args_key = _json.dumps(args, sort_keys=True, default=str)
-        except Exception:
-            _args_key = str(args)
-        _tool_key = (name, _args_key)
-        self._recent_tools.append(_tool_key)
-        # Keep only the last 5 for the check.
-        if len(self._recent_tools) > 5:
-            self._recent_tools.pop(0)
-        if (len(self._recent_tools) >= 3 and
-                self._recent_tools[-1] == self._recent_tools[-2] ==
-                self._recent_tools[-3]):
-            return (
-                f"LOOP-BREAK: you have called `{name}` with identical "
-                f"arguments 3 times in a row. The results are not changing. "
-                f"Do NOT call it again with these arguments. Either try a "
-                f"different query/path, or write what you have learned so "
-                f"far to sats/current.md and move on to the next step."
-            )
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
@@ -1290,11 +1227,6 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
-        # Reset loop-detection history for the new turn.
-        self._recent_tools = []
-        self._turn_tool_calls = 0
-        self._turn_sat_writes = 0
-        self._sat_write_required = False
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
