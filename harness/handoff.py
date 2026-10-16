@@ -32,6 +32,8 @@ end of every turn -- never append. There is no other memory: anything
 not in the sats or history is gone when this turn ends.
 
 ## Handoff -- t0000
+### Mode
+analyze
 ### Now
 (nothing yet -- first turn)
 ### Next
