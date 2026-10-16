@@ -1,4 +1,4 @@
-# Local AI Does Kernel Traces: A 40-Function ext4 write() Path on 16GB VRAM
+# Local AI Does Kernel Traces: A 42-Function ext4 write() Path on 16GB VRAM
 
 **Date:** 2026-10-15  
 **Session:** 20261015-151139  
@@ -7,13 +7,15 @@
 
 ## Abstract
 
-A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 40 functions across 10 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens) while processing 1.3M tokens of cumulative context. This paper documents the trace, validates it, and breaks down the harness mechanics that made it possible.
+A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 42 functions across 14 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens). The session processed 1.4M tokens of cumulative input across the full run (log-verified — see §7).
+
+**Evidence note:** every number in this paper is labeled with its source. Nothing here is estimated.
 
 ## 1. The Task
 
 Trace a buffered `write()` syscall on an ext4 file from syscall entry to block-layer submission. At each layer, name the function and the file it lives in. Then list every point where the write can block (sleep), and what it sleeps on. Scope: buffered I/O only — not direct I/O, not io_uring.
 
-## 2. The Result: 40 Functions, 10 Files
+## 2. The Result: 42 Functions, 14 Files
 
 ### 2.1 Syscall Entry (fs/read_write.c)
 
@@ -50,10 +52,10 @@ ext4_buffered_write_iter
        │                   └─ ext4_ext_map_blocks (fs/ext4/extents.c)
        ├─ [copy user data into page cache]
        └─ ext4_write_end (fs/ext4/inode.c)
-            ├─ block_write_end (fs/block.c)
+            ├─ block_write_end (fs/buffer.c)
             ├─ ext4_update_inode_size
             ├─ ext4_mark_inode_dirty
-            └─ ext4_journal_stop (fs/jbd2/transaction.c)
+            └─ ext4_journal_stop (fs/ext4/ext4_jbd2.h, macro)
 ```
 
 This is the hot loop: for each page, allocate blocks, copy data, commit.
@@ -112,38 +114,38 @@ ext4_end_bio
 
 ## 3. Validation
 
-The trace was validated against the Linux kernel source tree. Key checks:
+The trace was machine-verified against the Linux kernel source tree (`D:\Projects\Tricorder-Testing-Repos\linux`, version 7.2.0 per its Makefile) via Sysops-queue issues #55 and #56. For each of the 42 named functions: the identifier was checked in the paper's claimed file, and the tree was searched for a definition.
 
-- **Syscall entry chain** matches modern kernels (5.x+): `sys_write` → `ksys_write` → `vfs_write` → `vfs_iter_write` is the correct dispatch sequence in `fs/read_write.c`.
-- **ext4 dispatch** is correct: `ext4_file_write_iter` (in `fs/ext4/file.c`) is ext4's `write_iter` handler, routing to `ext4_buffered_write_iter` for non-direct I/O.
-- **Page cache loop** follows the standard `generic_perform_write` → `->write_begin` / `->write_end` aop pattern, with ext4's `ext4_write_begin`/`ext4_write_end` in `fs/ext4/inode.c`.
-- **Extent mapping** correctly identifies the `ext4_map_blocks` → `ext4_ext_map_blocks` path for allocated extents.
-- **Writeback** correctly traces the `ext4_writepages` → `mpage_*` → `ext4_bio_write_folio` → `submit_bio` → `blk_mq_submit_bio` chain.
+- **42/42 functions exist in the tree.** Zero hallucinations — every named function is real.
+- **39/42 file attributions correct as written.** Three needed correction:
+  - `sys_write`: not literally present in `fs/read_write.c` — it is defined there via `SYSCALL_DEFINE3(write, ...)` (line 747); the macro generates the symbol. Attribution stands, with this nuance noted.
+  - `block_write_end`: the paper said `fs/block.c` — that file does not exist. The definition is at `fs/buffer.c:2156`.
+  - `ext4_journal_stop`: the paper said `fs/jbd2/transaction.c` — the identifier does not appear there. It is a macro in `fs/ext4/ext4_jbd2.h:242` wrapping `__ext4_journal_stop`.
 - **Blocking points** are all real sleep locations: inode locks, journal credit waits, folio locks, queue throttles, and hardware queue backpressure are well-documented ext4/block-layer blocking behavior.
 
-No hallucinations detected. All 40 functions exist in-tree at the named locations.
+The remaining checks are conceptual (does the *ordering* of the trace match the real call flow?). The existence check above is machine-verified; the sequencing was reviewed against known kernel structure but not mechanically asserted.
 
 ## 4. How the Harness Made It Work
 
 ### 4.1 The Numbers
 
-| Metric | Value |
-|--------|-------|
-| Turns | 6 (t0001–t0006) |
-| Auto-continued turns | 4 of 6 |
-| Final context | 12,392 / 135,168 tokens (9%) |
-| Session input tokens | 1,337,411 |
-| Session output tokens | 15,541 |
-| Model | Qwen 30B, local via llama.cpp |
-| Hardware | RTX 5080, 16GB VRAM |
+| Metric | Value | Source |
+|--------|-------|--------|
+| Turns | 6 (t0001–t0006) | Session transcript |
+| Auto-continued turns | 4 of 6 | Session transcript |
+| Final context | 12,392 / 135,168 tokens (9%) | Session-reported context measurement |
+| Session input tokens | 1,414,124 | **Log-verified** — independently recomputed from `usage.json` (74 per-turn records); matches the tracker's own running totals |
+| Session output tokens | 19,405 | **Log-verified** — as above |
+| Model | Qwen 30B, local via llama.cpp | Session config |
+| Hardware | RTX 5080, 16GB VRAM | Session config |
 
-The critical ratio: **1.3M tokens processed, 12K per turn to the model.** A 30B local model cannot hold 1.3M tokens. It doesn't need to — the harness assembles only 12K per turn.
+The per-turn context figure (12,392 / 135,168) is the measured assembly size at the final turn. The cumulative token totals were recomputed from the raw per-turn records in the archived `usage.json` and match the usage tracker's totals exactly. (An earlier draft cited the session's mid-run self-report of 1,337,411 / 15,541; the verified log totals are higher because the log includes the post-completion turn t0007.) No savings ratio is claimed here — that requires the A/B retention-quiz protocol, which has not been run.
 
 ### 4.2 Handoff-Per-Turn (Issue #5)
 
 Every turn ended with a fresh `sats/handoff.md` (Now / Next / Blockers / Pointers). The harness validated freshness and shape; stale or missing handoffs triggered up to two forced edit-only rounds.
 
-In t0006, when asked "what do you remember?", the agent recalled the full 40-function trace from the sats — not by re-reading the kernel tree, but from the curated handoff. This is the write-path thesis: the model doesn't need the data in context, it needs a good handoff.
+In t0006, when asked "what do you remember?", the agent recalled the full 42-function trace from the sats — not by re-reading the kernel tree, but from the curated handoff. This is the write-path thesis: the model doesn't need the data in context, it needs a good handoff.
 
 **Relevant files:**
 - `harness/handoff.py` — schema, validation, forced rounds, trim backstop
@@ -195,9 +197,9 @@ Once the goal was marked `[done]`, the harness skipped handoff enforcement — n
 
 > **Memory is a write problem, not a read problem.**
 
-The model didn't succeed because it could *read* 1.3M tokens. It succeeded because the harness *wrote* good state: a handoff every turn, curated sats, bounded history. The read path (12K per turn) was trivial. The write path (what to keep, how to structure it, when to stop) was everything.
+The model didn't succeed because of how much it could *read* in one turn — per-turn context stayed at 12K tokens. It succeeded because the harness *wrote* good state: a handoff every turn, curated sats, bounded history. The read path (12K per turn, measured) was trivial. The write path (what to keep, how to structure it, when to stop) was everything.
 
-A 30B model on a 16GB GPU in a basement traced 40 kernel functions across 10 files. Not because the model is big enough to hold the kernel in context — because the harness is smart enough that it doesn't have to.
+A 30B model on a 16GB GPU in a basement traced 42 kernel functions across 14 files. Not because the model is big enough to hold the kernel in context — because the harness is smart enough that it doesn't have to.
 
 ## 6. Reproducibility
 
@@ -207,10 +209,17 @@ A 30B model on a 16GB GPU in a basement traced 40 kernel functions across 10 fil
 - **Kernel tree:** Linux source (version per session logs)
 - **Validation:** Manual source-tree verification (Section 3)
 
+## 7. References
+
+- **Session logs:** session `20261015-151139`, archived on Rob's machine (`%LOCALAPPDATA%\context-harness\sessions\20261015-151139\`). Retrieved via Sysops-queue issue #53 (encrypted envelope; plaintext issue #52 was rejected — encryption required). Token totals independently recomputed from `usage.json` (74 per-turn records) via Sysops-queue issue #54: input 1,414,124 / output 19,405, matching the usage tracker's own totals exactly.
+- **Harness:** `github.com/PhishyBongwaters/Context-harness` @ `main` (post PR #6, post tui-message-nav merge)
+- **Model:** Qwen 30B via llama.cpp, 135K context window
+- **Kernel tree:** Linux source (version per session logs)
+
 ## Appendix A: Session Log Summary
 
 - **t0001–t0004:** Active tracing. Mapped syscall entry through page cache loop. Auto-continued.
-- **t0005:** Completed writeback path and blocking points. Full 40-function trace assembled.
+- **t0005:** Completed writeback path and blocking points. Full 42-function trace assembled.
 - **t0006:** Goal marked `[done]`. Agent correctly recalled full trace from sats when queried.
 - **t0007:** Post-completion chat. Handoff skipped (no active goals).
 
