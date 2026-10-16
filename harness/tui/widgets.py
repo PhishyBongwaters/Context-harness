@@ -139,6 +139,10 @@ def format_event(kind: str, data, *, user_name: str = "me",
         name = data.get("name", "?")
         args = data.get("args") or {}
         brief = args.get("command") or args.get("path") or ""
+        # For search, show the pattern too (not just the path).
+        if name == "search" and args.get("pattern"):
+            pat = args.get("pattern")
+            brief = f"'{pat}' in {brief}" if brief else f"'{pat}'"
         denied = " [denied]" if data.get("denied") else ""
         header = f"{_ansi('🔧 '+name+' '+brief+denied,2)}".rstrip()
         # Inline syntax-highlighted view for write/edit of source files
