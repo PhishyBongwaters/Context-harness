@@ -254,7 +254,8 @@ class Loop:
                  include_subagents: bool = False,
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
-                 auto_continue_max_turns: int = 10):
+                 auto_continue_max_turns: int = 10,
+                 max_steps: int = MAX_STEPS):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -284,6 +285,11 @@ class Loop:
                 0, int(auto_continue_max_turns))
         except (TypeError, ValueError):
             self._auto_continue_max_turns = 0
+        # Per-turn step limit: max tool-call iterations before force-close.
+        try:
+            self.max_steps = max(1, int(max_steps))
+        except (TypeError, ValueError):
+            self.max_steps = MAX_STEPS
         # H2: history token cap; oldest turns archive deterministically.
         # None -> half the soft budget.
         self.history_cap = (history_cap if history_cap is not None
@@ -1258,7 +1264,7 @@ class Loop:
         warned = False
 
         try:
-            for step in range(MAX_STEPS):
+            for step in range(self.max_steps):
                 self._check_stop()
                 raw, messages = self._transcript_messages(session)
                 if not messages:
@@ -1375,5 +1381,5 @@ class Loop:
                 self._ensure_handoff(session, turn_no, system, messages)
         except Exception:
             pass  # Handoff failure must not mask the step-limit error.
-        raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
+        raise ProviderError(f"Turn exceeded {self.max_steps} steps without "
                             f"finishing.")
