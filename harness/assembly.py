@@ -92,7 +92,7 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
     "# User includes" header.
     """
     import platform
-    from .session import load_state
+    from .session import load_state, get_mode, mode_prompt_section, _MODE_MARKER
     if turn_no is None:
         turn_no = load_state(sdir)["turn"]
     turn_stamp = f"t{turn_no:04d}"
@@ -110,6 +110,12 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
         # Predates the amnesia framing: append it (new sessions already
         # carry it in SYSTEM_PROMPT, so the marker keeps it single).
         text = text.rstrip("\n") + "\n" + _PROMPT_ADDENDUM_AMNESIA
+    # Agent mode: advisory behavioral state, refreshed every turn from
+    # session state. Strip any stale mode section, then append current.
+    # (Mode is dynamic -- it lives in state.json, not prompt.md.)
+    if _MODE_MARKER in text:
+        text = text[:text.index(_MODE_MARKER)].rstrip("\n")
+    text = text.rstrip("\n") + "\n\n" + mode_prompt_section(get_mode(sdir))
     text = (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))
