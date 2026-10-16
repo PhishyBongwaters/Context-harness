@@ -325,6 +325,10 @@ class Loop:
         # refusing (keyed on tool, not args: varying the command
         # after a denial is still spamming).
         self._denial_counts: dict[str, int] = {}
+        # Loop detection: track recent tool calls to catch repetition.
+        # If the same (tool, args) repeats 3x in a row, break the loop
+        # mechanically instead of letting the model spin.
+        self._recent_tools: list[tuple[str, str]] = []
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -704,6 +708,30 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+
+        # Loop detection: if the same (tool, args) repeats 3x in a row,
+        # break it mechanically. The model is stuck; make it try
+        # something different instead of burning more steps.
+        import json as _json
+        try:
+            _args_key = _json.dumps(args, sort_keys=True, default=str)
+        except Exception:
+            _args_key = str(args)
+        _tool_key = (name, _args_key)
+        self._recent_tools.append(_tool_key)
+        # Keep only the last 5 for the check.
+        if len(self._recent_tools) > 5:
+            self._recent_tools.pop(0)
+        if (len(self._recent_tools) >= 3 and
+                self._recent_tools[-1] == self._recent_tools[-2] ==
+                self._recent_tools[-3]):
+            return (
+                f"LOOP-BREAK: you have called `{name}` with identical "
+                f"arguments 3 times in a row. The results are not changing. "
+                f"Do NOT call it again with these arguments. Either try a "
+                f"different query/path, or write what you have learned so "
+                f"far to sats/current.md and move on to the next step."
+            )
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
@@ -1198,6 +1226,8 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
+        # Reset loop-detection history for the new turn.
+        self._recent_tools = []
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
