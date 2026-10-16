@@ -745,12 +745,6 @@ class Loop:
                     or '"status": "error"' in result):
                 return _failed(result)
             self._denial_counts.pop(name, None)
-            # Truncate massive tool results to prevent in-turn context bloat.
-            # The full result is in the tool's own output; the transcript
-            # keeps a bounded summary.
-            if len(result) > 3000:
-                result = (result[:3000] +
-                          f"\n... [truncated, {len(result)} chars total]")
             return result
 
         # Circuit breaker: stop accepting a tool the harness keeps
@@ -794,6 +788,20 @@ class Loop:
         if name == "exec":
             args = clamp_exec_timeout(args, self.exec_timeout,
                                       self.exec_timeout_max)
+        # Mechanical sats path fix: if the agent tries to edit a sats-like
+        # path outside the session (e.g. workdir/sats/current.md), rewrite
+        # it to the session sats dir. The agent cannot be trusted to
+        # construct the absolute session path.
+        if name in ("edit", "write") and args.get("path"):
+            p = str(args["path"]).replace("\\", "/")
+            if "/sats/" in p and p.endswith(".md"):
+                sdir = str(session.dir.resolve())
+                # Extract just the filename (e.g. current.md)
+                fname = p.split("/sats/")[-1].split("/")[-1]
+                correct = f"{sdir}/sats/{fname}"
+                if p != correct.replace("\\", "/"):
+                    args = dict(args)
+                    args["path"] = correct
         if name in ("delegate", "wait_subagent", "cancel_subagent"):
             result = self._dispatch_delegation(session, name, args)
             self._emit("tool", {"name": name, "args": args,
