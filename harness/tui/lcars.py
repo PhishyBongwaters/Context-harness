@@ -70,13 +70,18 @@ def header_segments(title: str, width: int, phase: int = 0,
     if build_pill:
         segs.append((build_pill, LCARS["peach"], _FG))
         segs.append((" ", LCARS["black"], _FG))
-    # MODE pill: analyze (ice, read-only) vs build (orange, may write).
+    # MODE pill: analyze (ice) vs execute (orange) vs review (periwinkle).
     # Labeled MODE: to avoid colliding with the BUILD commit pill.
     # Dropped on narrow screens alongside the BUILD pill.
     mode_pill = ""
     if mode and width >= 60:
         label = mode.upper()
-        bg = LCARS["orange"] if mode == "build" else LCARS["ice"]
+        if mode == "execute":
+            bg = LCARS["orange"]
+        elif mode == "review":
+            bg = LCARS["periwinkle"]
+        else:  # analyze (default)
+            bg = LCARS["ice"]
         mode_pill = f" MODE:{label} "
         segs.append((mode_pill, bg, _FG))
         segs.append((" ", LCARS["black"], _FG))
