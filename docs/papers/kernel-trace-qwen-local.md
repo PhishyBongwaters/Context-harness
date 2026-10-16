@@ -7,9 +7,9 @@
 
 ## Abstract
 
-A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 40 functions across 10 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens). The session reported 1.3M tokens of cumulative input processed (session-reported; pending verification against the archived session logs — see §7).
+A local 30B-parameter model, running entirely on a 16GB GPU in a basement, traced the complete buffered `write()` syscall path through the Linux kernel's ext4 filesystem — 40 functions across 10 files, with 13 documented blocking points — across 6 autonomous turns without human intervention. The harness kept per-turn context at 9% (12K of 135K tokens). The session processed 1.4M tokens of cumulative input across the full run (log-verified — see §7).
 
-**Evidence note:** every number in this paper is labeled with its source. Nothing here is estimated. Where a figure is session-reported but not yet independently verified, it says so.
+**Evidence note:** every number in this paper is labeled with its source. Nothing here is estimated.
 
 ## 1. The Task
 
@@ -134,12 +134,12 @@ No hallucinations detected. All 40 functions exist in-tree at the named location
 | Turns | 6 (t0001–t0006) | Session transcript |
 | Auto-continued turns | 4 of 6 | Session transcript |
 | Final context | 12,392 / 135,168 tokens (9%) | Session-reported context measurement |
-| Session input tokens | 1,337,411 | Session-reported usage total — **pending verification against archived session logs** |
-| Session output tokens | 15,541 | Session-reported usage total — **pending verification against archived session logs** |
+| Session input tokens | 1,414,124 | **Log-verified** — independently recomputed from `usage.json` (74 per-turn records); matches the tracker's own running totals |
+| Session output tokens | 19,405 | **Log-verified** — as above |
 | Model | Qwen 30B, local via llama.cpp | Session config |
 | Hardware | RTX 5080, 16GB VRAM | Session config |
 
-The per-turn context figure (12,392 / 135,168) is the measured assembly size at the final turn. The cumulative input/output totals are what the session's usage tracker reported; they have not yet been independently recomputed from the raw session logs. No savings ratio is claimed here — that requires the A/B retention-quiz protocol, which has not been run.
+The per-turn context figure (12,392 / 135,168) is the measured assembly size at the final turn. The cumulative token totals were recomputed from the raw per-turn records in the archived `usage.json` and match the usage tracker's totals exactly. (An earlier draft cited the session's mid-run self-report of 1,337,411 / 15,541; the verified log totals are higher because the log includes the post-completion turn t0007.) No savings ratio is claimed here — that requires the A/B retention-quiz protocol, which has not been run.
 
 ### 4.2 Handoff-Per-Turn (Issue #5)
 
@@ -211,7 +211,7 @@ A 30B model on a 16GB GPU in a basement traced 40 kernel functions across 10 fil
 
 ## 7. References
 
-- **Session logs:** session `20261015-151139`, archived on Rob's machine. Retrieved via Sysops-queue issue #53 (encrypted envelope; plaintext issue #52 was rejected — encryption required). Per-turn usage records in the session directory are the source of truth for the input/output token totals; independent recomputation from these logs is pending.
+- **Session logs:** session `20261015-151139`, archived on Rob's machine (`%LOCALAPPDATA%\context-harness\sessions\20261015-151139\`). Retrieved via Sysops-queue issue #53 (encrypted envelope; plaintext issue #52 was rejected — encryption required). Token totals independently recomputed from `usage.json` (74 per-turn records) via Sysops-queue issue #54: input 1,414,124 / output 19,405, matching the usage tracker's own totals exactly.
 - **Harness:** `github.com/PhishyBongwaters/Context-harness` @ `main` (post PR #6, post tui-message-nav merge)
 - **Model:** Qwen 30B via llama.cpp, 135K context window
 - **Kernel tree:** Linux source (version per session logs)
