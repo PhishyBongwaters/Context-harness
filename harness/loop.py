@@ -1197,8 +1197,31 @@ class Loop:
         auto_index = 0
         content = ""
         while True:
-            content, interrupted = self._run_turn_once(
-                session, text, is_auto=is_auto)
+            try:
+                content, interrupted = self._run_turn_once(
+                    session, text, is_auto=is_auto)
+            except ProviderError as exc:
+                # Step-limit hit: the handoff was already written by
+                # _run_turn_once. If auto-continue is enabled and goals
+                # are active, treat this as a turn end (not a failure)
+                # and chain to the next turn.
+                if "steps without finishing" not in str(exc):
+                    raise
+                if auto_index >= max_auto:
+                    raise
+                goals = active_goals(session.dir)
+                if not goals:
+                    raise
+                # Chain to next turn: the handoff has the context.
+                auto_index += 1
+                is_auto = True
+                text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
+                                                 goals[0])
+                self._emit("auto-continue",
+                           {"index": auto_index, "max_turns": max_auto,
+                            "goal": goals[0],
+                            "after": "step-limit"})
+                continue
             if interrupted:
                 # User interrupt stops the whole chain, not just the turn.
                 return content
