@@ -511,6 +511,9 @@ def lcars_stats_text(data):
         (f" CHAT {bd.get('transcript', 0):,} ", LCARS["periwinkle"]),
         (f" TOOLS {bd.get('tools', 0):,} ", LCARS["sky"]),
     ]
+    calls = data.get("tool_call_count")
+    if calls:
+        pills.append((f" CALLS {calls:,} ", LCARS["ice"]))
     if ut:
         pills.append((f" SESS IN {ut.get('input', 0):,} OUT {ut.get('output', 0):,} ", LCARS["peach"]))
     text = Text()
