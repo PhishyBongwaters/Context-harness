@@ -1214,42 +1214,8 @@ class Loop:
         auto_index = 0
         content = ""
         while True:
-            try:
-                content, interrupted = self._run_turn_once(
-                    session, text, is_auto=is_auto)
-            except ProviderError as exc:
-                # Step-limit hit: the handoff was already written by
-                # _run_turn_once. If auto-continue is enabled and goals
-                # are active, treat this as a turn end (not a failure)
-                # and chain to the next turn.
-                if "steps without finishing" not in str(exc):
-                    raise
-                if auto_index >= max_auto:
-                    raise
-                goals = active_goals(session.dir)
-                if not goals:
-                    raise
-                # Purge the tool history per turn: archive and clear scratch.md
-                # before chaining, exactly as main does on normal turn end.
-                # The handoff (written above) carries the context forward;
-                # the raw tool trace must not bloat the next turn.
-                # The turn_no for the failed turn is the last assigned.
-                try:
-                    from .session import load_state
-                    _tno = load_state(session.dir).get("turn", 0)
-                    self._close_episode(session, _tno, "")
-                except Exception:
-                    pass
-                # Chain to next turn: the handoff has the context.
-                auto_index += 1
-                is_auto = True
-                text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
-                                                 goals[0])
-                self._emit("auto-continue",
-                           {"index": auto_index, "max_turns": max_auto,
-                            "goal": goals[0],
-                            "after": "step-limit"})
-                continue
+            content, interrupted = self._run_turn_once(
+                session, text, is_auto=is_auto)
             if interrupted:
                 # User interrupt stops the whole chain, not just the turn.
                 return content
@@ -1423,13 +1389,5 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
-        # Step limit hit: the turn failed, but the handoff must still be
-        # written -- otherwise 50 steps of progress are lost with no
-        # record. Write it before raising.
-        try:
-            if active_goals(session.dir):
-                self._ensure_handoff(session, turn_no, system, messages)
-        except Exception:
-            pass  # Handoff failure must not mask the step-limit error.
         raise ProviderError(f"Turn exceeded {self.max_steps} steps without "
                             f"finishing.")
