@@ -60,7 +60,9 @@ HANDOFF (every turn ends with one -- this is how you survive the night):
       flight and what would prove or disprove it; dead ends already
       tried, one line each. Each step is a board card: `- [ ]` open,
       `- [x]` done -- check them off as you finish, so the next turn
-      sees what remains at a glance
+      sees what remains at a glance. If a file write is denied, deliver
+      the content inline and mark the item `- [x]` with
+      `(delivered inline -- write denied)`.
     ### Blockers -- what is stuck, and what would unstick it
     ### Pointers -- where the state lives (file paths, sat sections),
       never copies of the state itself
