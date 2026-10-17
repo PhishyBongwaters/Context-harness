@@ -1417,5 +1417,13 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
+        # Step-limit hit: ensure handoff is written before raising, so the
+        # chain (in run_turn) has state to continue from. Skip when no goals
+        # are active -- there's no work to hand off.
+        try:
+            if active_goals(session.dir):
+                self._ensure_handoff(session, turn_no, system, messages)
+        except Exception:
+            pass
         raise ProviderError(f"Turn exceeded {self.max_steps} steps without "
                             f"finishing.")
