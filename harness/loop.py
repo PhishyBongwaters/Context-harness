@@ -745,6 +745,12 @@ class Loop:
                     or '"status": "error"' in result):
                 return _failed(result)
             self._denial_counts.pop(name, None)
+            # Truncate successful tool results over 3,000 chars to keep
+            # the transcript from bloating. The full output is in the
+            # tool logs; the model gets the head.
+            if len(result) > 3000:
+                result = (result[:3000] +
+                          f"\n...[truncated {len(result)-3000} chars]")
             return result
 
         # Circuit breaker: stop accepting a tool the harness keeps
@@ -1221,6 +1227,16 @@ class Loop:
                 goals = active_goals(session.dir)
                 if not goals:
                     raise
+                # Purge the tools per turn: archive and clear scratch.md
+                # before chaining. Otherwise the next turn inherits the
+                # full tool trace and the context bloats unbounded.
+                # The turn_no for the failed turn is the last assigned.
+                try:
+                    from .session import load_state
+                    _tno = load_state(session.dir).get("turn", 0)
+                    self._close_episode(session, _tno, "")
+                except Exception:
+                    pass
                 # Chain to next turn: the handoff has the context.
                 auto_index += 1
                 is_auto = True
