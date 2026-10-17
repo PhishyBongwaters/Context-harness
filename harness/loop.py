@@ -334,6 +334,7 @@ class Loop:
         # Loop detection: if the same (tool, args) repeats 3x, stop it.
         # The agent is stuck; force it to curate and move on.
         self._recent_tools: list[tuple[str, str]] = []
+        self._tool_counts: dict[tuple[str, str], int] = {}
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -780,9 +781,11 @@ class Loop:
         self._recent_tools.append((name, _key))
         if len(self._recent_tools) > 5:
             self._recent_tools.pop(0)
-        if (len(self._recent_tools) >= 3 and
-                self._recent_tools[-1] == self._recent_tools[-2] ==
-                self._recent_tools[-3]):
+        # Count total repeats per turn (not just consecutive). If the same
+        # (tool, args) is called 3x total, the agent is stuck in a loop.
+        _tk = (name, _key)
+        self._tool_counts[_tk] = self._tool_counts.get(_tk, 0) + 1
+        if self._tool_counts[_tk] >= 3:
             return (
                 f"LOOP-BREAK: `{name}` called 3x with identical arguments. "
                 f"Results are not changing. Do NOT call `{name}` again here. "
@@ -1273,6 +1276,7 @@ class Loop:
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
         self._recent_tools = []
+        self._tool_counts = {}
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
