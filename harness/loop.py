@@ -335,6 +335,13 @@ class Loop:
         # The agent is stuck; force it to curate and move on.
         self._recent_tools: list[tuple[str, str]] = []
         self._tool_counts: dict[tuple[str, str], int] = {}
+        # Sat-write tracking: tool calls since last sats/*.md write.
+        # Used for the "curate now" nudge (not yet wired to a threshold).
+        self._turn_call_count: int = 0
+        self._last_sat_write_call: int = 0
+        self._sat_nudge_sent: bool = False
+        # Threshold for the sat-write nudge (tool calls since last sat write).
+        self._sat_nudge_threshold: int = 10
         # Curation turns are edit-only: write is denied on all
         # session sources by the gates (T5), so offering it would only
         # produce DENIED noise.
@@ -705,6 +712,26 @@ class Loop:
             pass  # best effort
 
     def _execute_tool(self, session: Session, tc: dict) -> str:
+        """Gate-checked, approval-gated tool run with sat-write nudge.
+
+        Wraps _execute_tool_inner; appends the sat-write nudge to the
+        result when the threshold is hit.
+        """
+        result = self._execute_tool_inner(session, tc)
+        # Sat-write nudge: if threshold hit and not yet sent, append.
+        since_sat = self._turn_call_count - self._last_sat_write_call
+        if (since_sat >= self._sat_nudge_threshold
+                and not self._sat_nudge_sent):
+            self._sat_nudge_sent = True
+            nudge = (
+                f"\n\n[NUDGE: {since_sat} tool calls since last sat write. "
+                f"When you finish your current thought, write your notes "
+                f"to sats/ (current.md, handoff.md) before continuing.]"
+            )
+            result = result + nudge
+        return result
+
+    def _execute_tool_inner(self, session: Session, tc: dict) -> str:
         """Gate-checked, approval-gated tool run.
 
         Harness source gates (T5) run first: they are invariants, not
@@ -714,6 +741,8 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+        # Track tool calls per turn for the sat-write nudge.
+        self._turn_call_count += 1
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
@@ -825,6 +854,13 @@ class Loop:
                     if p != correct:
                         args = dict(args)
                         args["path"] = correct
+        # Track sat writes: if this is an edit/write to sats/, record
+        # the call count. Used for the "curate now" nudge.
+        if name in ("edit", "write") and args.get("path"):
+            final_p = str(args["path"]).replace("\\", "/")
+            if final_p.startswith(sdir + "/sats/"):
+                self._last_sat_write_call = self._turn_call_count
+                self._sat_nudge_sent = False  # reset nudge on sat write
         if name in ("delegate", "wait_subagent", "cancel_subagent"):
             result = self._dispatch_delegation(session, name, args)
             self._emit("tool", {"name": name, "args": args,
@@ -1289,6 +1325,9 @@ class Loop:
         turn_no = next_turn(session.dir)
         self._recent_tools = []
         self._tool_counts = {}
+        self._turn_call_count = 0
+        self._last_sat_write_call = 0
+        self._sat_nudge_sent = False
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
