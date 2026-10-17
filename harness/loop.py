@@ -1214,8 +1214,36 @@ class Loop:
         auto_index = 0
         content = ""
         while True:
-            content, interrupted = self._run_turn_once(
-                session, text, is_auto=is_auto)
+            try:
+                content, interrupted = self._run_turn_once(
+                    session, text, is_auto=is_auto)
+            except ProviderError as exc:
+                # Step-limit hit: if auto-continue is enabled and goals
+                # are active, treat as turn end and chain (no manual
+                # intervention). Purge tool history via _close_episode,
+                # exactly as main does on normal turn end.
+                if "steps without finishing" not in str(exc):
+                    raise
+                if auto_index >= max_auto:
+                    raise
+                goals = active_goals(session.dir)
+                if not goals:
+                    raise
+                try:
+                    from .session import load_state
+                    _tno = load_state(session.dir).get("turn", 0)
+                    self._close_episode(session, _tno, "")
+                except Exception:
+                    pass
+                auto_index += 1
+                is_auto = True
+                text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
+                                                 goals[0])
+                self._emit("auto-continue",
+                           {"index": auto_index, "max_turns": max_auto,
+                            "goal": goals[0],
+                            "after": "step-limit"})
+                continue
             if interrupted:
                 # User interrupt stops the whole chain, not just the turn.
                 return content
