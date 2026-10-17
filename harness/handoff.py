@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 HANDOFF_SECTIONS = ("Now", "Next", "Blockers", "Pointers")
-HANDOFF_MAX_LINES = 40
+HANDOFF_MAX_LINES = 100000  # effectively no cap; handoff is not truncated
 HANDOFF_MAX_ATTEMPTS = 2
 
 # Canary tuning: how the ledger decides the handoff is "climbing"
@@ -265,7 +265,8 @@ def trim_handoff(text: str) -> tuple[str, int]:
     for (header, _), body in zip(sections, bodies):
         out.append(header)
         out.extend(body)
-    out.append(marker)
+    if actual_cut > 0:
+        out.append(marker)
     return "\n".join(out) + "\n", actual_cut
 
 
