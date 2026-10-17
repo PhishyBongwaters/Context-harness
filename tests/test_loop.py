@@ -218,12 +218,12 @@ class TestLoop(unittest.TestCase):
         seen = [m for m in loop2.provider.calls[0]["messages"]
                 if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
-        # T7+H1: turn 2 assembles sats (6 user: handoff first, then
-        # current, goals, facts, decisions, tasks) + history (2 users +
-        # 1 episode pointer as user + 1 recorded closing reply as
-        # assistant). The tool trace is archived, not in hot context.
+        # T7+H1: turn 2 assembles sats (7 user: handoff first, then
+        # current, goals, facts, decisions, tasks, hypotheses) + history
+        # (2 users + 1 episode pointer as user + 1 recorded closing reply
+        # as assistant). The tool trace is archived, not in hot context.
         # The trailing harness note is filtered above.
-        self.assertEqual(roles, ["user"] * 8 + ["assistant", "user"])
+        self.assertEqual(roles, ["user"] * 9 + ["assistant", "user"])
         self.assertFalse(any(m["role"] == "tool" for m in seen))
         self.assertTrue(any("archive/" in (m.get("content") or "")
                             for m in seen))
