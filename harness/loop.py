@@ -796,9 +796,10 @@ class Loop:
             p = str(args["path"]).replace("\\", "/")
             if "/sats/" in p and p.endswith(".md"):
                 sdir = str(session.dir.resolve())
-                # Extract just the filename (e.g. current.md)
-                fname = p.split("/sats/")[-1].split("/")[-1]
-                correct = f"{sdir}/sats/{fname}"
+                # Preserve the relative path after /sats/ (e.g. archive/old.md),
+                # not just the filename -- dropping subdirs corrupts the path.
+                rel_path = p.split("/sats/")[-1]
+                correct = f"{sdir}/sats/{rel_path}"
                 if p != correct.replace("\\", "/"):
                     args = dict(args)
                     args["path"] = correct
