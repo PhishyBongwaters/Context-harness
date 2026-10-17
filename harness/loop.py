@@ -1268,28 +1268,11 @@ class Loop:
             try:
                 content, interrupted = self._run_turn_once(
                     session, text, is_auto=is_auto)
-            except ProviderError as exc:
-                # Step-limit hit: if auto-continue is enabled and goals
-                # are active, treat as turn end and chain (no manual
-                # intervention). Do NOT purge the tool history here --
-                # purging deletes the results the agent needs to avoid
-                # starting over. The history is preserved across the chain.
-                if "steps without finishing" not in str(exc):
-                    raise
-                if auto_index >= max_auto:
-                    raise
-                goals = active_goals(session.dir)
-                if not goals:
-                    raise
-                auto_index += 1
-                is_auto = True
-                text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
-                                                 goals[0])
-                self._emit("auto-continue",
-                           {"index": auto_index, "max_turns": max_auto,
-                            "goal": goals[0],
-                            "after": "step-limit"})
-                continue
+            except ProviderError:
+                # Step-limit (or any provider error) ends the turn.
+                # No chaining on step-limit: auto-continue is for turn
+                # boundaries, not tool-call limits. Matches main.
+                raise
             if interrupted:
                 # User interrupt stops the whole chain, not just the turn.
                 return content
