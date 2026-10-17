@@ -8,7 +8,7 @@
     harness/handoff.py   (handoff schema, validation, ledger, trim)
   Rendered at 1040x1500. Dark LCARS-flavored theme to match the TUI.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1500" viewBox="0 0 1040 1500" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1540" viewBox="0 0 1040 1540" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1 L 9 5 L 0 9 z" fill="#5a6b82"/>
@@ -27,7 +27,7 @@
     </style>
   </defs>
 
-  <rect width="1040" height="1500" fill="#0a0e14"/>
+  <rect width="1040" height="1540" fill="#0a0e14"/>
 
   <!-- Title -->
   <text x="520" y="54" text-anchor="middle" class="title">THE LOOP</text>
@@ -53,7 +53,7 @@
 
   <!-- Step loop container -->
   <rect x="60" y="248" width="920" height="1012" rx="18" fill="#0d1219" stroke="#2a3342" stroke-width="1.5"/>
-  <text x="88" y="276" class="pill" fill="#6b7688">STEP LOOP · ≤ 50 STEPS</text>
+  <text x="88" y="276" class="pill" fill="#6b7688">STEP LOOP · ≤ max_steps (default 50)</text>
 
   <!-- ASSEMBLE -->
   <g>
@@ -174,18 +174,20 @@
   <!-- Footer: amnesia rule -->
   <text x="520" y="1312" text-anchor="middle" class="foot">There is no other memory — the next turn wakes up knowing ONLY what is in the assembled sources.</text>
   <text x="520" y="1334" text-anchor="middle" class="foot">Auto-continue: while a goal is [active], the turn may open itself — same loop, stamped ## auto.</text>
+  <text x="520" y="1356" text-anchor="middle" class="foot">Step limit: on max_steps the handoff is written first (if goals active), then ProviderError;</text>
+  <text x="520" y="1374" text-anchor="middle" class="foot">run_turn purges scratch.md via _close_episode and auto-continues when enabled.</text>
 
   <!-- Legend -->
   <g font-size="12" fill="#8a94a6">
-    <rect x="200" y="1368" width="14" height="14" rx="3" fill="#14202f" stroke="#5b8dd9"/>
-    <text x="220" y="1380">harness-owned</text>
-    <rect x="348" y="1368" width="14" height="14" rx="3" fill="#2a1f14" stroke="#e08a3c"/>
-    <text x="368" y="1380">model action</text>
-    <rect x="486" y="1368" width="14" height="14" rx="3" fill="#1f1830" stroke="#9b7ede"/>
-    <text x="506" y="1380">decision</text>
-    <rect x="600" y="1368" width="14" height="14" rx="3" fill="#2a2113" stroke="#d9a53b"/>
-    <text x="620" y="1380">handoff</text>
-    <rect x="706" y="1368" width="14" height="14" rx="3" fill="#123324" stroke="#4caf7d"/>
-    <text x="726" y="1380">terminal</text>
+    <rect x="200" y="1408" width="14" height="14" rx="3" fill="#14202f" stroke="#5b8dd9"/>
+    <text x="220" y="1420">harness-owned</text>
+    <rect x="348" y="1408" width="14" height="14" rx="3" fill="#2a1f14" stroke="#e08a3c"/>
+    <text x="368" y="1420">model action</text>
+    <rect x="486" y="1408" width="14" height="14" rx="3" fill="#1f1830" stroke="#9b7ede"/>
+    <text x="506" y="1420">decision</text>
+    <rect x="600" y="1408" width="14" height="14" rx="3" fill="#2a2113" stroke="#d9a53b"/>
+    <text x="620" y="1420">handoff</text>
+    <rect x="706" y="1408" width="14" height="14" rx="3" fill="#123324" stroke="#4caf7d"/>
+    <text x="726" y="1420">terminal</text>
   </g>
 </svg>

@@ -92,6 +92,12 @@ re-read deliberately by path — visible cost, no silent bloat. The
 memory architecture is diagrammed in `docs/memory-diagram.svg` — a
 design doc: it must stay true to the implementation.
 
+**Step limit:** If the turn hits `max_steps` (default 50, configurable)
+without the model finishing, the harness writes the handoff first (when
+goals are active) then raises. On auto-continue, `scratch.md` is purged
+via the normal episode-close path before chaining to the next turn —
+the next turn starts clean, not with the previous turn's tool trace.
+
 ## Budget
 
 A token budget meter shows every turn. Soft breach warns; hard breach
