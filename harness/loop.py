@@ -1229,11 +1229,18 @@ class Loop:
                 goals = active_goals(session.dir)
                 if not goals:
                     raise
-                # Step-limit chain: do NOT purge scratch.md here. The turn was
-                # force-closed mid-task; the agent's working notes are in
-                # scratch.md. Purging deletes them, causing the next turn
-                # to repeat work (re-reading files). Chain with scratch
-                # intact; the handoff carries the context.
+                # Purge the tool history per turn: archive and clear scratch.md
+                # before chaining, exactly as main does on normal turn end.
+                # The handoff (written above) carries the context forward;
+                # the raw tool trace must not bloat the next turn.
+                # The turn_no for the failed turn is the last assigned.
+                try:
+                    from .session import load_state
+                    _tno = load_state(session.dir).get("turn", 0)
+                    self._close_episode(session, _tno, "")
+                except Exception:
+                    pass
+                # Chain to next turn: the handoff has the context.
                 auto_index += 1
                 is_auto = True
                 text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
