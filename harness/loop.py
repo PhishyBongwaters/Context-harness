@@ -794,13 +794,12 @@ class Loop:
         # construct the absolute session path.
         if name in ("edit", "write") and args.get("path"):
             p = str(args["path"]).replace("\\", "/")
-            # Only rewrite if under workdir (not already under session dir,
-            # not under some other project). Prevents hijacking unrelated
-            # sats/ directories.
-            wdir = str(session.workdir.resolve()).replace("\\", "/") if session.workdir else ""
             sdir = str(session.dir.resolve()).replace("\\", "/")
-            if (wdir and p.startswith(wdir + "/") and "/sats/" in p
-                    and p.endswith(".md") and not p.startswith(sdir + "/")):
+            # Rewrite any sats/*.md path not already under the session dir.
+            # Sats are never saved in workdir -- any such path is the agent
+            # guessing wrong.
+            if ("/sats/" in p and p.endswith(".md")
+                    and not p.startswith(sdir + "/")):
                 # Preserve the relative path after /sats/ (e.g. archive/old.md),
                 # not just the filename -- dropping subdirs corrupts the path.
                 rel_path = p.split("/sats/")[-1]
