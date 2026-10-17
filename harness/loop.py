@@ -714,28 +714,11 @@ class Loop:
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
 
-        # Loop detection: same (tool, args) 3x in a row = stuck.
-        # Stop it, force curate and move on. Do NOT suggest varying
-        # the query -- that causes semantic loops.
-        import json as _json
-        try:
-            _key = _json.dumps(args, sort_keys=True, default=str)
-        except Exception:
-            _key = str(args)
-        self._recent_tools.append((name, _key))
-        if len(self._recent_tools) > 5:
-            self._recent_tools.pop(0)
-        if (len(self._recent_tools) >= 3 and
-                self._recent_tools[-1] == self._recent_tools[-2] ==
-                self._recent_tools[-3]):
-            return (
-                f"LOOP-BREAK: `{name}` called 3x with identical arguments. "
-                f"Results are not changing. Do NOT call `{name}` again here. "
-                f"Write findings to sats/current.md and move to the next step."
-            )
-
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
+            # Failed calls break the loop-detection chain -- only successful
+            # identical calls indicate a stuck agent, not errors.
+            self._recent_tools.clear()
             return result
 
         def _done(result: str) -> str:
@@ -785,6 +768,26 @@ class Loop:
                                     "result": denial,
                                     "denied": True})
                 return _failed(denial)
+        # Loop detection: same (tool, args) 3x in a row = stuck.
+        # Only for tools that pass the gates -- denied tools are handled
+        # by the circuit breaker above. Do NOT suggest varying the query
+        # -- that causes semantic loops.
+        import json as _json
+        try:
+            _key = _json.dumps(args, sort_keys=True, default=str)
+        except Exception:
+            _key = str(args)
+        self._recent_tools.append((name, _key))
+        if len(self._recent_tools) > 5:
+            self._recent_tools.pop(0)
+        if (len(self._recent_tools) >= 3 and
+                self._recent_tools[-1] == self._recent_tools[-2] ==
+                self._recent_tools[-3]):
+            return (
+                f"LOOP-BREAK: `{name}` called 3x with identical arguments. "
+                f"Results are not changing. Do NOT call `{name}` again here. "
+                f"Write findings to sats/current.md and move to the next step."
+            )
         if name == "exec":
             args = clamp_exec_timeout(args, self.exec_timeout,
                                       self.exec_timeout_max)
