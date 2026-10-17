@@ -72,10 +72,17 @@ class TestMarquee(unittest.TestCase):
         self.assertEqual(len(ta), len(tb))
 
     def test_marquee_wraps(self):
+        from harness.tui.lcars import build_id
         title = "abcdefghij" * 10
-        a = header_segments(title, 80, phase=0, marquee=0)
-        span = len(title) - (80 - 48) + 1
-        b = header_segments(title, 80, phase=0, marquee=span)
+        width = 80
+        a = header_segments(title, width, phase=0, marquee=0)
+        # Replicate the function's max_title calc exactly (includes BUILD
+        # pill + separator).
+        build_pill = f" BUILD {build_id()} " if width >= 60 else ""
+        max_title = max(8, width - 48 - len(build_pill)
+                        - (1 if build_pill else 0))
+        span = len(title) - max_title + 1
+        b = header_segments(title, width, phase=0, marquee=span)
         ta = [t for t, _, _ in a if "a" in t][0]
         tb = [t for t, _, _ in b if "a" in t][0]
         self.assertEqual(ta, tb)
