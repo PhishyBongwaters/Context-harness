@@ -1220,8 +1220,9 @@ class Loop:
             except ProviderError as exc:
                 # Step-limit hit: if auto-continue is enabled and goals
                 # are active, treat as turn end and chain (no manual
-                # intervention). Purge tool history via _close_episode,
-                # exactly as main does on normal turn end.
+                # intervention). Do NOT purge the tool history here --
+                # purging deletes the results the agent needs to avoid
+                # starting over. The history is preserved across the chain.
                 if "steps without finishing" not in str(exc):
                     raise
                 if auto_index >= max_auto:
@@ -1229,12 +1230,6 @@ class Loop:
                 goals = active_goals(session.dir)
                 if not goals:
                     raise
-                try:
-                    from .session import load_state
-                    _tno = load_state(session.dir).get("turn", 0)
-                    self._close_episode(session, _tno, "")
-                except Exception:
-                    pass
                 auto_index += 1
                 is_auto = True
                 text = AUTO_CONTINUE_TEMPLATE % (auto_index, max_auto,
