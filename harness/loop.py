@@ -813,6 +813,18 @@ class Loop:
                 if p != correct:
                     args = dict(args)
                     args["path"] = correct
+            # General write guard: any edit/write to a path outside the
+            # session dir is the agent guessing wrong. Redirect to the
+            # session dir root (preserve filename). The agent must not
+            # write to the repo, workdir, or other locations.
+            elif not p.startswith(sdir + "/"):
+                # Extract filename, ignore directory structure
+                filename = p.split("/")[-1]
+                if filename:
+                    correct = f"{sdir}/{filename}"
+                    if p != correct:
+                        args = dict(args)
+                        args["path"] = correct
         if name in ("delegate", "wait_subagent", "cancel_subagent"):
             result = self._dispatch_delegation(session, name, args)
             self._emit("tool", {"name": name, "args": args,
