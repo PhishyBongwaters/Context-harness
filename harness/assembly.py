@@ -118,12 +118,6 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
                          str(workdir) if workdir else "")
                 .replace("{sdir}", str(sdir))
                 .replace("{turn_stamp}", turn_stamp))
-    # Runtime injection (not template): tell the model exactly where
-    # its sats live. The agent cannot guess the session path.
-    sdir_resolved = str(Path(sdir).expanduser().resolve())
-    text = (text.rstrip("\n") + "\n\n# Session paths (runtime)\n"
-            f"Your sats live at: {sdir_resolved}/sats/\n"
-            f"Edit them via absolute path, e.g. {sdir_resolved}/sats/current.md\n")
     if include_text and include_text.strip():
         text = (text.rstrip("\n") + "\n\n# User includes\n\n"
                 + include_text.strip() + "\n")
