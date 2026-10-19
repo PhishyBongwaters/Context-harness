@@ -381,7 +381,12 @@ def search_tool(args: dict, workdir: str) -> str:
             rx = re.compile(pattern)
             match = lambda line: rx.search(line) is not None
         else:
-            match = lambda line: pattern in line
+            # Whitespace-insensitive literal search: escape meta chars then allow flexible whitespace
+            escaped = re.escape(pattern)
+            flexible = re.sub(r'\\s+', r'\\s*', escaped)
+            # Remove spaces between escaped tokens for extra tolerance
+            rx = re.compile(flexible)
+            match = lambda line: rx.search(line) is not None
     except re.error as e:
         return f"ERROR: bad regex: {e}"
     try:
@@ -393,7 +398,9 @@ def search_tool(args: dict, workdir: str) -> str:
     for q in files:
         if not q.is_file():
             continue
-        if not fnmatch.fnmatch(q.name, file_pat):
+        # Support file_pattern as filename glob or as path glob relative to root
+        rel = q.relative_to(root).as_posix()
+        if not fnmatch.fnmatch(q.name, file_pat) and not fnmatch.fnmatch(rel, file_pat):
             continue
         if q.stat().st_size > 1_000_000:  # skip large/binary-ish files
             continue

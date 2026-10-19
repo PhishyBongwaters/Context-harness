@@ -118,7 +118,8 @@ def validate_handoff(sdir: str | Path, turn_no: int) -> tuple[bool, str]:
     if parsed is None:
         return False, ("sats/handoff.md has no '## Handoff -- tNNNN' "
                        "header -- rewrite it in the required shape")
-    if parsed["stamp"] != turn_no:
+    # Allow bootstrap stamp t0000 on the first real turn
+    if parsed["stamp"] != turn_no and not (parsed["stamp"] == 0 and turn_no == 1):
         return False, (
             f"handoff stamp is t{parsed['stamp']:04d} but this turn is "
             f"t{turn_no:04d} -- rewrite it")

@@ -1192,6 +1192,9 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
+        # Start turn with a clean ephemeral scratch; handoff is the durable memory.
+        # Old tool transcripts are archived in history, not fed back to the model.
+        (session.dir / "scratch.md").write_text("", encoding="utf-8")
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
