@@ -69,6 +69,7 @@ HANDOFF (every turn ends with one -- this is how you survive the night):
   but the stamp must read {turn_stamp}. The harness checks the handoff
   before your turn ends; a stale or missing handoff sends you back for
   one more round.
+  HANDOFF CADENCE: Close the turn and rewrite sats/handoff.md after you complete a logical sub-task, or after ~8-12 tool calls, whichever comes first. Do not chain tool calls indefinitely. Update sats/current.md live and ensure the handoff is rewritten with the correct t{turn_stamp} stamp before finishing.
 """
 HANDOFF_PROMPT_MARKER = "HANDOFF (every turn ends with one"
 
