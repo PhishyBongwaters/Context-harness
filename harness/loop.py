@@ -1198,6 +1198,16 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
+        # Enforce handoff continuity: previous turn must have left a fresh handoff
+        from .handoff import validate_handoff
+        if turn_no > 1:
+            ok, reason = validate_handoff(session.dir, turn_no - 1)
+            if not ok:
+                # Force a handoff recovery before any work
+                self._ensure_handoff(session, turn_no - 1, system_prompt="", messages=[])
+        # Start turn with a clean ephemeral scratch; handoff is the durable memory.
+        # Old tool transcripts are archived in history, not fed back to the model.
+        (session.dir / "scratch.md").write_text("", encoding="utf-8")
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
@@ -1239,6 +1249,16 @@ class Loop:
                 bd = self._measure(self.provider, system, messages, self._tools)
                 est = bd["total"]
                 status = self.budget.status(est)
+                # Auto-handoff nudge on transcript bloat
+                if bd.get("transcript", 0) >= 35000:
+                    self._emit("budget", {"status": "transcript_bloat", "tokens": est,
+                                          "breakdown": bd})
+                    # Force a handoff now to trigger deep clean
+                    self._stop_event.clear()
+                    self._auto_dedupe(session)
+                    self._ensure_handoff(session, turn_no, system, messages)
+                    self._close_episode(session, turn_no, content or "")
+                    return content or "", False
                 if status == "over":
                     self._emit("budget", {"status": "over", "tokens": est,
                                           "breakdown": bd})

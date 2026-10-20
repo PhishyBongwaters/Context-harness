@@ -124,7 +124,13 @@ class Policy:
     def resolve(self, path: str) -> Path:
         p = Path(os.path.expanduser(path or ""))
         if not p.is_absolute():
-            p = self.workdir / p
+            # Session-curated files are referenced as sats/... or history.md
+            # Resolve them relative to session_dir, not workdir
+            rel = str(p)
+            if rel.startswith("sats/") or rel == "sats" or rel == "history.md" or rel.startswith("history.md/"):
+                p = self.session_dir / p
+            else:
+                p = self.workdir / p
         return p.resolve()
 
     def in_roots(self, path: Path) -> bool:
