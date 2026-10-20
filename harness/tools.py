@@ -370,8 +370,8 @@ def list_dir_tool(args: dict, workdir: str) -> str:
 
 def search_tool(args: dict, workdir: str) -> str:
     """Grep a directory tree. Returns file:line: text. Read-only."""
+    import fnmatch
     import re
-    from pathlib import Path
     root = _resolve(args.get("path") or ".", workdir)
     pattern = args.get("pattern") or ""
     use_regex = bool(args.get("regex"))
@@ -383,9 +383,10 @@ def search_tool(args: dict, workdir: str) -> str:
             rx = re.compile(pattern)
             match = lambda line: rx.search(line) is not None
         else:
-            # Whitespace-insensitive literal search: escape tokens and allow flexible whitespace between them
-            parts = [re.escape(p) for p in pattern.split()]
-            flexible = r'\s+'.join(parts) if parts else re.escape(pattern)
+            # Whitespace-insensitive literal search: escape meta chars then allow flexible whitespace
+            escaped = re.escape(pattern)
+            flexible = re.sub(r'\\s+', r'\\s*', escaped)
+            # Remove spaces between escaped tokens for extra tolerance
             rx = re.compile(flexible)
             match = lambda line: rx.search(line) is not None
     except re.error as e:
@@ -401,7 +402,7 @@ def search_tool(args: dict, workdir: str) -> str:
             continue
         # Support file_pattern as filename glob or as path glob relative to root
         rel = q.relative_to(root).as_posix()
-        if not Path(q.name).match(file_pat) and not Path(rel).match(file_pat):
+        if not fnmatch.fnmatch(q.name, file_pat) and not fnmatch.fnmatch(rel, file_pat):
             continue
         if q.stat().st_size > 1_000_000:  # skip large/binary-ish files
             continue
