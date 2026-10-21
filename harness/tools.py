@@ -381,12 +381,13 @@ def search_tool(args: dict, workdir: str) -> str:
             rx = re.compile(pattern)
             match = lambda line: rx.search(line) is not None
         else:
-            # Whitespace-insensitive literal search: escape meta chars then allow flexible whitespace
-            escaped = re.escape(pattern)
-            flexible = re.sub(r'\\s+', r'\\s*', escaped)
-            # Remove spaces between escaped tokens for extra tolerance
-            rx = re.compile(flexible)
-            match = lambda line: rx.search(line) is not None
+            # Plain substring search (issue #13). The previous
+            # "whitespace-flexible" attempt was double-escaped dead code
+            # (re.sub(r'\\s+', ...) never substituted anything), so it
+            # changed nothing while pretending to. If flexible-whitespace
+            # matching is wanted, it needs its own implementation and
+            # tests -- not this. The file_pattern path-glob below stays.
+            match = lambda line: pattern in line
     except re.error as e:
         return f"ERROR: bad regex: {e}"
     try:

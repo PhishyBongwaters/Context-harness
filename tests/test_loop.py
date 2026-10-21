@@ -212,10 +212,32 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(loop1.run_turn(s, "what is the answer?"),
                          "the answer is 42")
 
-        script2 = [{"content": "still 42"}]
+        # Turn 1 ended with a handoff-invalid (its script had no
+        # handoff edit), so turn 2 starts with a recovery round:
+        # the model first repairs the stale t0000 stamp to t0001,
+        # then does the real turn, then writes the t0002 handoff.
+        # The main turn is the non-edit-only provider call.
+        handoff = str(s.dir / "sats" / "handoff.md")
+        script2 = [
+            {"content": None, "tool_calls": [
+                {"id": "r1", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0000",
+                     "new_text": "## Handoff -- t0001"}}]},
+            {"content": "still 42"},
+            {"content": None, "tool_calls": [
+                {"id": "h2", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0001",
+                     "new_text": "## Handoff -- t0002"}}]},
+        ]
         loop2 = Loop(MockProvider(script2), Budget(100000, 80000))
         self.assertEqual(loop2.run_turn(s, "and now?"), "still 42")
-        seen = [m for m in loop2.provider.calls[0]["messages"]
+        main_call = next(c for c in loop2.provider.calls
+                         if c["tools"] != ["edit"])
+        seen = [m for m in main_call["messages"]
                 if "[harness note:" not in (m.get("content") or "")]
         roles = [m["role"] for m in seen]
         # T7+H1: turn 2 assembles sats (6 user: handoff first, then
@@ -372,6 +394,38 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(len(baks), 1)
         self.assertEqual(open(baks[0], encoding="utf-8").read(),
                          "## assistant\nprior episode notes\n")
+
+    def test_turn_start_does_not_purge_scratch(self):
+        # Issue #13: the turn-start scratch purge destroyed an
+        # interrupted turn's only working trace without archiving it.
+        s = make_session()
+        (s.dir / "scratch.md").write_text(
+            "## assistant\nunarchived finding\n", encoding="utf-8")
+        loop = Loop(MockProvider([{"content": "hi"}]),
+                    Budget(hard=100000, soft=80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "hi")
+        archived = ""
+        for p in (s.dir / "archive").glob("*.md"):
+            archived += p.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("unarchived finding", archived)
+
+    def test_transcript_bloat_at_step_zero_does_not_raise(self):
+        # Issue #13: the bloat branch returned `content` before it was
+        # assigned, so a session already >= 35k transcript tokens at
+        # turn start raised UnboundLocalError. The force-close itself
+        # is preserved; only the crash is fixed.
+        events = []
+        s = make_session()
+        (s.dir / "sats" / "current.md").write_text(
+            "# Current\n\n" + ("kernel trace notes function analysis "
+                               * 8000),
+            encoding="utf-8")
+        loop = Loop(MockProvider([{"content": "should not matter"}]),
+                    Budget(hard=1000000, soft=900000),
+                    on_event=lambda k, v: events.append(k))
+        out = loop.run_turn(s, "hi")  # must not raise
+        self.assertEqual(out, "")
+        self.assertIn("budget", events)
 
     def test_prune_gate_uses_full_tool_measure(self):
         # The assembly can be UNDER by the prune-tools measure while OVER

@@ -69,7 +69,6 @@ HANDOFF (every turn ends with one -- this is how you survive the night):
   but the stamp must read {turn_stamp}. The harness checks the handoff
   before your turn ends; a stale or missing handoff sends you back for
   one more round.
-  HANDOFF CADENCE: Close the turn and rewrite sats/handoff.md after you complete a logical sub-task, or after ~8-12 tool calls, whichever comes first. Do not chain tool calls indefinitely. Update sats/current.md live and ensure the handoff is rewritten with the correct t{turn_stamp} stamp before finishing.
 """
 HANDOFF_PROMPT_MARKER = "HANDOFF (every turn ends with one"
 
@@ -119,8 +118,12 @@ def validate_handoff(sdir: str | Path, turn_no: int) -> tuple[bool, str]:
     if parsed is None:
         return False, ("sats/handoff.md has no '## Handoff -- tNNNN' "
                        "header -- rewrite it in the required shape")
-    # Allow bootstrap stamp t0000 on the first real turn
-    if parsed["stamp"] != turn_no and not (parsed["stamp"] == 0 and turn_no == 1):
+    # Strict stamp match (issue #13): the t0000-on-turn-1 allowance
+    # waved the first turn through without a handoff, so forced handoff
+    # rounds never fired and the enforcement tests failed. A fresh
+    # session's t0000 template is handled by the forced rounds at turn
+    # end, which is the designed path.
+    if parsed["stamp"] != turn_no:
         return False, (
             f"handoff stamp is t{parsed['stamp']:04d} but this turn is "
             f"t{turn_no:04d} -- rewrite it")

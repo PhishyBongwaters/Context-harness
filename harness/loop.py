@@ -1192,22 +1192,29 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
-        # Enforce handoff continuity: previous turn must have left a fresh handoff
-        from .handoff import validate_handoff
-        if turn_no > 1:
-            ok, reason = validate_handoff(session.dir, turn_no - 1)
-            if not ok:
-                # Force a handoff recovery before any work
-                self._ensure_handoff(session, turn_no - 1, system_prompt="", messages=[])
-        # Start turn with a clean ephemeral scratch; handoff is the durable memory.
-        # Old tool transcripts are archived in history, not fed back to the model.
-        (session.dir / "scratch.md").write_text("", encoding="utf-8")
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
                              workdir=session.workdir,
                              include_text=self.include_text,
                              turn_no=turn_no)
+        # Enforce handoff continuity: previous turn must have left a fresh
+        # handoff. Recovery runs with the real system prompt (load_prompt
+        # reads prompt.md only, it does not assemble the transcript, so
+        # loading it first is safe). A broken handoff must not wedge the
+        # session: recovery failure is loud but the turn still proceeds
+        # (_ensure_handoff returns False instead of raising).
+        # NOTE: scratch.md is deliberately NOT wiped here. It is the
+        # episode's working trace and is only cleared by _close_episode,
+        # which archives it first. Wiping it at turn start destroyed the
+        # only copy of an interrupted turn's work (issue #13).
+        from .handoff import validate_handoff
+        if turn_no > 1:
+            ok, reason = validate_handoff(session.dir, turn_no - 1)
+            if not ok:
+                # Force a handoff recovery before any work
+                self._ensure_handoff(session, turn_no - 1, system,
+                                     messages=[])
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
@@ -1230,6 +1237,12 @@ class Loop:
         self._append_source(session, "history.md",
                             render_opening(user_text, turn_no))
         warned = False
+        # Initialised before the step loop: the transcript-bloat branch
+        # below returns `content` on the very first step, before any
+        # provider reply exists. Uninitialised, that was UnboundLocalError
+        # for any session whose assembled transcript was already >= 35k
+        # tokens at turn start (issue #13).
+        content = ""
 
         try:
             for step in range(MAX_STEPS):

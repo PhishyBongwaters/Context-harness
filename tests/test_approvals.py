@@ -32,6 +32,20 @@ class TestPolicy(unittest.TestCase):
             "read", {"path": str(Path(tempfile.mkdtemp()) / "x")})
         self.assertEqual(d, "ask")
 
+    def test_resolve_sats_and_history_go_to_session_dir(self):
+        # Issue #13: the old "sats/" string-prefix check never matched
+        # on Windows (str(Path) uses backslashes). Comparing
+        # Path.parts works under both separators.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        pol = policy_for(s)
+        self.assertEqual(pol.resolve("sats/handoff.md"),
+                         (s.dir / "sats/handoff.md").resolve())
+        self.assertEqual(pol.resolve("history.md"),
+                         (s.dir / "history.md").resolve())
+        self.assertEqual(pol.resolve("notes.txt"),
+                         (Path(workdir) / "notes.txt").resolve())
+
     def test_tokens_literal_allowed(self):
         s = make_session()
         d, _, _ = policy_for(s).check("tokens", {"text": "hi"})

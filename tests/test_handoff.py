@@ -216,6 +216,48 @@ class TestEnforcement(unittest.TestCase):
         self.assertEqual(out, "done")
         self.assertIn("handoff-invalid", events)
 
+    def test_stale_previous_handoff_recovers_without_raising(self):
+        # Issue #13: turn-start recovery called _ensure_handoff with
+        # the non-existent keyword system_prompt, so any session whose
+        # previous handoff was stale raised TypeError before any work
+        # and could never heal. Recovery now runs with the real system
+        # prompt and the turn proceeds.
+        s = make_session()
+        handoff = str(s.dir / "sats" / "handoff.md")
+        turn1 = [
+            {"content": "done"},
+            {"content": None, "tool_calls": [
+                {"id": "h1", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0000",
+                     "new_text": "## Handoff -- t0001"}}]},
+        ]
+        loop, _ = self._loop(turn1)
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertTrue(validate_handoff(s.dir, 1)[0])
+        # Previous turn died without a fresh handoff: stamp is stale.
+        write_handoff(s.dir, stamp="t0099")
+        turn2 = [
+            {"content": None, "tool_calls": [
+                {"id": "r1", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0099",
+                     "new_text": "## Handoff -- t0001"}}]},
+            {"content": "done2"},
+            {"content": None, "tool_calls": [
+                {"id": "h2", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0001",
+                     "new_text": "## Handoff -- t0002"}}]},
+        ]
+        loop2, _ = self._loop(turn2)
+        self.assertEqual(loop2.run_turn(s, "again"), "done2")
+        ok, reason = validate_handoff(s.dir, 2)
+        self.assertTrue(ok, reason)
+
     def test_fresh_handoff_needs_no_forced_round(self):
         s = make_session()
         write_handoff(s.dir, stamp="t0001",

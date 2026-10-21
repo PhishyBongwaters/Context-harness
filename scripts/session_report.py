@@ -8,9 +8,90 @@ Usage:
 Full report includes per-turn metrics, tool usage, sats health, archive footprint.
 --summary prints a concise human-readable summary.
 """
-import json, sys, argparse
+import json, sys, argparse, os
 from pathlib import Path
 from collections import Counter
+
+
+def default_sessions_base() -> Path:
+    """Mirror the harness's own platform default (harness/config.py:
+    default_sessions_dir). Windows: %LOCALAPPDATA%/context-harness/
+    sessions; elsewhere: ~/.local/share/context-harness/sessions.
+    The old code used Path('') (i.e. '.') when LOCALAPPDATA was unset,
+    so on Linux/macOS it silently looked in ./context-harness/sessions.
+    """
+    local = os.environ.get('LOCALAPPDATA', '')
+    if local:
+        return Path(local) / 'context-harness' / 'sessions'
+    return Path(os.path.expanduser('~/.local/share/context-harness/sessions'))
+
+
+def resolve_session(arg: str, base_dir: Path) -> Path:
+    p = Path(arg)
+    return p if p.is_dir() else base_dir / arg
+
+
+def session_summary(session_path: Path) -> dict:
+    usage = load_usage(session_path / 'usage.json')
+    totals = usage.get('totals', {}) if usage else {}
+    turns_stats = per_turn_stats(usage) if usage else []
+    tool_counts, _, budget_status = tool_usage(session_path)
+    sats = summarize_sats(session_path / 'sats')
+    handoff, _ = handoff_info(session_path / 'sats')
+    archive_path = session_path / 'archive'
+    if archive_path.exists():
+        arch_files = [p for p in archive_path.rglob('*') if p.is_file()]
+        arch_count, arch_size = len(arch_files), sum(
+            p.stat().st_size for p in arch_files)
+    else:
+        arch_count, arch_size = 0, 0
+    return {
+        'totals': totals,
+        'entries': len(turns_stats),
+        'max_transcript': max((s['transcript'] for s in turns_stats),
+                              default=0),
+        'tool_counts': tool_counts,
+        'budget_status': budget_status,
+        'sats': sats,
+        'handoff_stamp': handoff.get('stamp') if handoff else None,
+        'archive_count': arch_count,
+        'archive_size': arch_size,
+    }
+
+
+def compare_sessions(a: Path, b: Path) -> None:
+    """Side-by-side comparison (issue #13: --compare was documented
+    but never implemented -- the flag was parsed and silently ignored).
+    """
+    sa, sb = session_summary(a), session_summary(b)
+    print(f'{"metric":<28} {a.name:<28} {b.name}')
+    print('-' * 84)
+    for label, ka, kb in [
+            ('input tokens', sa['totals'].get('input', 0),
+             sb['totals'].get('input', 0)),
+            ('output tokens', sa['totals'].get('output', 0),
+             sb['totals'].get('output', 0)),
+            ('estimated tokens', sa['totals'].get('estimated', 0),
+             sb['totals'].get('estimated', 0)),
+            ('usage entries', sa['entries'], sb['entries']),
+            ('max transcript', sa['max_transcript'], sb['max_transcript']),
+            ('archive files', sa['archive_count'], sb['archive_count']),
+            ('archive bytes', sa['archive_size'], sb['archive_size']),
+    ]:
+        print(f'{label:<28} {ka:<28} {kb}')
+    print(f'{"handoff stamp":<28} {str(sa["handoff_stamp"]):<28} '
+          f'{sb["handoff_stamp"]}')
+    print()
+    print('Tool usage:')
+    for name in sorted(set(sa['tool_counts']) | set(sb['tool_counts'])):
+        print(f'  {name:<24} {sa["tool_counts"].get(name, 0):<10} '
+              f'{sb["tool_counts"].get(name, 0)}')
+    print()
+    print('Sats (bytes):')
+    for name in sorted(set(sa['sats']) | set(sb['sats'])):
+        ba = sa['sats'].get(name, {}).get('bytes', 0)
+        bb = sb['sats'].get(name, {}).get('bytes', 0)
+        print(f'  {name:<24} {ba:<10} {bb}')
 
 def load_usage(usage_path: Path):
     if not usage_path.exists():
@@ -111,7 +192,16 @@ def main():
     parser.add_argument('--compare', nargs=2, metavar=('S1','S2'), help='Compare two sessions side-by-side')
     args = parser.parse_args()
 
-    base_dir = Path(os.environ.get('LOCALAPPDATA', '')) / 'context-harness' / 'sessions'
+    base_dir = default_sessions_base()
+    if args.compare:
+        pa = resolve_session(args.compare[0], base_dir)
+        pb = resolve_session(args.compare[1], base_dir)
+        for p in (pa, pb):
+            if not p.exists():
+                print(f'Session not found: {p}')
+                sys.exit(1)
+        compare_sessions(pa, pb)
+        return
     if args.latest or not args.session:
         sessions = sorted(base_dir.glob('202*'), key=lambda p: p.name, reverse=True)
         if not sessions:
@@ -120,11 +210,7 @@ def main():
         session_path = sessions[0]
         print(f'Using latest session: {session_path.name}')
     else:
-        sess = Path(args.session)
-        if sess.is_dir():
-            session_path = sess
-        else:
-            session_path = base_dir / sess
+        session_path = resolve_session(args.session, base_dir)
 
     if not session_path.exists():
         print(f'Session not found: {session_path}')
@@ -191,12 +277,7 @@ def main():
         print(f'CSV report written to {out_dir}')
         return
 
-    # Build info
-    try:
-        import subprocess
-        commit = subprocess.check_output(['git', '-C', str(Path(__file__).parents[1]), 'rev-parse', '--short', 'HEAD'], text=True).strip()
-    except Exception:
-        commit = 'unknown'
+    # Build info is computed once above (commit); do not duplicate it.
     if args.summary:
         print(f'Session: {session_path}')
         print(f'Harness commit: {commit}')
@@ -223,7 +304,6 @@ def main():
         prune_attempts = sum(1 for k,e in debug_events if k=='prune')
         if prune_attempts:
             print(f'Prune events: {prune_attempts}')
-            print(f'Handoff invalid events: {handoff_invalid}')
         if handoff:
             print(f'Handoff stamp: {handoff.get("stamp","?")}  Lines: {handoff.get("lines",0)}')
         if handoff_ledger:
@@ -278,5 +358,4 @@ def main():
         print(f'Archive: {len(files)} files, {size:,} bytes')
 
 if __name__ == '__main__':
-    import os
     main()
