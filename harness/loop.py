@@ -224,6 +224,45 @@ def _parse_delegate_model(spec: str,
     return default_provider, spec
 
 
+def _redirect_sats_path(args: dict, session_dir) -> dict:
+    """Mechanical sats redirect, ported from the Oct 16-17 main-line
+    fix that never reached the session branch (it lived only in that
+    build line and was lost in branch shuffling).
+
+    The model anchors "sats/..." at its workdir, so a write/edit to a
+    workdir sats/*.md path would otherwise go to approval (a workdir
+    write), time out to deny, and loop -- the day-1 symptom, seen
+    live again 2026-10-21 on session 20261021-080207. Rewrite any
+    write/edit whose path has a `sats` directory segment and a `.md`
+    filename to <session_dir>/sats/<filename> before any gate or
+    approval runs: no prompt, no DENIED for the redirect itself. A
+    path already inside the session sats dir maps to itself.
+    Separator-aware (Windows backslashes included); a bare `sats.md`
+    filename (no directory segment) is not rewritten.
+
+    This only changes WHERE a sats write lands, never whether it is
+    allowed: the redirected call still passes through source_gate
+    (write to a session source stays edit-only, with guidance) and
+    approval policy afterwards. Reads are deliberately untouched:
+    reading a workdir sats file is repo analysis, not state curation.
+    """
+    path = (args or {}).get("path") or ""
+    if not path:
+        return args
+    parts = [p for p in path.replace("\\", "/").split("/")
+             if p not in ("", ".")]
+    if len(parts) < 2:
+        return args
+    if not any(p.lower() == "sats" for p in parts[:-1]):
+        return args
+    filename = parts[-1]
+    if not filename.lower().endswith(".md"):
+        return args
+    new_args = dict(args)
+    new_args["path"] = str(Path(session_dir) / "sats" / filename)
+    return new_args
+
+
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
                  on_event=None, prune_provider: Provider | None = None,
@@ -726,6 +765,11 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
+        # Mechanical sats redirect (see _redirect_sats_path): must run
+        # before source_gate and approval, or a workdir-anchored sats
+        # write asks, times out, denies, and loops.
+        if name in ("write", "edit"):
+            args = _redirect_sats_path(args, session.dir)
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1

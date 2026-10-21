@@ -510,6 +510,108 @@ class TestLoop(unittest.TestCase):
                       (s.dir / "sats" / "current.md").read_text(
                           encoding="utf-8"))
 
+    def test_workdir_sats_edit_redirects_to_session_dir(self):
+        # Day-1 symptom, live again 2026-10-21: the model anchors
+        # sats/... at its workdir, so an edit to a workdir sats path
+        # must land in the session sats dir -- never create a file
+        # under the workdir, never reach approval as a workdir write.
+        # The Windows backslash spelling is covered too: the redirect
+        # is separator-aware even when run on POSIX.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        target = s.dir / "sats" / "current.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("old content\n", encoding="utf-8")
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+        for path in (str(Path(workdir) / "sats" / "current.md"),
+                     workdir + "\\sats\\current.md"):
+            target.write_text("old content\n", encoding="utf-8")
+            result = loop._execute_tool(s, {
+                "id": "e1", "name": "edit",
+                "arguments": {"path": path,
+                              "old_text": "old content",
+                              "new_text": "new content"}})
+            self.assertIn("Edited", result)
+            self.assertEqual(target.read_text(encoding="utf-8"),
+                             "new content\n")
+        self.assertFalse((Path(workdir) / "sats" / "current.md").exists())
+
+    def test_workdir_sats_write_redirects_to_edit_only_denial(self):
+        # A workdir-anchored sats WRITE must not succeed in the
+        # workdir (with no approver it otherwise would, silently).
+        # Redirected first, it hits source_gate's edit-only rule for
+        # session sources -- an immediate DENIED with guidance, not
+        # an approval ask that times out and loops.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        target = s.dir / "sats" / "current.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("session version\n", encoding="utf-8")
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+        result = loop._execute_tool(s, {
+            "id": "w1", "name": "write",
+            "arguments": {"path": str(Path(workdir) / "sats" / "current.md"),
+                          "content": "repo version"}})
+        self.assertIn("DENIED", result)
+        self.assertIn("edit-only", result)
+        self.assertFalse((Path(workdir) / "sats" / "current.md").exists())
+        self.assertEqual(target.read_text(encoding="utf-8"),
+                         "session version\n")
+
+    def test_non_sats_workdir_write_untouched(self):
+        # The redirect is sats-scoped: an ordinary workdir write still
+        # lands in the workdir.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+        result = loop._execute_tool(s, {
+            "id": "w1", "name": "write",
+            "arguments": {"path": str(Path(workdir) / "notes.md"),
+                          "content": "hi"}})
+        self.assertIn("Wrote", result)
+        self.assertEqual((Path(workdir) / "notes.md").read_text(
+            encoding="utf-8"), "hi")
+
+    def test_sats_read_not_redirected(self):
+        # Reads are deliberately out of scope: reading a workdir sats
+        # file is repo analysis, not state curation.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        repo_file = Path(workdir) / "sats" / "current.md"
+        repo_file.parent.mkdir(parents=True, exist_ok=True)
+        repo_file.write_text("repo version\n", encoding="utf-8")
+        target = s.dir / "sats" / "current.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("session version\n", encoding="utf-8")
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+        result = loop._execute_tool(s, {
+            "id": "r1", "name": "read",
+            "arguments": {"path": str(repo_file)}})
+        self.assertIn("repo version", result)
+        self.assertNotIn("session version", result)
+
+    def test_run_turn_sats_edit_redirects(self):
+        # End to end: a model turn that edits a workdir-anchored sats
+        # path updates the session file and completes the turn.
+        workdir = tempfile.mkdtemp()
+        s = make_session(workdir=workdir)
+        target = s.dir / "sats" / "current.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("task: pending\n", encoding="utf-8")
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "e1", "name": "edit",
+                 "arguments": {
+                     "path": str(Path(workdir) / "sats" / "current.md"),
+                     "old_text": "task: pending",
+                     "new_text": "task: done"}}]},
+            {"content": "done"},
+        ]
+        loop = Loop(MockProvider(script), Budget(hard=100000, soft=80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertIn("task: done", target.read_text(encoding="utf-8"))
+        self.assertFalse((Path(workdir) / "sats" / "current.md").exists())
+
     def test_prune_gate_uses_full_tool_measure(self):
         # The assembly can be UNDER by the prune-tools measure while OVER
         # by the full-tools measure (4 extra schemas). The gate must use
