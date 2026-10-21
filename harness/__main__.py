@@ -334,6 +334,8 @@ def config_lines(cfg) -> list[str]:
         "request_timeout": cfg.request_timeout,
         "usage_note": cfg.usage_note,
         "prune_target": cfg.prune_target,
+        "transcript_bloat_tokens": getattr(
+            cfg, "transcript_bloat_tokens", None),
         "prune_keep_tools": cfg.prune_keep_tools,
         "prune_section_cap": cfg.prune_section_cap,
         "sessions_dir": cfg.sessions_dir,
@@ -579,6 +581,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     if getattr(args, "budget_soft", None):
         cfg.budget_soft = args.budget_soft
         cfg.budget_soft_auto = False
+    if getattr(args, "transcript_bloat_tokens", None):
+        cfg.transcript_bloat_tokens = args.transcript_bloat_tokens
     if getattr(args, "no_prune", False):
         cfg.prune_enabled = False
     kind = _resolved_kind(cfg)
@@ -639,6 +643,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 and not getattr(args, "no_usage_note", False),
                 project=project,
                 prune_target=cfg.prune_target,
+                transcript_bloat_tokens=getattr(
+                    cfg, "transcript_bloat_tokens", None),
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap,
                 prune_enabled=getattr(cfg, "prune_enabled", True),
@@ -1028,6 +1034,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Hard token budget override (default from config).")
     ap.add_argument("--budget-soft", type=int, default=None,
                     help="Soft token budget override (default from config).")
+    ap.add_argument("--transcript-bloat-tokens", type=int, default=None,
+                    help="Transcript-bloat gate threshold in tokens "
+                         "(default from config; unset = 30 percent of "
+                         "the window when known, else soft budget).")
     ap.add_argument("--no-prune", action="store_true",
                     help="Naive mode (condition A): disable all pruning, "
                          "dedupe, and archive. Append-only; truncate oldest "

@@ -237,6 +237,7 @@ class Loop:
                  prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
                  prune_section_cap: int = DEFAULT_SECTION_CAP,
                  prune_enabled: bool = True,
+                 transcript_bloat_tokens: int | None = None,
                  history_cap: int | None = None,
                  is_subagent: bool = False,
                  subagent_id: str | None = None,
@@ -264,6 +265,15 @@ class Loop:
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
         self.prune_enabled = prune_enabled
+        # Transcript-bloat gate threshold: explicit value only. The
+        # effective threshold is the transcript_bloat_tokens property
+        # below -- never silently the soft budget. (The first version
+        # of this redesign defaulted to soft; that assumed the budget
+        # system already encodes when a handoff/prune must happen. It
+        # doesn't: the gate exists precisely to force handoff+prune
+        # early, because a model one-shots and bloats past the point
+        # where a prune turn can still load the whole transcript.)
+        self._bloat_explicit = transcript_bloat_tokens
         # User include text: appended to system prompt under "# User includes".
         self.include_text = include_text
         self.include_subagents = include_subagents
@@ -342,6 +352,24 @@ class Loop:
 
     def _emit(self, kind: str, data):
         self.on_event(kind, data)
+
+    @property
+    def transcript_bloat_tokens(self) -> int:
+        """Effective bloat-gate threshold, in transcript tokens.
+
+        Resolution order: explicit config/CLI value wins; else 30% of
+        the known context window (for a 135,168-token window that is
+        40,550 -- the "prune at 40k so a prune turn can still load all
+        of it" rule, with headroom for system, tools, and the prune
+        turn's own output); else the soft budget when the window is
+        unknown. Live property, not a stored value, so a model switch
+        that re-detects the window moves the threshold with it.
+        """
+        if self._bloat_explicit is not None:
+            return self._bloat_explicit
+        if self.budget.window:
+            return int(self.budget.window * 0.3)
+        return self.budget.soft
 
     def _measure(self, provider: Provider, system: str,
                    messages: list[dict], tools: list[dict]) -> dict:
@@ -883,6 +911,9 @@ class Loop:
             usage_note=False,
             project=self.project,
             is_subagent=True,
+            # An explicit bloat-gate pin is inherited; otherwise the
+            # subagent derives from the same window as the parent.
+            transcript_bloat_tokens=self._bloat_explicit,
             subagent_id=sid,
             tools_allowlist=allowlist,
             include_text=(self.include_text if self.include_subagents
@@ -1256,16 +1287,53 @@ class Loop:
                 bd = self._measure(self.provider, system, messages, self._tools)
                 est = bd["total"]
                 status = self.budget.status(est)
-                # Auto-handoff nudge on transcript bloat
-                if bd.get("transcript", 0) >= 35000:
-                    self._emit("budget", {"status": "transcript_bloat", "tokens": est,
-                                          "breakdown": bd})
-                    # Force a handoff now to trigger deep clean
+                # Transcript-bloat gate (redesigned; the old hard-coded
+                # 35k threshold fired below the soft budget, pre-empting
+                # warn/prune, and returned "" even when closing could
+                # not shrink the transcript -- a session whose
+                # sats+history alone exceeded 35k force-closed every
+                # turn and never progressed). New contract:
+                #  * threshold is configurable (transcript_bloat_tokens
+                #    property): explicit value, else 30% of the known
+                #    window, else soft budget when unknown -- never
+                #    just assumed from the budget system;
+                #  * the gate fires ONLY when closing the episode can
+                #    actually get under it, i.e. scratch alone covers
+                #    the overage (closing archives scratch and clears
+                #    it; sats are untouched by a close, history only
+                #    windowed, so sats/history-only bloat must NOT
+                #    fire the gate -- it falls through to warn/prune,
+                #    which curates or fails loudly via BudgetExceeded);
+                #  * the turn CONTINUES after the close instead of
+                #    returning "" -- the user's message gets answered.
+                # Self-disarming: after a close scratch is empty, so
+                # the condition cannot refire on the same content.
+                transcript_tokens = bd.get("transcript", 0)
+                scratch_tokens = 0
+                try:
+                    scratch_p = session.dir / "scratch.md"
+                    if scratch_p.exists():
+                        scratch_tokens = count_tokens(
+                            scratch_p.read_text(encoding="utf-8",
+                                                errors="replace"))
+                except OSError:
+                    scratch_tokens = 0
+                if (transcript_tokens >= self.transcript_bloat_tokens
+                        and scratch_tokens >= transcript_tokens
+                        - self.transcript_bloat_tokens):
+                    self._emit("budget", {"status": "transcript_bloat",
+                                          "tokens": est,
+                                          "breakdown": bd,
+                                          "threshold":
+                                              self.transcript_bloat_tokens,
+                                          "scratch_tokens": scratch_tokens})
+                    # Force a handoff now to trigger deep clean, then
+                    # continue the turn with the shrunken transcript.
                     self._stop_event.clear()
                     self._auto_dedupe(session)
                     self._ensure_handoff(session, turn_no, system, messages)
                     self._close_episode(session, turn_no, content or "")
-                    return content or "", False
+                    continue
                 if status == "over":
                     self._emit("budget", {"status": "over", "tokens": est,
                                           "breakdown": bd})

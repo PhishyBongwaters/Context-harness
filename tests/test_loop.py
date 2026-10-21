@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, "tests")
-from test_handoff import handoff_response  # noqa: E402
+from test_handoff import handoff_response, write_handoff  # noqa: E402
 
 from harness.context import (Budget, parse_transcript, render_history_user,
                                render_tool, render_user)
@@ -410,22 +410,105 @@ class TestLoop(unittest.TestCase):
         self.assertIn("unarchived finding", archived)
 
     def test_transcript_bloat_at_step_zero_does_not_raise(self):
-        # Issue #13: the bloat branch returned `content` before it was
-        # assigned, so a session already >= 35k transcript tokens at
-        # turn start raised UnboundLocalError. The force-close itself
-        # is preserved; only the crash is fixed.
+        # Issue #13: the old bloat branch returned `content` before it
+        # was assigned, so a session already >= 35k transcript tokens
+        # at turn start raised UnboundLocalError. Under the redesigned
+        # gate the threshold is budget-relative (soft budget, here
+        # 900k), so this ~56k-token sats transcript is under threshold:
+        # the gate does not fire at all and the turn proceeds to the
+        # provider instead of returning "".
         events = []
         s = make_session()
         (s.dir / "sats" / "current.md").write_text(
             "# Current\n\n" + ("kernel trace notes function analysis "
                                * 8000),
             encoding="utf-8")
-        loop = Loop(MockProvider([{"content": "should not matter"}]),
+        loop = Loop(MockProvider([{"content": "answered"}]),
                     Budget(hard=1000000, soft=900000),
                     on_event=lambda k, v: events.append(k))
         out = loop.run_turn(s, "hi")  # must not raise
-        self.assertEqual(out, "")
-        self.assertIn("budget", events)
+        self.assertEqual(out, "answered")
+        self.assertNotIn("budget", events)
+
+    def test_bloat_gate_closes_scratch_and_turn_continues(self):
+        # Redesigned gate: scratch alone covers the overage, so the
+        # gate fires, archives the bloated scratch, and the turn
+        # CONTINUES with the shrunken transcript instead of returning
+        # "" (the old gate discarded the user's message).
+        events = []
+        s = make_session()
+        write_handoff(s.dir)
+        big = "kernel trace notes function analysis " * 20000
+        (s.dir / "scratch.md").write_text(
+            "## assistant\n" + big, encoding="utf-8")
+        loop = Loop(MockProvider([{"content": "done"}]),
+                    Budget(hard=1000000, soft=80000),
+                    on_event=lambda k, v: events.append((k, v)))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        bloat = [v for k, v in events
+                 if k == "budget" and v.get("status") == "transcript_bloat"]
+        self.assertEqual(len(bloat), 1)
+        self.assertEqual(bloat[0]["threshold"], 80000)
+        archived = ""
+        for p in (s.dir / "archive").glob("*.md"):
+            archived += p.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("kernel trace notes function analysis", archived)
+
+    def test_bloat_threshold_resolution(self):
+        # Configurability, not assumption: explicit wins; else 30% of
+        # the known window (135,168 -> 40,550, the "prune at 40k so a
+        # prune turn can still load all of it" rule); else soft when
+        # the window is unknown.
+        loop = Loop(MockProvider([]),
+                    Budget(hard=67584, soft=54067, window=135168))
+        self.assertEqual(loop.transcript_bloat_tokens, 40550)
+        loop = Loop(MockProvider([]),
+                    Budget(hard=100000, soft=80000),
+                    transcript_bloat_tokens=40000)
+        self.assertEqual(loop.transcript_bloat_tokens, 40000)
+        loop = Loop(MockProvider([]), Budget(hard=100000, soft=80000))
+        self.assertEqual(loop.transcript_bloat_tokens, 80000)
+
+    def test_explicit_bloat_threshold_fires_below_soft(self):
+        # A pinned 40k threshold fires where the 80k soft budget
+        # would not: the gate is driven by its own knob, not by soft.
+        events = []
+        s = make_session()
+        write_handoff(s.dir)
+        big = "kernel trace notes function analysis " * 10000
+        (s.dir / "scratch.md").write_text(
+            "## assistant\n" + big, encoding="utf-8")
+        loop = Loop(MockProvider([{"content": "done"}]),
+                    Budget(hard=1000000, soft=80000),
+                    transcript_bloat_tokens=40000,
+                    on_event=lambda k, v: events.append((k, v)))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        bloat = [v for k, v in events
+                 if k == "budget" and v.get("status") == "transcript_bloat"]
+        self.assertEqual(len(bloat), 1)
+        self.assertEqual(bloat[0]["threshold"], 40000)
+
+    def test_sats_only_bloat_does_not_stall_across_turns(self):
+        # The stall case: sats+history alone exceed the threshold
+        # while scratch is small. Closing the episode cannot shrink
+        # sats, so the gate must NOT fire -- the turn falls through
+        # to the normal warn path and completes. Two consecutive
+        # turns both return provider replies; under the old gate
+        # both returned "".
+        s = make_session()
+        write_handoff(s.dir)
+        (s.dir / "sats" / "current.md").write_text(
+            "# Current\n\n" + ("kernel trace notes function analysis "
+                               * 20000),
+            encoding="utf-8")
+        loop = Loop(MockProvider([{"content": "first"},
+                                  {"content": "second"}]),
+                    Budget(hard=1000000, soft=80000))
+        self.assertEqual(loop.run_turn(s, "hi"), "first")
+        self.assertEqual(loop.run_turn(s, "again"), "second")
+        self.assertIn("kernel trace notes function analysis",
+                      (s.dir / "sats" / "current.md").read_text(
+                          encoding="utf-8"))
 
     def test_prune_gate_uses_full_tool_measure(self):
         # The assembly can be UNDER by the prune-tools measure while OVER

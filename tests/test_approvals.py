@@ -26,11 +26,18 @@ class TestPolicy(unittest.TestCase):
         d, _, _ = policy_for(s).check("read", {"path": "notes.txt"})
         self.assertEqual(d, "allow")
 
-    def test_read_outside_roots_asks(self):
+    def test_read_outside_roots_allowed(self):
+        # Standing policy (2026-10-10): reads are safe and globally
+        # allowed; only destructive tools get gated. The old test
+        # expected an outside-roots read to ask, contradicting the
+        # policy the code implements -- the test was stale, not the
+        # policy. If outside-roots reads should ask, that is a policy
+        # change, not a test fix.
         s = make_session()
-        d, _, _ = policy_for(s).check(
+        d, reason, _ = policy_for(s).check(
             "read", {"path": str(Path(tempfile.mkdtemp()) / "x")})
-        self.assertEqual(d, "ask")
+        self.assertEqual(d, "allow")
+        self.assertEqual(reason, "read globally allowed")
 
     def test_resolve_sats_and_history_go_to_session_dir(self):
         # Issue #13: the old "sats/" string-prefix check never matched
