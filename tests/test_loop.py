@@ -672,6 +672,131 @@ class TestLoop(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("## Handoff -- t0001", body)
 
+    def _search_call(self, sid: str, pattern: str) -> dict:
+        return {"id": sid, "name": "search",
+                "arguments": {"pattern": pattern}}
+
+    def test_no_match_search_stall_stops_chain(self):
+        # Separate workdir: with workdir == session dir, search
+        # would match its own pattern in scratch.md (the step loop
+        # appends the assistant message, tool_calls included, before
+        # executing tools). On a real rig the two dirs differ.
+        # 3 consecutive no-match searches end the turn with a loud
+        # message naming the patterns, and the chain does not
+        # continue -- even with the goal still [active] and cap
+        # headroom. The search walks the (empty) workdir, so every
+        # pattern genuinely returns "no matches".
+        from test_handoff import write_handoff
+        wd = tempfile.mkdtemp()
+        s = make_session(workdir=wd)
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        (s.dir / "sats" / "goals.md").write_text(
+            "- [active] trace the thing\n", encoding="utf-8")
+        events = []
+        prov = MockProvider([
+            {"content": None, "tool_calls": [
+                self._search_call("s1", "zzz-no-match-one")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s2", "zzz-no-match-two")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s3", "zzz-no-match-three")]},
+        ])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=20,
+                    on_event=lambda k, v: events.append(k))
+        reply = loop.run_turn(s, "hi")
+        self.assertIn("Stopped: 3 consecutive searches", reply)
+        self.assertIn("zzz-no-match-one", reply)
+        self.assertIn("zzz-no-match-three", reply)
+        self.assertEqual(len(prov.calls), 3)
+        self.assertNotIn("auto-continue", events)
+        self.assertIn("- [active] ",
+                      (s.dir / "sats" / "goals.md").read_text(
+                          encoding="utf-8"))
+
+    def test_no_match_streak_resets_on_match(self):
+        # A matching search resets the streak: no-match, match,
+        # no-match, no-match, then a normal reply ends the turn
+        # without stalling. The final entry feeds the turn-end
+        # handoff round (stale t0000), as in the goalless test.
+        from test_handoff import handoff_response, write_handoff
+        wd = tempfile.mkdtemp()
+        s = make_session(workdir=wd)
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        (Path(s.workdir) / "marker.txt").write_text(
+            "hello-match-marker\n", encoding="utf-8")
+        prov = MockProvider([
+            {"content": None, "tool_calls": [
+                self._search_call("s1", "zzz-no-match-one")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s2", "hello-match-marker")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s3", "zzz-no-match-two")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s4", "zzz-no-match-three")]},
+            {"content": "done"},
+            handoff_response(s.dir, 1),
+        ])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=False)
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertEqual(len(prov.calls), 6)
+
+    def test_no_match_streak_resets_on_other_tool(self):
+        # A dispatched non-search tool also resets the streak:
+        # no-match, no-match, read, no-match, no-match, then a
+        # normal reply -- no stall.
+        from test_handoff import handoff_response, write_handoff
+        wd = tempfile.mkdtemp()
+        s = make_session(workdir=wd)
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        marker = Path(s.workdir) / "marker.txt"
+        marker.write_text("some content\n", encoding="utf-8")
+        prov = MockProvider([
+            {"content": None, "tool_calls": [
+                self._search_call("s1", "zzz-no-match-one")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s2", "zzz-no-match-two")]},
+            {"content": None, "tool_calls": [
+                {"id": "r1", "name": "read",
+                 "arguments": {"path": str(marker)}}]},
+            {"content": None, "tool_calls": [
+                self._search_call("s3", "zzz-no-match-three")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s4", "zzz-no-match-four")]},
+            {"content": "done"},
+            handoff_response(s.dir, 1),
+        ])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=False)
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertEqual(len(prov.calls), 7)
+
+    def test_search_stall_threshold_is_a_knob(self):
+        # The threshold is a Loop parameter, not a hard-coded 3.
+        from test_handoff import write_handoff
+        wd = tempfile.mkdtemp()
+        s = make_session(workdir=wd)
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        (s.dir / "sats" / "goals.md").write_text(
+            "- [active] trace the thing\n", encoding="utf-8")
+        prov = MockProvider([
+            {"content": None, "tool_calls": [
+                self._search_call("s1", "zzz-no-match-one")]},
+            {"content": None, "tool_calls": [
+                self._search_call("s2", "zzz-no-match-two")]},
+        ])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=20,
+                    search_stall_threshold=2)
+        reply = loop.run_turn(s, "hi")
+        self.assertIn("Stopped: 2 consecutive searches", reply)
+        self.assertEqual(len(prov.calls), 2)
+
     def test_run_turn_sats_edit_redirects(self):
         # End to end: a model turn that edits a workdir-anchored sats
         # path updates the session file and completes the turn.

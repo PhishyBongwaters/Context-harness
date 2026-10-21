@@ -38,6 +38,12 @@ from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
                       trim_handoff, validate_handoff)
 
 MAX_STEPS = 50
+# No-match search stall: this many consecutive searches returning
+# "no matches" ends the turn and stops the chain. A model stuck
+# re-searching with variants burns slow whole-tree walks; legitimate
+# searches return matches and never trip it. Per-turn streak: it
+# resets at turn start and on any other tool or matching search.
+SEARCH_STALL_THRESHOLD = 3
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
 
@@ -205,6 +211,19 @@ def _estimate(system: str, messages: list[dict],
     return total
 
 
+class SearchStall(Exception):
+    """Consecutive searches returned no matches, threshold reached.
+
+    Carries the patterns tried. Caught in _run_turn_once like an
+    interrupt: the turn ends with a loud message and run_turn does
+    not chain, so a stuck model cannot restart the loop next turn.
+    """
+
+    def __init__(self, patterns: list[str]):
+        super().__init__("search stall")
+        self.patterns = list(patterns)
+
+
 class TurnInterrupted(Exception):
     """Cooperative turn cancellation via Loop.request_stop().
 
@@ -288,7 +307,8 @@ class Loop:
                  include_subagents: bool = False,
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
-                 auto_continue_max_turns: int = 3):
+                 auto_continue_max_turns: int = 3,
+                 search_stall_threshold: int = SEARCH_STALL_THRESHOLD):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -333,6 +353,10 @@ class Loop:
                             else budget.soft // 2)
         self._turn_seq = 0
         self._stop_event = threading.Event()
+        # No-match search stall state (per turn; reset at turn start).
+        self._search_stall_threshold = search_stall_threshold
+        self._no_match_streak = 0
+        self._no_match_patterns: list[str] = []
         self.is_subagent = is_subagent
         self.subagent_id = subagent_id
         self._subagent_budget_fraction = subagent_budget_fraction
@@ -854,6 +878,22 @@ class Loop:
                 self._backup_context(session, target, before, "edit")
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
+        # No-match search stall: consecutive fruitless searches only.
+        # Denied/gated searches return above and never reach here, so
+        # they neither count nor reset the streak.
+        if name == "search":
+            if result.startswith("no matches for"):
+                self._no_match_streak += 1
+                self._no_match_patterns.append(args.get("pattern") or "")
+                if (self._no_match_streak
+                        >= self._search_stall_threshold):
+                    raise SearchStall(self._no_match_patterns)
+            else:
+                self._no_match_streak = 0
+                self._no_match_patterns = []
+        else:
+            self._no_match_streak = 0
+            self._no_match_patterns = []
         return _done(result)
 
     # --- subagent delegation (one at a time) ---
@@ -1300,6 +1340,11 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
+        # Fresh turn, fresh no-match streak: a stall can only come
+        # from this turn's own fruitless searches, never from a
+        # previous turn's.
+        self._no_match_streak = 0
+        self._no_match_patterns = []
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -1492,6 +1537,19 @@ class Loop:
                         session, "scratch.md",
                         render_tool(tc["id"], result))
                     self._auto_dedupe(session)
+        except SearchStall as stall:
+            # Loud, and chain-stopping: returning interrupted=True
+            # makes run_turn return without chaining, so the stuck
+            # model cannot restart the loop on the next auto-turn.
+            # The message goes out as a normal assistant event (the
+            # transcript's reply path), not a new event kind.
+            patterns = ", ".join(f"'{p}'" for p in stall.patterns)
+            message = (
+                f"Stopped: {len(stall.patterns)} consecutive searches "
+                f"returned no matches ({patterns}). The search root "
+                f"or pattern is wrong -- fix it or ask the user.")
+            self._emit("assistant", message)
+            return message, True
         except TurnInterrupted:
             self._stop_event.clear()
             self._emit("interrupted", {})
