@@ -24,7 +24,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import active_goals, goals_done, next_turn
+from .session import active_goals, complete_goal, goals_done, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -498,6 +498,12 @@ class Loop:
         history/sat sources get pre-edit snapshots and mechanical
         diffs.
         """
+        if name == "goal_done":
+            # The goal file is a sat: its flip gets the same pre-edit
+            # snapshot and mechanical diff as a model edit. Missing
+            # file means no backup (complete_goal reports no_active).
+            p = Path(session.dir) / "sats" / "goals.md"
+            return p if p.exists() else None
         if name not in ("write", "edit"):
             return None
         try:
@@ -840,8 +846,14 @@ class Loop:
         # Delegation tools are harness orchestration, not mutations:
         # spawning/waiting/killing a subagent never needs approval.
         # (Mutations inside the subagent still go through its approver.)
+        # goal_done is the same kind of exemption: it only flips a
+        # checkbox in sats/goals.md, and write/edit to sats are already
+        # allowed as the model's own memory curation. Exempting it
+        # changes nothing about who can complete a goal -- it only
+        # makes the transition code-owned instead of markdown-edited.
         if (self.approver is not None and name not in
-                ("delegate", "wait_subagent", "cancel_subagent")):
+                ("delegate", "wait_subagent", "cancel_subagent",
+                 "goal_done")):
             ok, denial = self.approver.resolve(
                 self._policy(session), name, args,
                 subagent_id=(self.subagent_id
@@ -868,6 +880,8 @@ class Loop:
                                                    session.workdir)
             except Exception as e:  # never let a user tool crash the loop
                 result = f"ERROR executing user tool {name}: {e}"
+        elif name == "goal_done":
+            result = self._complete_goal(session, args)
         else:
             result = run_tool(name, args, session.workdir)
         if target is not None and before is not None:
@@ -895,6 +909,39 @@ class Loop:
             self._no_match_streak = 0
             self._no_match_patterns = []
         return _done(result)
+
+    def _complete_goal(self, session: Session, args: dict) -> str:
+        """Run the goal_done tool: flip the checkbox in code.
+
+        The result tells the model exactly what happened, including
+        what to do when the call cannot complete (name one goal, or
+        use an exact text). When no active goals remain, the chain
+        already stops after this turn and the turn-end handoff is
+        skipped -- both read goals.md state, so no extra flag here.
+        A failure never crashes the loop: it returns as an ERROR
+        result, like every other tool failure.
+        """
+        try:
+            status, matched, remaining = complete_goal(
+                session.dir, (args or {}).get("goal"))
+        except Exception as e:  # never let a tool crash the loop
+            return f"ERROR: goal_done failed: {e}"
+        if status == "done":
+            if remaining:
+                return (f"Goal marked done: {matched}. "
+                        f"Active goals remaining: "
+                        f"{'; '.join(remaining)}.")
+            return (f"Goal marked done: {matched}. "
+                    f"No active goals remain -- the chain stops "
+                    f"after this turn.")
+        if status == "no_active":
+            return "No active goals to complete."
+        if status == "ambiguous":
+            return ("Several goals are active; call goal_done again "
+                    f"naming one: {'; '.join(remaining)}.")
+        return (f"No active goal matches "
+                f"'{(args or {}).get('goal')}'. Active goals: "
+                f"{'; '.join(remaining)}.")
 
     # --- subagent delegation (one at a time) ---
 

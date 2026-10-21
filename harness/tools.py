@@ -138,6 +138,24 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
                 "required": ["pattern"],
             },
         },
+        {
+            "name": "goal_done",
+            "description": (
+                "Mark a goal complete. Call this when the goal is done "
+                "-- the harness flips its checkbox in sats/goals.md "
+                "and the auto-continue chain stops. Pass the goal "
+                "text, or omit it when exactly one goal is active. "
+                "Never edit goals.md by hand instead of calling this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string",
+                             "description": "Text of the goal to complete. "
+                                            "Omit only when one goal is active."},
+                },
+            },
+        },
     ]
     if include_delegation:
         tools.extend(_delegation_definitions())

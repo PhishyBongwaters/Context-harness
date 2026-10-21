@@ -292,6 +292,73 @@ def add_goal(sdir: str | Path, text: str) -> str:
     return "added"
 
 
+def complete_goal(sdir: str | Path, text: str | None = None,
+                  ) -> tuple[str, str | None, list[str]]:
+    """Mark an active goal done in sats/goals.md, in code.
+
+    This is the harness-owned half of goal completion: the model calls
+    the goal_done tool and the harness flips the checkbox, instead of
+    the model editing markdown and hoping the checkbox lands right.
+
+    Returns (status, matched_text, remaining_active):
+      - ("done", text, remaining): the goal flipped to [done].
+      - ("no_active", None, []): no active goals to complete. A
+        missing goals.md is this case, not an error, and the file is
+        not created.
+      - ("ambiguous", None, active): several goals are active and no
+        text was given; the caller must name one.
+      - ("not_found", None, active): text was given but matches no
+        active goal; active lists what exists.
+
+    Matching: surrounding quotes are stripped (as in add_goal), then
+    an exact match on the goal text wins; otherwise a unique
+    case-insensitive substring match wins. Anything else is
+    "not_found", so a paraphrase never silently completes the wrong
+    goal.
+    """
+    if text is not None:
+        text = text.strip()
+        if (len(text) >= 2 and text[0] == text[-1]
+                and text[0] in ("\"", "'")):
+            text = text[1:-1].strip()
+    p = Path(sdir) / "sats" / "goals.md"
+    try:
+        body = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "no_active", None, []
+    lines = body.split("\n")
+    active: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("- [active] "):
+            active.append((i, stripped[len("- [active] "):]))
+    if not active:
+        return "no_active", None, []
+    match: tuple[int, str] | None = None
+    if text:
+        for i, goal in active:
+            if goal == text:
+                match = (i, goal)
+                break
+        if match is None:
+            lowered = text.lower()
+            hits = [(i, goal) for i, goal in active
+                    if lowered in goal.lower()]
+            if len(hits) == 1:
+                match = hits[0]
+        if match is None:
+            return "not_found", None, [goal for _, goal in active]
+    elif len(active) > 1:
+        return "ambiguous", None, [goal for _, goal in active]
+    else:
+        match = active[0]
+    i, goal = match
+    lines[i] = f"- [done] {goal}"
+    p.write_text("\n".join(lines), encoding="utf-8")
+    remaining = [g for j, g in active if j != i]
+    return "done", goal, remaining
+
+
 def goals_done(sdir: str | Path) -> bool:
     """True when sats/goals.md has at least one `- [done]` goal and no
     `- [active]` goal: the goal is done, so no more handoffs.
