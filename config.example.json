@@ -1,0 +1,12 @@
+{
+  "_notes": "Drop this into %APPDATA%\\context-harness\\config.json (merge with your existing settings, don't overwrite blindly). The key itself NEVER goes in this file. Put it in a .env next to it or in your project dir: LLAMA_API_KEY=<your key>. Start llama-server with the same key: --api-key <your key>. Confirm these three before use: base_url (if your server isn't 127.0.0.1:8080), model (the id your server reports), and the env var name. budget_hard/budget_soft are omitted on purpose: the harness live-detects your context window from the server.",
+  "provider": "llama.cpp",
+  "providers": {
+    "llama.cpp": {
+      "api_key_env": "LLAMA_API_KEY",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "kind": "openai",
+      "model": "Qwen"
+    }
+  }
+}
