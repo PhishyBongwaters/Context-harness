@@ -212,10 +212,11 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(loop1.run_turn(s, "what is the answer?"),
                          "the answer is 42")
 
-        # Turn 1 ended with a handoff-invalid (its script had no
-        # handoff edit), so turn 2 starts with a recovery round:
-        # the model first repairs the stale t0000 stamp to t0001,
-        # then does the real turn, then writes the t0002 handoff.
+        # Turn 1 ended with a harness render (no model round), so
+        # turn 2 starts with a fresh t0001 handoff already in place
+        # and no recovery is needed. The scripted edit below is the
+        # model's old habit: it is denied (harness-owned handoff),
+        # then the real turn lands and the harness renders t0002.
         # The main turn is the non-edit-only provider call.
         handoff = str(s.dir / "sats" / "handoff.md")
         script2 = [
@@ -285,9 +286,10 @@ class TestLoop(unittest.TestCase):
                     prune_provider=janitor)
         self.assertEqual(loop.run_turn(s, "hi"), "all good")
         self.assertEqual(len(janitor.calls), 2)  # prune chats
-        # Resumed normal chat: handoff-edit round + final reply. The
-        # scripted agent writes its handoff in-turn (the new contract),
-        # so no forced handoff round fires.
+        # Resumed normal chat: a denied handoff-edit attempt + final
+        # reply. The scripted agent tries its old handoff edit
+        # in-turn; source_gate denies it (harness-owned) and the
+        # harness renders instead, so no forced handoff round fires.
         self.assertEqual(len(main.calls), 2)
         # Curation turns are edit-only now.
         self.assertEqual(janitor.calls[0]["tools"], ["edit"])
@@ -630,9 +632,9 @@ class TestLoop(unittest.TestCase):
         # "Once goal is done no more handoffs": a turn ending with
         # every goal [done] must not write to handoff.md at all -- the
         # pre-written t0000 handoff stays untouched, and no provider
-        # call is spent on a handoff round (1 call total: the turn's
+        # call is spent on the handoff (1 call total: the turn's
         # own reply). The chain already stops on empty goals; this
-        # silences the harness's own turn-end write.
+        # silences the harness's own turn-end render.
         from test_handoff import write_handoff
         s = make_session()
         (s.dir / "sats").mkdir(parents=True, exist_ok=True)
@@ -652,22 +654,54 @@ class TestLoop(unittest.TestCase):
         self.assertIn("## Handoff -- t0000", body)
         self.assertNotIn("t0001", body)
 
+    def test_chain_ignores_handoff_prose_claiming_done(self):
+        # t0006 regression: the handoff prose claims "Goal complete"
+        # while sats/goals.md still says [active]. The chain must
+        # read sats state only -- the prose claim must neither stop
+        # the chain nor flip anything. Auto-continue fires (the
+        # chain continues) and the goal stays [active]. Under
+        # harness ownership the prose is also gone by turn end:
+        # the render replaces it with sats-derived content.
+        from test_handoff import write_handoff
+        s = make_session()
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0001",
+                      sections={"Next": "Goal complete, no active goals"})
+        goals = s.dir / "sats" / "goals.md"
+        goals.write_text("- [active] trace the write path\n",
+                         encoding="utf-8")
+        events = []
+        prov = MockProvider([{"content": "done"},
+                             {"content": "done"}])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=1,
+                    on_event=lambda k, v: events.append(k))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertIn("auto-continue", events)
+        self.assertEqual(len(prov.calls), 2)  # no handoff rounds
+        self.assertIn("- [active] ",
+                      goals.read_text(encoding="utf-8"))
+        body = (s.dir / "sats" / "handoff.md").read_text(
+            encoding="utf-8")
+        self.assertIn("## Handoff -- t0002", body)
+        self.assertIn("trace the write path", body)
+        self.assertNotIn("Goal complete", body)
+
     def test_goalless_session_keeps_turn_end_handoff(self):
         # Boundary: a session that never had goals (no [done] line)
-        # keeps the normal per-turn handoff -- the silence above
+        # keeps the normal per-turn render -- the silence above
         # applies only to finished goals, not to goal-less chat.
-        # The turn's reply plus one forced handoff round = 2 calls,
-        # and the handoff advances to t0001.
-        from test_handoff import handoff_response, write_handoff
+        # The turn's reply is the only provider call; the harness
+        # renders the handoff, no round.
+        from test_handoff import write_handoff
         s = make_session()
         (s.dir / "sats").mkdir(parents=True, exist_ok=True)
         write_handoff(s.dir, stamp="t0000")
-        prov = MockProvider([{"content": "done"},
-                             handoff_response(s.dir, 1)])
+        prov = MockProvider([{"content": "done"}])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=True, auto_continue_max_turns=20)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 2)
+        self.assertEqual(len(prov.calls), 1)
         body = (s.dir / "sats" / "handoff.md").read_text(
             encoding="utf-8")
         self.assertIn("## Handoff -- t0001", body)
@@ -718,8 +752,8 @@ class TestLoop(unittest.TestCase):
     def test_no_match_streak_resets_on_match(self):
         # A matching search resets the streak: no-match, match,
         # no-match, no-match, then a normal reply ends the turn
-        # without stalling. The final entry feeds the turn-end
-        # handoff round (stale t0000), as in the goalless test.
+        # without stalling. The turn ends with a harness render,
+        # no round.
         from test_handoff import handoff_response, write_handoff
         wd = tempfile.mkdtemp()
         s = make_session(workdir=wd)
@@ -737,12 +771,11 @@ class TestLoop(unittest.TestCase):
             {"content": None, "tool_calls": [
                 self._search_call("s4", "zzz-no-match-three")]},
             {"content": "done"},
-            handoff_response(s.dir, 1),
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 6)
+        self.assertEqual(len(prov.calls), 5)
 
     def test_no_match_streak_resets_on_other_tool(self):
         # A dispatched non-search tool also resets the streak:
@@ -768,12 +801,11 @@ class TestLoop(unittest.TestCase):
             {"content": None, "tool_calls": [
                 self._search_call("s4", "zzz-no-match-four")]},
             {"content": "done"},
-            handoff_response(s.dir, 1),
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 7)
+        self.assertEqual(len(prov.calls), 6)
 
     def test_search_stall_threshold_is_a_knob(self):
         # The threshold is a Loop parameter, not a hard-coded 3.
@@ -841,9 +873,8 @@ class TestLoop(unittest.TestCase):
     def test_repeat_streak_resets_on_different_call(self):
         # A different call resets the streak: read X, read X,
         # read Y, read X, read X, then a normal reply ends the
-        # turn without stalling. The final entry feeds the
-        # turn-end handoff round (stale t0000), as in the
-        # no-match reset test.
+        # turn without stalling. The turn ends with a harness
+        # render, no round.
         from test_handoff import handoff_response, write_handoff
         wd = tempfile.mkdtemp()
         s = make_session(workdir=wd)
@@ -865,12 +896,11 @@ class TestLoop(unittest.TestCase):
             {"content": None, "tool_calls": [
                 self._read_call("r5", str(marker))]},
             {"content": "done"},
-            handoff_response(s.dir, 1),
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 7)
+        self.assertEqual(len(prov.calls), 6)
 
     def test_repeat_stall_threshold_is_a_knob(self):
         # The repeat threshold is a Loop parameter, not a
@@ -946,12 +976,11 @@ class TestLoop(unittest.TestCase):
             {"content": None, "tool_calls": [
                 self._read_call("r3", missing)]},
             {"content": "done"},
-            handoff_response(s.dir, 1),
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 5)
+        self.assertEqual(len(prov.calls), 4)
 
     def test_repeat_streak_resets_on_failure(self):
         # A failing call breaks the streak: read X, read X,
@@ -977,12 +1006,11 @@ class TestLoop(unittest.TestCase):
             {"content": None, "tool_calls": [
                 self._read_call("r5", str(marker))]},
             {"content": "done"},
-            handoff_response(s.dir, 1),
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 7)
+        self.assertEqual(len(prov.calls), 6)
 
     def test_run_turn_sats_edit_redirects(self):
         # End to end: a model turn that edits a workdir-anchored sats

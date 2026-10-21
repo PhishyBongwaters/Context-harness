@@ -46,20 +46,15 @@ it must stay true to the implementation.
 
 **The harness owns:** prompt loading, assembly order, turn/section
 counters (`state.json`), the episode lifecycle, archive pointers,
-source-gate enforcement, pre-edit backups, and verification. Context
-management is deterministic harness behavior, not model judgment.
+source-gate enforcement, pre-edit backups, verification, and the
+turn-end handoff render. Context management is deterministic harness
+behavior, not model judgment.
 
 **The model may edit** (exact `old_text`/`new_text`, must match exactly
 once):
 - `history.md` — the conversation record (`## user t<NNNN>` for user-opened
   turns, `## auto t<NNNN>` for harness-opened auto-continue turns,
   `## episode t<NNNN>`)
-- `sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers);
-  rewrite it at the end of every turn. The harness validates
-  freshness, shape and the 40-line cap at the turn boundary; a stale
-  or missing handoff triggers a forced handoff round, and persistent
-  dumping trips the size canary (`handoff-bloat`) or the deterministic
-  trim backstop
 - `sats/current.md` — the active task (update when it changes)
 - `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
   add one with `/goal "text"` or `--goal "text"`. With `auto_continue`
@@ -76,9 +71,13 @@ once):
 `write` is rejected on all session sources — use `edit`.
 
 **Harness-owned (model read-only):** `prompt.md`, `state.json`,
-`index.md`, `scratch.md`, `archive/`, `context.md`. `state.json`
-can't even be read. Denied calls return a `DENIED` tool result the
-model must respect.
+`index.md`, `scratch.md`, `archive/`, `context.md`, and
+`sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers),
+rendered by the harness from sats state at turn end; the model
+curates `current.md`, `tasks.md` (`BLOCKED:` lines become Blockers),
+and goals instead. Persistent dumping trips the size canary
+(`handoff-bloat`). `state.json` can't even be read. Denied calls
+return a `DENIED` tool result the model must respect.
 
 ## Episodes
 

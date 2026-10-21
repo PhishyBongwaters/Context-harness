@@ -26,7 +26,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       sanitize_assistant_content)
 from .session import (GOALS_MAX_ATTEMPTS, GOALS_NUDGE, active_goals,
                       complete_goal, enforce_sats_budgets, goals_done,
-                      next_turn, validate_goals)
+                      next_turn, render_handoff, validate_goals)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -34,10 +34,8 @@ from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
 from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
-from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
-                      HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
-                      ensure_handoff_file, handoff_size, is_over_cap,
-                      trim_handoff, validate_handoff)
+from .handoff import (HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
+                      handoff_size, validate_handoff)
 
 MAX_STEPS = 50
 # No-match search stall: this many consecutive searches returning
@@ -180,14 +178,15 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
   {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
-  {sats_dir}/decisions.md, {sats_dir}/tasks.md, {sats_dir}/handoff.md,
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md,
   {sats_dir}/hypotheses.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to
 one-liners and drop what no longer serves the task. {sats_dir}/handoff.md
-is the resume plan: keep its Now/Next/Blockers/Pointers sections and its
-`## Handoff -- tNNNN` stamp -- trim the bodies, never the shape. Each edit needs
+is the resume plan, rendered by the harness from these files at turn
+end; do not edit it -- keep current.md and tasks.md tight instead,
+they are what the handoff renders from. Each edit needs
 old_text matching exactly once -- include enough surrounding context.
 Keep the `## ` section format parseable.
 Do not attempt the user's task now -- just curate.
@@ -646,88 +645,47 @@ class Loop:
                 "changed": info["changed"],
             })
 
-    def _ensure_handoff(self, session: Session, turn_no: int,
-                          system: str, messages: list[dict]) -> bool:
-        """Validate sats/handoff.md at the turn boundary (issue #5).
+    def _render_handoff(self, session: Session, turn_no: int) -> None:
+        """Render sats/handoff.md from sats state at turn end.
 
-        Freshness, shape and size are machine-checked. A stale, missing
-        or malformed handoff triggers forced handoff rounds: the model
-        gets the assembled context plus a nudge and edit-only tools,
-        and must rewrite the handoff before the turn may end.
-
-        Returns True when the handoff is valid. After
-        HANDOFF_MAX_ATTEMPTS failed rounds it emits "handoff-invalid"
-        and returns False -- the turn still closes. Loud, never
-        blocking: a broken handoff must not wedge the session.
-
-        Phase 2: when the only remaining failure is the size cap, the
-        deterministic trim backstop fires instead of giving up; every
-        valid handoff is recorded in the size ledger (the canary).
+        Harness-exclusive ownership: the harness writes this file
+        deterministically (see session.render_handoff); the model
+        never edits it (source_gate denies the edit). The previous
+        handoff is backed up first, like any other sats edit. The
+        render is validated as a self-check: a bad render emits
+        "handoff-invalid" (loud) but never blocks the close, and a
+        good render is recorded in the size ledger (the canary).
         """
+        path = session.dir / "sats" / "handoff.md"
+        try:
+            previous = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            previous = ""
+        if previous:
+            self._backup_context(session, path, previous,
+                                 "handoff-render")
+        text = render_handoff(session.dir, turn_no)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        except OSError as e:
+            self._emit("handoff-invalid",
+                       {"turn": turn_no, "reason": f"render failed: {e}"})
+            return
         ok, reason = validate_handoff(session.dir, turn_no)
         if ok:
             self._record_handoff_ok(session, turn_no)
-            return True
-        turn_stamp = f"t{turn_no:04d}"
-        handoff_path = str(session.dir / "sats" / "handoff.md")
-        for attempt in range(HANDOFF_MAX_ATTEMPTS):
-            self._check_stop()
-            # Defensive: the model has exec, so the file can vanish
-            # between validation and the forced round. Restore the
-            # shape; the model still has to fill it.
-            ensure_handoff_file(session.dir)
-            nudge = HANDOFF_NUDGE.format(handoff_path=handoff_path,
-                                         turn_stamp=turn_stamp,
-                                         reason=reason)
-            handoff_messages = (messages
-                                + [{"role": "user", "content": nudge}])
-            try:
-                bd = self._measure(self.provider, system,
-                                   handoff_messages, self._prune_tools)
-                self._emit("request",
-                           {"phase": "handoff",
-                            "attempt": attempt + 1,
-                            "tokens_est": bd["total"],
-                            "breakdown": bd,
-                            "hard": self.budget.hard,
-                            "soft": self.budget.soft,
-                            "window": self.budget.window,
-                            "status": self.budget.status(bd["total"])})
-                resp = self.provider.chat(
-                    system=system,
-                    messages=handoff_messages + self._note(bd),
-                    tools=self._prune_tools)
-            except Exception as e:  # provider blew up: count the
-                # attempt, keep the turn closable.
-                reason = (f"handoff round {attempt + 1} failed: "
-                          f"{type(e).__name__}")
-                continue
-            self._check_stop()
-            for tc in resp.get("tool_calls") or []:
-                self._execute_tool(session, tc)
-            ok, reason = validate_handoff(session.dir, turn_no)
-            if ok:
-                self._record_handoff_ok(session, turn_no)
-                return True
-        if is_over_cap(session.dir):
-            # The model wouldn't trim: deterministic backstop.
-            if self._trim_handoff_backstop(session, turn_no):
-                ok, reason = validate_handoff(session.dir, turn_no)
-                if ok:
-                    self._record_handoff_ok(session, turn_no)
-                    return True
-        self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
-        return False
+        else:
+            self._emit("handoff-invalid",
+                       {"turn": turn_no, "reason": reason})
+        self._emit("handoff-rendered",
+                   {"turn": turn_no, "lines": len(text.splitlines())})
 
     def _ensure_goals(self, session: Session, turn_no: int,
                       system: str, messages: list[dict]) -> bool:
-        """Validate sats/goals.md at the turn boundary.
-
-        Mirrors _ensure_handoff for goals: a malformed goals file
-        triggers forced fix rounds (edit-only tools, the model
-        rewrites the file), and after GOALS_MAX_ATTEMPTS failed
-        rounds it emits "goals-invalid" and returns False -- the
-        turn still closes. Loud, never blocking. A missing or
+        """Validate sats/goals.md at the turn boundary, with forced
+        fix rounds (edit-only tools) and a loud "goals-invalid"
+        event on persistent failure -- never blocking. A missing or
         goal-less file is valid, so goal-less sessions never enter
         rounds.
         """
@@ -790,34 +748,6 @@ class Loop:
                         "tokens": tokens,
                         "note": ("handoff size is climbing -- the agent "
                                  "is dumping instead of curating")})
-
-    def _trim_handoff_backstop(self, session: Session,
-                               turn_no: int) -> bool:
-        """Deterministic trim when the model won't get under the cap.
-
-        The model had its forced rounds; the harness now trims
-        mechanically (headers kept, bodies cut from the end, marker
-        appended). The pre-trim content is backed up, and the trim is
-        announced -- the harness never silently rewrites model-curated
-        state.
-        """
-        target = session.dir / "sats" / "handoff.md"
-        try:
-            before = target.read_text(encoding="utf-8",
-                                      errors="replace")
-        except OSError:
-            return False
-        trimmed, cut = trim_handoff(before)
-        if cut <= 0:
-            return False
-        self._backup_context(session, target, before, "handoff-trim")
-        try:
-            target.write_text(trimmed, encoding="utf-8")
-        except OSError:
-            return False
-        self._emit("handoff-trimmed", {"turn": turn_no,
-                                       "lines_cut": cut})
-        return True
 
     @staticmethod
     def _append_source(session: Session, name: str, text: str) -> None:
@@ -1537,22 +1467,25 @@ class Loop:
                              include_text=self.include_text,
                              turn_no=turn_no)
         # Enforce handoff continuity: previous turn must have left a fresh
-        # handoff. Recovery runs with the real system prompt (load_prompt
-        # reads prompt.md only, it does not assemble the transcript, so
-        # loading it first is safe). A broken handoff must not wedge the
-        # session: recovery failure is loud but the turn still proceeds
-        # (_ensure_handoff returns False instead of raising).
+        # handoff. Recovery re-renders it from sats state (no model
+        # rounds, no system prompt needed). A broken handoff must not
+        # wedge the session: the render is deterministic, and the
+        # turn still proceeds.
         # NOTE: scratch.md is deliberately NOT wiped here. It is the
         # episode's working trace and is only cleared by _close_episode,
         # which archives it first. Wiping it at turn start destroyed the
         # only copy of an interrupted turn's work (issue #13).
         from .handoff import validate_handoff
-        if turn_no > 1:
+        if turn_no > 1 and not goals_done(session.dir):
+            # The previous turn's handoff is harness-owned: if it is
+            # missing or stale (crash, or a bloat-gate close that
+            # never rendered), re-render it from sats state. No
+            # model rounds -- the harness fixes its own file.
+            # Goals-done sessions skip rendering by design, so a
+            # missing handoff there is not a defect.
             ok, reason = validate_handoff(session.dir, turn_no - 1)
             if not ok:
-                # Force a handoff recovery before any work
-                self._ensure_handoff(session, turn_no - 1, system,
-                                     messages=[])
+                self._render_handoff(session, turn_no - 1)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
@@ -1642,14 +1575,15 @@ class Loop:
                                           "threshold":
                                               self.transcript_bloat_tokens,
                                           "scratch_tokens": scratch_tokens})
-                    # Force a handoff now to trigger deep clean, then
-                    # continue the turn with the shrunken transcript.
+                    # Render a handoff now (harness-owned, no model
+                    # calls while over budget), then continue the
+                    # turn with the shrunken transcript.
                     # No clear() here: a stop requested before this
                     # close must survive to the next step boundary
                     # (_check_stop at the loop top), where it ends
                     # the turn, instead of being eaten by the close.
                     self._auto_dedupe(session)
-                    self._ensure_handoff(session, turn_no, system, messages)
+                    self._render_handoff(session, turn_no)
                     self._close_episode(session, turn_no, content or "")
                     continue
                 if status == "over":
@@ -1741,22 +1675,19 @@ class Loop:
                     # Goals structure is machine-checked too: a
                     # malformed goals file triggers fix rounds, and
                     # persistent failure is loud but never blocks
-                    # the close (mirrors _ensure_handoff).
+                    # the close.
                     self._ensure_goals(session, turn_no, system,
                                        messages)
                     # Once every goal is [done], no more handoffs:
-                    # the turn that finishes the goal writes nothing
-                    # to handoff.md, and the chain already stops
-                    # after it (no active goals). A goal-less session
-                    # (no [done] line at all) keeps the normal
-                    # per-turn handoff.
+                    # the turn that finishes the goal renders nothing,
+                    # and the chain already stops after it (no active
+                    # goals). A goal-less session (no [done] line at
+                    # all) keeps the normal per-turn render.
                     if not goals_done(session.dir):
-                        # Handoff-per-turn (issue #5): the turn may
-                        # only end with a fresh handoff. Stale/missing
-                        # triggers a forced handoff round; persistent
-                        # failure is loud but never blocks the close.
-                        self._ensure_handoff(session, turn_no, system,
-                                             messages)
+                        # Handoff-per-turn (issue #5), harness-owned:
+                        # the harness renders the handoff from sats
+                        # state. No model rewrite, no forced rounds.
+                        self._render_handoff(session, turn_no)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.

@@ -97,7 +97,8 @@ class TestAutoContinueChain(unittest.TestCase):
         # Event emitted per auto-turn.
         auto_events = [v for k, v in events if k == "auto-continue"]
         self.assertEqual([v["index"] for v in auto_events], [1, 2])
-        # No forced handoff rounds: exactly 2 provider calls per turn.
+        # No handoff rounds exist (the harness renders): exactly 2
+        # provider calls per turn.
         self.assertEqual(len(loop.provider.calls), 6)
 
     def test_cap_respected(self):

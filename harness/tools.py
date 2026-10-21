@@ -292,6 +292,15 @@ def source_gate(session_dir: str | Path, name: str, path: str,
     except Exception:
         return None
     kind = classify_source(session_dir, target)
+    if kind == "sat" and target.name == "handoff.md" and name == "edit":
+        # Harness-exclusive ownership: the harness renders handoff.md
+        # from sats state at turn end. The model curates the state
+        # it renders from, never the file itself.
+        return ("DENIED: sats/handoff.md is harness-owned -- the harness "
+                "renders it from sats state at turn end. Curate "
+                "sats/current.md (where things stand) and sats/tasks.md "
+                "(open work, BLOCKED: prefix for blockers) instead; "
+                "never edit handoff.md directly.")
     if kind in ("history", "sat"):
         if name == "write":
             return (f"DENIED: {target.name} is edit-only -- use edit with "

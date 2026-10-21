@@ -92,25 +92,12 @@ class TestTracker(unittest.TestCase):
             Loop(MockProvider([{"content": "a"}]), Budget(100000, 80000),
                  usage_tracker=tracker).run_turn(s, "hi")
             # fresh Loop, same tracker file: turn must advance, not reset
-            # Turn 1 ended handoff-invalid, so turn 2 starts with a
-            # recovery round repairing the stale t0000 stamp first.
-            # Recovery calls are not usage-tracked, so turns stay [1, 2].
-            handoff = str(s.dir / "sats" / "handoff.md")
+            # Turn 1 ended with a harness render, so turn 2 starts
+            # with a fresh t0001 handoff already in place -- no
+            # recovery round. The reply is the only tracked call.
             tracker2 = UsageTracker(d)
             Loop(MockProvider([
-                {"content": None, "tool_calls": [
-                    {"id": "rec", "name": "edit",
-                     "arguments": {
-                         "path": handoff,
-                         "old_text": "## Handoff -- t0000",
-                         "new_text": "## Handoff -- t0001"}}]},
                 {"content": "b"},
-                {"content": None, "tool_calls": [
-                    {"id": "h2", "name": "edit",
-                     "arguments": {
-                         "path": handoff,
-                         "old_text": "## Handoff -- t0001",
-                         "new_text": "## Handoff -- t0002"}}]},
             ]), Budget(100000, 80000),
                 usage_tracker=tracker2).run_turn(s, "hi again")
             self.assertEqual([t["turn"] for t in tracker2.turns], [1, 2])

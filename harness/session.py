@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from .context import count_tokens, stamp
-from .handoff import HANDOFF_TEMPLATE
+from .handoff import HANDOFF_MAX_LINES, HANDOFF_TEMPLATE
 
 SAT_FILES = {
     "current": ("# Current task\n\nWhat you are actively working on right "
@@ -409,7 +409,7 @@ def active_goals(sdir: str | Path) -> list[str]:
 GOALS_MAX_ATTEMPTS = 2
 
 # Forced-round nudge for goals validation. .format() fields only --
-# no other braces in this string (mirrors HANDOFF_NUDGE).
+# no other braces in this string.
 GOALS_NUDGE = (
     "GOALS INVALID before this turn can end: {goals_path} has "
     "structural problems: {reason} Fix them with the edit tool -- "
@@ -548,6 +548,91 @@ def enforce_sats_budgets(sdir: str | Path, cap_tokens: int,
             entry["before"] = original
         report[p.name] = entry
     return report
+
+
+def _sats_lines(path: Path, template: str) -> list[str]:
+    """Body lines of a sats file: no titles, no blanks, no template text.
+
+    Template lines are the file's own init text -- a file the model
+    never curated renders as nothing, not as its instructions.
+    Missing/unreadable files read as empty.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    template_lines = set(template.splitlines())
+    out = []
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        if line in template_lines:
+            continue
+        out.append(line)
+    return out
+
+
+def render_handoff(sdir: str | Path, turn_no: int) -> str:
+    """Render sats/handoff.md deterministically from sats state.
+
+    The harness owns this file: the model never writes it. Now comes
+    from sats/current.md, Next from active goals plus open tasks.md
+    lines, Blockers from BLOCKED: lines in tasks.md, Pointers from
+    the sats files present (handoff.md itself excluded). Every
+    section always carries at least one line -- placeholders name
+    what is missing -- so a render always passes validate_handoff.
+    Sections are capped (Now 4, Next 20, Blockers 10) and the whole
+    file is trimmed to HANDOFF_MAX_LINES by dropping Next items,
+    then Pointers, from the end, so the render can never exceed
+    the cap.
+    """
+    sats = Path(sdir) / "sats"
+    now = _sats_lines(sats / "current.md", SAT_FILES["current"])[:4]
+    if not now:
+        now = ["(nothing recorded in sats/current.md)"]
+    tasks = _sats_lines(sats / "tasks.md", SAT_FILES["tasks"])
+    blocked: list[str] = []
+    open_tasks: list[str] = []
+    for line in tasks:
+        stripped = line.strip()
+        if stripped.startswith("BLOCKED:"):
+            text = stripped[len("BLOCKED:"):].strip()
+            if text:
+                blocked.append(text)
+        else:
+            open_tasks.append(stripped)
+    next_items = [f"- {g}" for g in active_goals(sdir)]
+    next_items += [f"- {t}" for t in open_tasks]
+    next_items = next_items[:20]
+    if not next_items:
+        next_items = ["(no active goals or tasks recorded)"]
+    if not blocked:
+        blocked = ["(none recorded in sats/tasks.md)"]
+    blocked = [f"- {b}" for b in blocked[:10]]
+    pointers = [f"sats/{p.name}"
+                for p in sorted(sats.glob("*.md"))
+                if p.name != "handoff.md"]
+    if not pointers:
+        pointers = ["(no sats files present)"]
+
+    def build() -> list[str]:
+        return ["# Handoff", "",
+                f"## Handoff -- t{turn_no:04d}",
+                "### Now", *now,
+                "### Next", *next_items,
+                "### Blockers", *blocked,
+                "### Pointers", *pointers]
+
+    lines = build()
+    while len(lines) > HANDOFF_MAX_LINES:
+        if len(next_items) > 1:
+            next_items.pop()
+        elif len(pointers) > 1:
+            pointers.pop()
+        else:
+            break
+        lines = build()
+    return "\n".join(lines) + "\n"
 
 
 def load_state(sdir: str | Path) -> dict:

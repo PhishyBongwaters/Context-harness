@@ -2,7 +2,7 @@
   DESIGN DOC — keep true.
   This diagram is a design document for the context-harness agent loop.
   Update it whenever the loop changes. Sources of truth:
-    harness/loop.py      (run_turn, _run_turn_once, _ensure_handoff,
+    harness/loop.py      (run_turn, _run_turn_once, _render_handoff,
                           prune_turn, _close_episode)
     harness/assembly.py  (blank-slate assembly order)
     harness/handoff.py   (handoff schema, validation, ledger, trim)
