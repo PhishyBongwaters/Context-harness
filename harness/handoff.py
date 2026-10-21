@@ -90,15 +90,49 @@ _SECTION_RES = {
 }
 
 
+def _section_bodies(text: str) -> dict[str, str]:
+    """Map each handoff section name to its body text.
+
+    The body runs from the section's `### Name` header to the next
+    `###` header or EOF. First occurrence wins if a section header
+    repeats. A section with no header maps to nothing (absent).
+    """
+    headers = [(m.group(1), m.end())
+               for m in re.finditer(r"(?m)^### (Now|Next|Blockers|Pointers)"
+                                   r"\s*$", text or "")]
+    bodies: dict[str, str] = {}
+    for i, (name, start) in enumerate(headers):
+        end = len(text)
+        if i + 1 < len(headers):
+            nxt = re.search(r"(?m)^### (Now|Next|Blockers|Pointers)"
+                            r"\s*$", text[start:])
+            end = start + nxt.start() if nxt else len(text)
+        if name not in bodies:
+            bodies[name] = text[start:end]
+    return bodies
+
+
 def parse_handoff(text: str) -> dict | None:
-    """Parse a handoff file. None when there is no handoff header."""
+    """Parse a handoff file. None when there is no handoff header.
+
+    "sections" reports header presence (as before);
+    "sections_content" reports whether each present section has at
+    least one non-blank line -- a header with nothing under it is
+    not a handoff. "next_bodies" carries the Next section body for
+    the pointer check in validate_handoff.
+    """
     m = _HEADER_RE.search(text or "")
     if not m:
         return None
+    bodies = _section_bodies(text)
     return {
         "stamp": int(m.group(1)),
         "sections": {n: bool(rx.search(text))
                      for n, rx in _SECTION_RES.items()},
+        "sections_content": {
+            n: any(line.strip() for line in bodies.get(n, "").splitlines())
+            for n in HANDOFF_SECTIONS},
+        "next_body": bodies.get("Next", ""),
         "lines": len(text.splitlines()),
     }
 
@@ -132,6 +166,23 @@ def validate_handoff(sdir: str | Path, turn_no: int) -> tuple[bool, str]:
         return False, (
             "handoff is missing section(s): "
             + ", ".join(f"### {n}" for n in missing))
+    empty = [n for n in HANDOFF_SECTIONS
+             if parsed["sections"][n]
+             and not parsed["sections_content"][n]]
+    if empty:
+        return False, (
+            "handoff section(s) are empty: "
+            + ", ".join(f"### {n}" for n in empty)
+            + " -- a header with nothing under it is not a handoff")
+    refs = sorted(set(re.findall(r"sats/([A-Za-z0-9_.\-/]+\.md)",
+                                 parsed["next_body"])))
+    gone = [f"sats/{r}" for r in refs
+            if not (Path(sdir) / "sats" / r).exists()]
+    if gone:
+        return False, (
+            "handoff Next references missing sats file(s): "
+            + ", ".join(gone)
+            + " -- point at files that exist, or drop the reference")
     if parsed["lines"] > HANDOFF_MAX_LINES:
         return False, (
             f"handoff is {parsed['lines']} lines (cap {HANDOFF_MAX_LINES}) "

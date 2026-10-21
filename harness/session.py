@@ -11,9 +11,10 @@ Spec: docs/assembly-spec.md sections 2, 4, 5.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from .context import stamp
+from .context import count_tokens, stamp
 from .handoff import HANDOFF_TEMPLATE
 
 SAT_FILES = {
@@ -403,6 +404,150 @@ def active_goals(sdir: str | Path) -> list[str]:
             if text:
                 goals.append(text)
     return goals
+
+
+GOALS_MAX_ATTEMPTS = 2
+
+# Forced-round nudge for goals validation. .format() fields only --
+# no other braces in this string (mirrors HANDOFF_NUDGE).
+GOALS_NUDGE = (
+    "GOALS INVALID before this turn can end: {goals_path} has "
+    "structural problems: {reason} Fix them with the edit tool -- "
+    "keep every goal's text and state, only fix the format. Do the "
+    "goals fix now -- no other work this round."
+)
+
+_GOAL_LINE_RE = re.compile(r"^-\s*\[(active|done)\]\s+(.+)$")
+
+
+def validate_goals(sdir: str | Path) -> tuple[bool, str]:
+    """Check sats/goals.md structure.
+
+    Returns (True, "") or (False, reason). A missing file, or a
+    file with no goal lines at all, is VALID -- that is a goal-less
+    session, which is legal. Dash lines claim to be goals, so every
+    `- ` line must be `- [active] ...` or `- [done] ...` with
+    non-empty text; other prose lines are notes and ignored. A goal
+    text appearing with both states is a contradiction the model
+    must resolve.
+    """
+    p = Path(sdir) / "sats" / "goals.md"
+    try:
+        body = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True, ""
+    seen: dict[str, str] = {}
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        m = _GOAL_LINE_RE.match(stripped)
+        if not m:
+            return False, (
+                f"goals.md line is not a goal: {stripped[:80]!r} -- "
+                "use '- [active] ...' or '- [done] ...'")
+        state, text = m.group(1), m.group(2).strip()
+        if text in seen and seen[text] != state:
+            return False, (
+                f"goals.md goal is both [active] and [done]: "
+                f"{text[:80]!r} -- pick one state")
+        seen[text] = state
+    return True, ""
+
+
+# Checkbox lines the model writes by habit instead of the goals.md
+# contract (`- [active]` / `- [done]`). Only 0-1 characters may sit
+# inside the brackets, so real `- [active]` / `- [done]` lines
+# never match: they carry whole words, not a tick or a blank.
+_CHECKBOX_REPAIR = re.compile(r"^(\s*-\s*\[)([ xX]?)\](.*)$")
+
+
+def enforce_sats_budgets(sdir: str | Path, cap_tokens: int,
+                         ) -> dict[str, dict]:
+    """Turn-end sats hygiene + cap reporting, in code.
+
+    For each sats file except handoff.md (which has its own
+    validation machinery -- rewriting it here could corrupt the
+    next turn's freshness/shape checks):
+      1. exact-duplicate non-blank lines are dropped, first
+         occurrence kept, order preserved;
+      2. goals.md checkbox formats are repaired: `- [ ]` and `- []`
+         become `- [active]`, `- [x]` and `- [X]` become `- [done]`.
+    Every file is also measured against the cap. A file over cap
+    is REPORTED, never truncated here: the bloat-gate redesign
+    settled that sats are model-curated memory, and mechanical
+    deletion would destroy it -- over-cap files fall through to
+    warn/prune, which curates or fails loudly. The report entry
+    for an over-cap file is the loud signal; the prune turn does
+    the cutting.
+
+    The report covers files that changed (dedupe/repair) and files
+    over cap, and only those. Each entry carries tokens_before/
+    after, dropped_lines, repaired, over_cap, and changed; changed
+    entries also carry before (the pre-enforcement text, so the
+    caller can snapshot it for backup). A missing sats dir, or an
+    unreadable file, is skipped silently -- enforcement must never
+    wedge a turn.
+    """
+    sats = Path(sdir) / "sats"
+    if not sats.is_dir():
+        return {}
+    report: dict[str, dict] = {}
+    for p in sorted(sats.glob("*.md")):
+        if p.name == "handoff.md":
+            continue
+        try:
+            original = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tokens_before = count_tokens(original)
+        lines = original.split("\n")
+        dropped = 0
+        repaired = 0
+        seen: set[str] = set()
+        kept: list[str] = []
+        for line in lines:
+            if line.strip() and line in seen:
+                dropped += 1
+                continue
+            seen.add(line)
+            kept.append(line)
+        lines = kept
+        if p.name == "goals.md":
+            fixed: list[str] = []
+            for line in lines:
+                m = _CHECKBOX_REPAIR.match(line)
+                if m:
+                    state = ("active" if m.group(2).strip() == ""
+                             else "done")
+                    fixed.append(f"{m.group(1)}{state}]{m.group(3)}")
+                    repaired += 1
+                else:
+                    fixed.append(line)
+            lines = fixed
+        body = "\n".join(lines)
+        tokens = count_tokens(body)
+        changed = body != original
+        over_cap = tokens > cap_tokens
+        if not changed and not over_cap:
+            continue
+        if changed:
+            try:
+                p.write_text(body, encoding="utf-8")
+            except OSError:
+                continue
+        entry: dict = {
+            "tokens_before": tokens_before,
+            "tokens_after": tokens,
+            "dropped_lines": dropped,
+            "repaired": repaired,
+            "over_cap": over_cap,
+            "changed": changed,
+        }
+        if changed:
+            entry["before"] = original
+        report[p.name] = entry
+    return report
 
 
 def load_state(sdir: str | Path) -> dict:

@@ -24,7 +24,9 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import active_goals, complete_goal, goals_done, next_turn
+from .session import (GOALS_MAX_ATTEMPTS, GOALS_NUDGE, active_goals,
+                      complete_goal, enforce_sats_budgets, goals_done,
+                      next_turn, validate_goals)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -44,6 +46,24 @@ MAX_STEPS = 50
 # searches return matches and never trip it. Per-turn streak: it
 # resets at turn start and on any other tool or matching search.
 SEARCH_STALL_THRESHOLD = 3
+# Repeats of the identical SUCCEEDING tool call (same name, same
+# arguments) that end the turn. Failing calls never count -- they
+# are the circuit breaker's job, and a failure resets the streak.
+# The search stall above keeps its own, more specific message for
+# fruitless searches; this one catches every other stuck loop --
+# the same read, edit, or exec issued over and over with success.
+# Per-turn streak: resets at turn start and on any different call
+# or any failure. Denied/gated calls never reach the tail, so they
+# neither count nor reset.
+REPEAT_STALL_THRESHOLD = 3
+# Per-file token bound measured on sats/*.md at turn end (except
+# handoff.md, which has its own validation). Files over it are
+# reported loudly, never truncated here -- curation belongs to the
+# prune turn. Default matches prune_section_cap (8000) so the
+# reporting bound equals what prune assembly keeps per section --
+# but it is an independent knob: changing the prune cap does not
+# move this one.
+SATS_CAP_TOKENS = 8000
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
 
@@ -224,6 +244,28 @@ class SearchStall(Exception):
         self.patterns = list(patterns)
 
 
+class RepeatStall(Exception):
+    """The same succeeding tool call repeated consecutively,
+    threshold reached.
+
+    Carries the tool name and the repeat count. Caught in
+    _run_turn_once like SearchStall: the turn ends with a loud
+    message and run_turn does not chain. Fires for any tool,
+    including searches that DO match -- a model issuing the same
+    call over and over is stuck whether the call succeeds or not.
+    Failing calls never count: they are the circuit breaker's job
+    (and a failure resets the streak). A no-match search streak
+    still raises SearchStall first, so the fruitless-search
+    message stays specific. Prune turns catch this per attempt
+    instead of letting it escape (see prune_turn).
+    """
+
+    def __init__(self, name: str, count: int):
+        super().__init__("repeat stall")
+        self.name = name
+        self.count = count
+
+
 class TurnInterrupted(Exception):
     """Cooperative turn cancellation via Loop.request_stop().
 
@@ -308,7 +350,9 @@ class Loop:
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
                  auto_continue_max_turns: int = 3,
-                 search_stall_threshold: int = SEARCH_STALL_THRESHOLD):
+                 search_stall_threshold: int = SEARCH_STALL_THRESHOLD,
+                 repeat_stall_threshold: int = REPEAT_STALL_THRESHOLD,
+                 sats_cap_tokens: int = SATS_CAP_TOKENS):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -357,6 +401,12 @@ class Loop:
         self._search_stall_threshold = search_stall_threshold
         self._no_match_streak = 0
         self._no_match_patterns: list[str] = []
+        # Repeat stall state (per turn; reset at turn start).
+        self._repeat_stall_threshold = repeat_stall_threshold
+        self._repeat_streak = 0
+        self._last_tool_sig: tuple | None = None
+        # Sats budget cap, enforced at turn end.
+        self._sats_cap_tokens = sats_cap_tokens
         self.is_subagent = is_subagent
         self.subagent_id = subagent_id
         self._subagent_budget_fraction = subagent_budget_fraction
@@ -560,6 +610,42 @@ class Loop:
         except Exception:
             pass
 
+    def _enforce_sats_budgets(self, session: Session) -> None:
+        """Turn-end sats hygiene + cap reporting (best effort, never
+        fatal).
+
+        Dedupe and checkbox repair run in code (see
+        session.enforce_sats_budgets); over-cap files are reported
+        loudly, never truncated here -- curation belongs to the
+        prune turn. Every changed file gets its pre-enforcement
+        content snapshotted first, so a rewrite is reversible like
+        any other sats edit, and a "sats-cap" event names what
+        changed or breached. Applies in naive mode too: hygiene and
+        a loud cap signal are safety bounds, not curation judgment.
+        Deliberately NOT run on user-interrupted turns: a stop
+        freezes state.
+        """
+        try:
+            report = enforce_sats_budgets(session.dir,
+                                          self._sats_cap_tokens)
+        except Exception as e:  # never let enforcement break a turn
+            self._emit("sats-cap-error", {"error": str(e)})
+            return
+        sats = Path(session.dir) / "sats"
+        for name, info in report.items():
+            if info["changed"]:
+                self._backup_context(session, sats / name,
+                                     info["before"], "sats-cap")
+            self._emit("sats-cap", {
+                "file": name,
+                "tokens_before": info["tokens_before"],
+                "tokens_after": info["tokens_after"],
+                "dropped_lines": info["dropped_lines"],
+                "repaired": info["repaired"],
+                "over_cap": info["over_cap"],
+                "changed": info["changed"],
+            })
+
     def _ensure_handoff(self, session: Session, turn_no: int,
                           system: str, messages: list[dict]) -> bool:
         """Validate sats/handoff.md at the turn boundary (issue #5).
@@ -631,6 +717,58 @@ class Loop:
                     self._record_handoff_ok(session, turn_no)
                     return True
         self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
+        return False
+
+    def _ensure_goals(self, session: Session, turn_no: int,
+                      system: str, messages: list[dict]) -> bool:
+        """Validate sats/goals.md at the turn boundary.
+
+        Mirrors _ensure_handoff for goals: a malformed goals file
+        triggers forced fix rounds (edit-only tools, the model
+        rewrites the file), and after GOALS_MAX_ATTEMPTS failed
+        rounds it emits "goals-invalid" and returns False -- the
+        turn still closes. Loud, never blocking. A missing or
+        goal-less file is valid, so goal-less sessions never enter
+        rounds.
+        """
+        ok, reason = validate_goals(session.dir)
+        if ok:
+            return True
+        goals_path = str(session.dir / "sats" / "goals.md")
+        for attempt in range(GOALS_MAX_ATTEMPTS):
+            self._check_stop()
+            nudge = GOALS_NUDGE.format(goals_path=goals_path,
+                                       reason=reason)
+            goals_messages = (messages
+                              + [{"role": "user", "content": nudge}])
+            try:
+                bd = self._measure(self.provider, system,
+                                   goals_messages, self._prune_tools)
+                self._emit("request",
+                           {"phase": "goals",
+                            "attempt": attempt + 1,
+                            "tokens_est": bd["total"],
+                            "breakdown": bd,
+                            "hard": self.budget.hard,
+                            "soft": self.budget.soft,
+                            "window": self.budget.window,
+                            "status": self.budget.status(bd["total"])})
+                resp = self.provider.chat(
+                    system=system,
+                    messages=goals_messages + self._note(bd),
+                    tools=self._prune_tools)
+            except Exception as e:  # provider blew up: count the
+                # attempt, keep the turn closable.
+                reason = (f"goals round {attempt + 1} failed: "
+                          f"{type(e).__name__}")
+                continue
+            self._check_stop()
+            for tc in resp.get("tool_calls") or []:
+                self._execute_tool(session, tc)
+            ok, reason = validate_goals(session.dir)
+            if ok:
+                return True
+        self._emit("goals-invalid", {"turn": turn_no, "reason": reason})
         return False
 
     def _record_handoff_ok(self, session: Session,
@@ -908,6 +1046,31 @@ class Loop:
         else:
             self._no_match_streak = 0
             self._no_match_patterns = []
+        # Repeat stall: the identical SUCCEEDING call, consecutively,
+        # whatever the tool. Failed calls are the circuit breaker's
+        # job, not the stall's: a model retrying a failing call
+        # must hit the breaker (or the prune gate), not a stall
+        # message -- so a failure resets the streak instead of
+        # counting. The failure test mirrors _done's below.
+        # The signature is name + canonical arguments (sorted keys,
+        # so key order never masks a repeat; the call id is
+        # deliberately excluded -- a retried call is still the same
+        # call). Runs after the search block, so a fruitless-search
+        # streak keeps its specific message.
+        if (result.startswith("ERROR") or "DENIED" in result
+                or '"status": "error"' in result):
+            self._repeat_streak = 0
+            self._last_tool_sig = None
+        else:
+            sig = (name, json.dumps(args or {}, sort_keys=True,
+                                    default=str))
+            if sig == self._last_tool_sig:
+                self._repeat_streak += 1
+            else:
+                self._repeat_streak = 1
+                self._last_tool_sig = sig
+            if self._repeat_streak >= self._repeat_stall_threshold:
+                raise RepeatStall(name, self._repeat_streak)
         return _done(result)
 
     def _complete_goal(self, session: Session, args: dict) -> str:
@@ -1294,12 +1457,20 @@ class Loop:
                         f"without editing changes nothing. Use edit "
                         f"on the history/sats files now.")})
                     continue
-                for tc in resp["tool_calls"]:
-                    # No gate bypass: curation turns obey the same source
-                    # gates as normal turns (spec section 7).
-                    result = self._execute_tool(session, tc)
-                    turn.append({"role": "tool", "tool_call_id": tc["id"],
-                                 "content": result})
+                try:
+                    for tc in resp["tool_calls"]:
+                        # No gate bypass: curation turns obey the same source
+                        # gates as normal turns (spec section 7).
+                        result = self._execute_tool(session, tc)
+                        turn.append({"role": "tool", "tool_call_id": tc["id"],
+                                     "content": result})
+                except RepeatStall:
+                    # A stuck janitor fails this attempt fast; the
+                    # next attempt retries, and after
+                    # MAX_PRUNE_ATTEMPTS the caller raises
+                    # BudgetExceeded. The stall must not escape
+                    # prune_turn and preempt that outcome.
+                    break
         raw, messages = self._transcript_messages(session)
         return gate(messages) < self.budget.hard
 
@@ -1392,6 +1563,9 @@ class Loop:
         # previous turn's.
         self._no_match_streak = 0
         self._no_match_patterns = []
+        # Fresh turn, fresh repeat streak: same rule.
+        self._repeat_streak = 0
+        self._last_tool_sig = None
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -1559,6 +1733,17 @@ class Loop:
                     # when it honors it, so nothing leaks into a
                     # later user turn.
                     self._auto_dedupe(session)
+                    # Turn-end sats budgets run BEFORE the handoff
+                    # check: a repaired `- [ ]` -> `- [active]` line
+                    # is a live goal, and the chain decision below
+                    # must see it.
+                    self._enforce_sats_budgets(session)
+                    # Goals structure is machine-checked too: a
+                    # malformed goals file triggers fix rounds, and
+                    # persistent failure is loud but never blocks
+                    # the close (mirrors _ensure_handoff).
+                    self._ensure_goals(session, turn_no, system,
+                                       messages)
                     # Once every goal is [done], no more handoffs:
                     # the turn that finishes the goal writes nothing
                     # to handoff.md, and the chain already stops
@@ -1596,6 +1781,18 @@ class Loop:
                 f"returned no matches ({patterns}). The search root "
                 f"or pattern is wrong -- fix it or ask the user.")
             self._emit("assistant", message)
+            self._enforce_sats_budgets(session)
+            return message, True
+        except RepeatStall as stall:
+            # Same treatment: loud, chain-stopping, normal
+            # assistant event. The message names the call so the
+            # next turn can vary it instead of repeating it.
+            message = (
+                f"Stopped: the same {stall.name} call repeated "
+                f"{stall.count} times in a row. Vary the call, "
+                f"read a file directly, or ask the user.")
+            self._emit("assistant", message)
+            self._enforce_sats_budgets(session)
             return message, True
         except TurnInterrupted:
             self._stop_event.clear()

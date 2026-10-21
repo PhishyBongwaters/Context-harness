@@ -135,6 +135,29 @@ class TestValidate(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("cap", reason)
 
+    def test_empty_section_fails(self):
+        s = make_session()
+        write_handoff(s.dir, stamp="t0001", sections={"Next": ""})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertFalse(ok)
+        self.assertIn("### Next", reason)
+        self.assertIn("empty", reason)
+
+    def test_next_missing_sats_file_fails(self):
+        s = make_session()
+        write_handoff(s.dir, stamp="t0001",
+                      sections={"Next": "then read sats/nope.md"})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertFalse(ok)
+        self.assertIn("sats/nope.md", reason)
+
+    def test_next_existing_sats_file_passes(self):
+        s = make_session()
+        write_handoff(s.dir, stamp="t0001",
+                      sections={"Next": "then read sats/facts.md"})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
+
     def test_ensure_recreates_missing_file(self):
         s = make_session()
         (s.dir / "sats" / "handoff.md").unlink()
