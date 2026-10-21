@@ -380,8 +380,13 @@ class Loop:
         Cooperative: a turn blocked inside a model call or tool
         execution finishes that call first (bounded by the request /
         exec timeouts), then aborts before storing or acting on the
-        result. A completed turn always consumes the flag, so a stop
-        can never leak into and kill the next turn.
+        result. A stop is a run-level signal, not a turn-level one:
+        if the turn already completed by the time the flag is seen,
+        run_turn honors it before chaining, so a stop can never be
+        silently eaten by a completing turn and leave the chain
+        running. The flag is cleared whenever it is honored (step
+        boundary, turn start, or between turns), so it never leaks
+        into a later user turn.
         """
         self._stop_event.set()
 
@@ -1373,7 +1378,10 @@ class Loop:
                                           "scratch_tokens": scratch_tokens})
                     # Force a handoff now to trigger deep clean, then
                     # continue the turn with the shrunken transcript.
-                    self._stop_event.clear()
+                    # No clear() here: a stop requested before this
+                    # close must survive to the next step boundary
+                    # (_check_stop at the loop top), where it ends
+                    # the turn, instead of being eaten by the close.
                     self._auto_dedupe(session)
                     self._ensure_handoff(session, turn_no, system, messages)
                     self._close_episode(session, turn_no, content or "")
@@ -1447,10 +1455,17 @@ class Loop:
                 if content:
                     self._emit("assistant", content)
                 if not tool_calls:
-                    # Normal completion consumes any pending stop (e.g. one
-                    # that arrived after the last check): it must never
-                    # leak into and kill the next turn.
-                    self._stop_event.clear()
+                    # No clear() here, deliberately: a stop requested
+                    # during this turn (e.g. after the last step
+                    # check, while the closing handoff/close runs)
+                    # must survive to run_turn's between-turns check,
+                    # which honors it and stops the chain. Clearing
+                    # here ate exactly that stop and left an
+                    # auto-continue chain un-stoppable mid-run: the
+                    # turn completed, the flag vanished, and the next
+                    # auto-turn started. run_turn clears the flag
+                    # when it honors it, so nothing leaks into a
+                    # later user turn.
                     self._auto_dedupe(session)
                     # Handoff-per-turn (issue #5): the turn may only end
                     # with a fresh handoff. Stale/missing triggers a

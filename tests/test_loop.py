@@ -590,6 +590,42 @@ class TestLoop(unittest.TestCase):
         self.assertIn("repo version", result)
         self.assertNotIn("session version", result)
 
+    def test_stop_during_closing_turn_stops_chain(self):
+        # "Cannot stop the loop mid-run": a stop requested after the
+        # last step check, while the closing handoff/close runs, was
+        # eaten by the old normal-completion clear() and the next
+        # auto-turn started anyway. The stop must survive to
+        # run_turn's between-turns check, which honors it and stops
+        # the chain -- even with the goal still [active] and cap
+        # headroom. Simulated by setting the flag inside the final
+        # reply's sanitize call, i.e. after the last _check_stop.
+        import unittest.mock as mock
+        import harness.loop as loop_mod
+        s = make_session()
+        write_handoff(s.dir)
+        goals = s.dir / "sats" / "goals.md"
+        goals.parent.mkdir(parents=True, exist_ok=True)
+        goals.write_text("- [active] trace the write path\n",
+                         encoding="utf-8")
+        events = []
+        loop = Loop(MockProvider([{"content": "done"}]),
+                    Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=20,
+                    on_event=lambda k, v: events.append(k))
+        real_sanitize = loop_mod.sanitize_assistant_content
+
+        def _sanitize_and_stop(content):
+            loop._stop_event.set()
+            return real_sanitize(content)
+
+        with mock.patch.object(loop_mod, "sanitize_assistant_content",
+                               side_effect=_sanitize_and_stop):
+            self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertNotIn("auto-continue", events)
+        self.assertIn("interrupted", events)
+        self.assertIn("- [active] ",
+                      goals.read_text(encoding="utf-8"))
+
     def test_run_turn_sats_edit_redirects(self):
         # End to end: a model turn that edits a workdir-anchored sats
         # path updates the session file and completes the turn.
