@@ -626,6 +626,52 @@ class TestLoop(unittest.TestCase):
         self.assertIn("- [active] ",
                       goals.read_text(encoding="utf-8"))
 
+    def test_done_goals_skip_turn_end_handoff(self):
+        # "Once goal is done no more handoffs": a turn ending with
+        # every goal [done] must not write to handoff.md at all -- the
+        # pre-written t0000 handoff stays untouched, and no provider
+        # call is spent on a handoff round (1 call total: the turn's
+        # own reply). The chain already stops on empty goals; this
+        # silences the harness's own turn-end write.
+        from test_handoff import write_handoff
+        s = make_session()
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        (s.dir / "sats" / "goals.md").write_text(
+            "- [done] trace the thing\n", encoding="utf-8")
+        events = []
+        prov = MockProvider([{"content": "done"}])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=20,
+                    on_event=lambda k, v: events.append(k))
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertEqual(len(prov.calls), 1)
+        self.assertNotIn("auto-continue", events)
+        body = (s.dir / "sats" / "handoff.md").read_text(
+            encoding="utf-8")
+        self.assertIn("## Handoff -- t0000", body)
+        self.assertNotIn("t0001", body)
+
+    def test_goalless_session_keeps_turn_end_handoff(self):
+        # Boundary: a session that never had goals (no [done] line)
+        # keeps the normal per-turn handoff -- the silence above
+        # applies only to finished goals, not to goal-less chat.
+        # The turn's reply plus one forced handoff round = 2 calls,
+        # and the handoff advances to t0001.
+        from test_handoff import handoff_response, write_handoff
+        s = make_session()
+        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
+        write_handoff(s.dir, stamp="t0000")
+        prov = MockProvider([{"content": "done"},
+                             handoff_response(s.dir, 1)])
+        loop = Loop(prov, Budget(hard=100000, soft=80000),
+                    auto_continue=True, auto_continue_max_turns=20)
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertEqual(len(prov.calls), 2)
+        body = (s.dir / "sats" / "handoff.md").read_text(
+            encoding="utf-8")
+        self.assertIn("## Handoff -- t0001", body)
+
     def test_run_turn_sats_edit_redirects(self):
         # End to end: a model turn that edits a workdir-anchored sats
         # path updates the session file and completes the turn.

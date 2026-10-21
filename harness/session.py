@@ -292,6 +292,30 @@ def add_goal(sdir: str | Path, text: str) -> str:
     return "added"
 
 
+def goals_done(sdir: str | Path) -> bool:
+    """True when sats/goals.md has at least one `- [done]` goal and no
+    `- [active]` goal: the goal is done, so no more handoffs.
+
+    A missing file, or a file with no goal lines at all, is NOT done
+    -- that is a goal-less session, which keeps the normal per-turn
+    handoff. Only a session that had goals and finished them silences
+    the turn-end handoff.
+    """
+    try:
+        body = (Path(sdir) / "sats" / "goals.md").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    done = active = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [done] "):
+            done = True
+        elif stripped.startswith("- [active] "):
+            active = True
+    return done and not active
+
+
 def active_goals(sdir: str | Path) -> list[str]:
     """Return the texts of `- [active]` goals in sats/goals.md.
 

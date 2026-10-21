@@ -24,7 +24,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import active_goals, next_turn
+from .session import active_goals, goals_done, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -1467,12 +1467,19 @@ class Loop:
                     # when it honors it, so nothing leaks into a
                     # later user turn.
                     self._auto_dedupe(session)
-                    # Handoff-per-turn (issue #5): the turn may only end
-                    # with a fresh handoff. Stale/missing triggers a
-                    # forced handoff round; persistent failure is loud
-                    # but never blocks the close.
-                    self._ensure_handoff(session, turn_no, system,
-                                         messages)
+                    # Once every goal is [done], no more handoffs:
+                    # the turn that finishes the goal writes nothing
+                    # to handoff.md, and the chain already stops
+                    # after it (no active goals). A goal-less session
+                    # (no [done] line at all) keeps the normal
+                    # per-turn handoff.
+                    if not goals_done(session.dir):
+                        # Handoff-per-turn (issue #5): the turn may
+                        # only end with a fresh handoff. Stale/missing
+                        # triggers a forced handoff round; persistent
+                        # failure is loud but never blocks the close.
+                        self._ensure_handoff(session, turn_no, system,
+                                             messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
