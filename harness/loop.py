@@ -14,6 +14,7 @@ Budget enforcement:
 """
 from __future__ import annotations
 
+import itertools
 import json
 import threading
 from dataclasses import dataclass, field
@@ -37,7 +38,6 @@ from .tools import _resolve, run_tool, tool_definitions
 from .handoff import (HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
                       handoff_size, validate_handoff)
 
-MAX_STEPS = 50
 # No-match search stall: this many consecutive searches returning
 # "no matches" ends the turn and stops the chain. A model stuck
 # re-searching with variants burns slow whole-tree walks; legitimate
@@ -1252,7 +1252,7 @@ class Loop:
         # Gate on the EXACT next request: main system + full tools. Any
         # cheaper ruler (prune system, prune tools) reads under while the
         # main check stays over: prune declares victory without touching
-        # the file and the loop burns all MAX_STEPS on identical OVER lines.
+        # the file and the loop burns steps on identical OVER lines.
         main_system = load_prompt(session.dir, ctx_path=ctx_path,
                                   hard=self.budget.hard,
                                   soft=self.budget.soft,
@@ -1451,7 +1451,7 @@ class Loop:
         content = ""
 
         try:
-            for step in range(MAX_STEPS):
+            for step in itertools.count():
                 self._check_stop()
                 raw, messages = self._transcript_messages(session)
                 if not messages:
@@ -1645,5 +1645,6 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
-        raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
-                            f"finishing.")
+        # The step loop is unbounded by design: prune and the context
+        # budget bound the turn, not a step count. It exits only via
+        # return/raise in the body above.

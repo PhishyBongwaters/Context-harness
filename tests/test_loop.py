@@ -885,7 +885,7 @@ class TestLoop(unittest.TestCase):
         # The assembly can be UNDER by the prune-tools measure while OVER
         # by the full-tools measure (4 extra schemas). The gate must use
         # the full measure, or prune_turn returns True instantly, the main
-        # check stays over, and the loop burns all MAX_STEPS on OVER lines.
+        # check stays over, and the loop burns steps on OVER lines.
         from harness.assembly import assemble, load_prompt
         s = make_session()
         prov = MockProvider([])
