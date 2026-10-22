@@ -14,12 +14,6 @@ import subprocess
 import time
 from pathlib import Path
 
-try:
-    from .._build import get_build as _get_build
-    _BUILD = _get_build()
-except Exception:
-    _BUILD = "dev"
-
 # Classic TNG LCARS palette (hex).
 LCARS = {
     "orange":     "#FF9900",
@@ -48,8 +42,6 @@ def header_segments(title: str, width: int, phase: int = 0,
                     running: bool = False, spin: int = 0,
                     alert: str | None = None, flash: bool = False,
                     turn_flash: bool = False, marquee: int = 0,
-                    build: str | None = None,
-                    mode: str | None = None,
                     ) -> list[tuple[str, str, str]]:
     """(text, bg, fg) segments for the LCARS header bar.
 
@@ -70,19 +62,8 @@ def header_segments(title: str, width: int, phase: int = 0,
     if build_pill:
         segs.append((build_pill, LCARS["peach"], _FG))
         segs.append((" ", LCARS["black"], _FG))
-    # MODE pill: analyze (ice, read-only) vs build (orange, may write).
-    # Labeled MODE: to avoid colliding with the BUILD commit pill.
-    # Dropped on narrow screens alongside the BUILD pill.
-    mode_pill = ""
-    if mode and width >= 60:
-        label = mode.upper()
-        bg = LCARS["orange"] if mode == "build" else LCARS["ice"]
-        mode_pill = f" MODE:{label} "
-        segs.append((mode_pill, bg, _FG))
-        segs.append((" ", LCARS["black"], _FG))
 
-    max_title = max(8, width - 48 - len(build_pill) - len(mode_pill)
-                   - (1 if build_pill else 0) - (1 if mode_pill else 0)
+    max_title = max(8, width - 48 - len(build_pill) - (1 if build_pill else 0)
                    - (4 if alert else 0))
     if len(title) > max_title:
         # Marquee: slide a window through the title instead of
@@ -113,11 +94,8 @@ def header_segments(title: str, width: int, phase: int = 0,
     right = [(turn_txt, turn_bg, _FG),
              (" ", LCARS["black"], _FG),
              (budget_txt, LCARS["peach"], _FG),
-             (" ", LCARS["black"], _FG)]
-    if build:
-        right.append((f" {build} ", LCARS["sky"], _FG))
-        right.append((" ", LCARS["black"], _FG))
-    right.append((spin_txt, accent, _FG))
+             (" ", LCARS["black"], _FG),
+             (spin_txt, accent, _FG)]
     if alert:
         # Blinking alert pill; always present (dim when "off") so the
         # bar width never jumps between phases.
@@ -291,11 +269,9 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
         spins while the agent runs (pulses gently when idle).
         """
 
-        def __init__(self, title: str = "", mode: str | None = None,
-                     **k) -> None:
+        def __init__(self, title: str = "", **k) -> None:
             super().__init__(**k)
             self._title = title or ""
-            self._mode = mode
             self._phase = 0
             self._turns = 0
             self._budget_pct: float | None = None
@@ -364,8 +340,7 @@ if _HAS_TEXTUAL:  # pragma: no cover - needs the extra
                 alert=self._alert,
                 flash=now < self._flash_until,
                 turn_flash=now < self._turn_flash_until,
-                marquee=self._marquee,
-                build=_BUILD, mode=self._mode))
+                marquee=self._marquee))
 
     class LcarsCharms(Static):
         """LCARS charm strip under the header: decorative pills,
@@ -511,9 +486,6 @@ def lcars_stats_text(data):
         (f" CHAT {bd.get('transcript', 0):,} ", LCARS["periwinkle"]),
         (f" TOOLS {bd.get('tools', 0):,} ", LCARS["sky"]),
     ]
-    calls = data.get("tool_call_count")
-    if calls:
-        pills.append((f" CALLS {calls:,} ", LCARS["ice"]))
     if ut:
         pills.append((f" SESS IN {ut.get('input', 0):,} OUT {ut.get('output', 0):,} ", LCARS["peach"]))
     text = Text()

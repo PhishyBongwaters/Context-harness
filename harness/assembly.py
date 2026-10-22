@@ -47,15 +47,6 @@ def assemble(sdir: str | Path) -> str:
 # Guidance appended at load time when the on-disk prompt predates it
 # (old sessions keep their prompt.md verbatim; the effective prompt
 # stays current). Keep in sync with SYSTEM_PROMPT in loop.py.
-_PROMPT_ADDENDUM_AMNESIA = (
-    "\nAMNESIA: you forget between turns. Pruned or archived turns leave\n"
-    "your context, and re-reading them costs tokens every time. If it\n"
-    "isn't written in your sats or history, you don't know it. When you\n"
-    "start anything multi-step, write the plan and current state to\n"
-    "sats/current.md first and keep it updated as you go -- your notes\n"
-    "are cheaper than your memory.\n"
-)
-_PROMPT_ADDENDUM_AMNESIA_MARKER = "AMNESIA: you forget between turns"
 _PROMPT_ADDENDUM_DELEGATE = (
     "\n  Heavy curation (large histories, many files to triage): prefer\n"
     "  `delegate` -- a subagent does the reading and editing in its own\n"
@@ -106,10 +97,6 @@ def load_prompt(sdir: str | Path, *, ctx_path: str, hard: int,
         # Session predates the handoff mechanic: the guidance rides
         # along in-memory, same as the delegate addendum.
         text = text.rstrip("\n") + "\n" + HANDOFF_PROMPT_PARAGRAPH
-    if _PROMPT_ADDENDUM_AMNESIA_MARKER not in text:
-        # Predates the amnesia framing: append it (new sessions already
-        # carry it in SYSTEM_PROMPT, so the marker keeps it single).
-        text = text.rstrip("\n") + "\n" + _PROMPT_ADDENDUM_AMNESIA
     text = (text.replace("{ctx_path}", str(ctx_path))
                 .replace("{hard}", str(hard))
                 .replace("{soft}", str(soft))

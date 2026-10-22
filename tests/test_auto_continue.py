@@ -55,12 +55,12 @@ class TestAutoContinueDefaults(unittest.TestCase):
     def test_config_defaults_off(self):
         cfg = Config()
         self.assertFalse(cfg.auto_continue)
-        self.assertEqual(cfg.auto_continue_max_turns, 10)
+        self.assertEqual(cfg.auto_continue_max_turns, 3)
 
     def test_loop_defaults_off(self):
         loop, _ = make_loop(MockProvider([]))
         self.assertFalse(loop.auto_continue)
-        self.assertEqual(loop._auto_continue_max_turns, 10)
+        self.assertEqual(loop._auto_continue_max_turns, 3)
 
     def test_bad_max_turns_coerced_safe(self):
         loop, _ = make_loop(MockProvider([]), auto_continue=True,
@@ -97,7 +97,8 @@ class TestAutoContinueChain(unittest.TestCase):
         # Event emitted per auto-turn.
         auto_events = [v for k, v in events if k == "auto-continue"]
         self.assertEqual([v["index"] for v in auto_events], [1, 2])
-        # No forced handoff rounds: exactly 2 provider calls per turn.
+        # No handoff rounds exist (the harness renders): exactly 2
+        # provider calls per turn.
         self.assertEqual(len(loop.provider.calls), 6)
 
     def test_cap_respected(self):

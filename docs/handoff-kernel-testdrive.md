@@ -26,8 +26,7 @@ Successor to the simulated evaluation in `docs/handoff-prompt-eval.md`.
   must read this tree. Drift is detectable against the known path.
 - **Bloat pressure.** A trace tempts dumping (function bodies, call
   graphs) into the handoff. That is what the canary
-  (`handoff-bloat`) and the deterministic trim backstop exist to
-  catch.
+  (`handoff-bloat`) exists to catch.
 
 ## Setup
 

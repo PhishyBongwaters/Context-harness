@@ -64,9 +64,7 @@ Each turn the harness:
    (recency), conversation in the middle. `handoff` leads: it is the
    L1 -- the shift board (Now/Next/Blockers/Pointers) the next turn
    reads before anything else. The harness validates it at every turn
-   boundary (freshness/shape/40-line cap; see issue #5). When no goals
-   are `[active]`, handoff enforcement is skipped -- there is no work
-   left to hand off.
+   boundary (freshness/shape/40-line cap; see issue #5).
 3. Writes the assembled text to `context.md` (inspectable artifact).
 4. Parses it with the existing `parse_transcript` into API messages.
 5. Appends the ephemeral usage note (`_note`, unchanged: sent, never

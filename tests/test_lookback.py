@@ -44,12 +44,27 @@ class TestArchiveLookback(unittest.TestCase):
     def test_model_reads_archive_end_to_end(self):
         s = make_session()
         arch = self._archived_turn(s)
-        # Turn 2: the model follows the pointer and reads the archive.
+        # Turn 2: turn 1 ended handoff-invalid, so a recovery round
+        # repairs the stale t0000 stamp first; then the model follows
+        # the pointer and reads the archive, then writes t0002.
+        handoff = str(s.dir / "sats" / "handoff.md")
         loop = Loop(MockProvider([
+            {"content": None, "tool_calls": [
+                {"id": "rec", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0000",
+                     "new_text": "## Handoff -- t0001"}}]},
             {"content": None, "tool_calls": [
                 {"id": "r1", "name": "read",
                  "arguments": {"path": str(arch)}}]},
             {"content": "saw SECRET42 in the archive"},
+            {"content": None, "tool_calls": [
+                {"id": "h2", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0001",
+                     "new_text": "## Handoff -- t0002"}}]},
         ]), Budget(100000, 80000))
         out = loop.run_turn(s, "what did the last episode find?")
         self.assertEqual(out, "saw SECRET42 in the archive")

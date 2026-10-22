@@ -144,8 +144,13 @@ if _HAS:
 
 
     class ApprovalScreen(ModalScreen):
-        """Mutating-tool approval: a=turn, s=session, d/esc=deny.
+        """Mutating-tool approval: a=turn, s=session, d=deny.
 
+        Escape denies AND stops the run: while this modal is open the
+        app-level Escape (interrupt_turn) never fires, so plain deny
+        left a looping run un-stoppable -- every Escape just denied
+        one approval and the model asked again. 'd' stays deny-only
+        for the case where the turn should continue.
         Resolves via the box event the worker's decide() waits on; the
         countdown mirrors approval_timeout and denies on expiry.
         """
@@ -153,7 +158,7 @@ if _HAS:
         BINDINGS = [("a", "approve_turn", "Approve turn"),
                     ("s", "approve_session", "Approve session"),
                     ("d", "deny", "Deny"),
-                    ("escape", "deny", "Deny")]
+                    ("escape", "deny_and_stop", "Deny + stop")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
                "#approval-box { width: 62; height: auto; "
@@ -233,6 +238,16 @@ if _HAS:
 
         def action_deny(self) -> None:
             self._resolve("deny")
+
+        def action_deny_and_stop(self) -> None:
+            self._resolve("deny")
+            # Stop the run, not just this approval: without this the
+            # worker continues the turn and the next gated tool pops
+            # another modal, so Escape can never stop a looping run.
+            try:
+                self.app._agent_loop.request_stop()
+            except Exception:
+                pass
 
 
     PICKER_PROVIDERS = ("openai", "anthropic", "nvidia")
@@ -739,12 +754,6 @@ if _HAS:
                "margin-bottom: 1; width: 1fr; } "
                ".message-tool { background: #232323; padding: 0 1; "
                "margin-bottom: 1; width: 1fr; } "
-               # Diff cards: subtle warm tint, distinct from chat.
-               ".message-context-diff { background: #2b251c; padding: 0 1; "
-               "margin-bottom: 1; width: 1fr; } "
-               # Navigation cursor: accent bar on the current message
-               # (opencode-style jump-to-message).
-               ".message-current { border-left: solid $accent; } "
                "#lcars-header { height: 1; } #lcars-footer { height: 1; } "
                "#lcars-footer LcarsPill { width: auto; height: 1; } "
                "#std-footer { height: 1; } "
@@ -768,8 +777,10 @@ if _HAS:
                     # only reliably-delivered "modified enter": terminals
                     # swallow ctrl+enter and merge shift+enter into enter.
                     ("ctrl+n", "insert_newline", "New line"),
-                    # Escape interrupts a running turn (modals keep their
-                    # own escape: close/deny wins while one is open).
+                    # Escape interrupts a running turn. Modals keep
+                    # their own escape: the approval modal's escape
+                    # denies AND stops the run (plain deny could never
+                    # stop a looping run); other modals just close.
                     ("escape", "interrupt_turn", "Interrupt"),
                     # Textual binds ctrl+c to a quit nudge and Input
                     # swallows it as copy-my-own-selection; a transcript
@@ -777,14 +788,7 @@ if _HAS:
                     # Priority binding: screen selection first, else the
                     # focused widget's own copy. Never quits.
                     Binding("ctrl+c", "copy_selection",
-                            "Copy selection", show=False, priority=True),
-                    # opencode-style message navigation: step through
-                    # messages, jump to the last user message, copy the
-                    # current (or last) message's full text.
-                    ("alt+k", "message_next", "Next message"),
-                    ("alt+j", "message_prev", "Prev message"),
-                    ("alt+u", "message_last_user", "Last user msg"),
-                    ("alt+c", "copy_message", "Copy message")]
+                            "Copy selection", show=False, priority=True)]
 
         def action_copy_selection(self) -> None:
             """ctrl+c: copy the screen text selection, else the focused
@@ -800,47 +804,6 @@ if _HAS:
             act = getattr(focused, "action_copy", None)
             if callable(act):
                 act()
-
-        def _transcript_box(self):
-            try:
-                return self.query_one("#transcript", TranscriptContainer)
-            except Exception:
-                return None
-
-        def action_message_next(self) -> None:
-            box = self._transcript_box()
-            if box is not None:
-                box.nav_step(1)
-
-        def action_message_prev(self) -> None:
-            box = self._transcript_box()
-            if box is not None:
-                box.nav_step(-1)
-
-        def action_message_last_user(self) -> None:
-            box = self._transcript_box()
-            if box is not None:
-                box.nav_last_user()
-
-        def action_copy_message(self) -> None:
-            """alt+c: copy the navigated-to message, else the last one."""
-            box = self._transcript_box()
-            if box is None:
-                return
-            w = box.current_message()
-            if w is None:
-                msgs = box.message_widgets()
-                w = msgs[-1] if msgs else None
-            if w is None:
-                return
-            try:
-                self.copy_to_clipboard(w.plain_text)
-            except Exception:
-                return
-            try:
-                self.notify("Message copied", timeout=1)
-            except Exception:
-                pass
 
         def __init__(self, loop, session, bridge: "TuiBridge",
                      provider_name: str = "", model: str = "",
@@ -865,9 +828,6 @@ if _HAS:
             self._session_header = session_header
             self._title = (f"{session.id} {provider_name}/{model}"
                            ).strip()
-            # Live tool-call counter for the footer display.
-            self._tool_call_count = 0
-            self._last_request_data: dict | None = None
             # LCARS is a toggleable theme (command palette): registered
             # here so it lists alongside the builtins. Default on, to
             # preserve the current look; switching themes swaps the
@@ -911,8 +871,6 @@ if _HAS:
             if lcars:
                 return (
                     [LcarsHeader(title=self._title or "harness",
-                                 mode=getattr(getattr(self, "_cfg", None),
-                                              "mode", "analyze"),
                                  id="lcars-header"),
                      LcarsCharms(id="lcars-charms")],
                     [LcarsFooter(pills=_binding_pills(self.BINDINGS),
@@ -944,15 +902,6 @@ if _HAS:
 
         async def on_mount(self) -> None:
             self.title = self._title or "harness"
-            # Ctrl+C must never kill the harness (documented: it copies).
-            # On Windows the console sends SIGINT which terminates the
-            # process before Textual sees the keypress. Swallow it so the
-            # ctrl+c binding (copy_selection) can work.
-            try:
-                import signal
-                signal.signal(signal.SIGINT, signal.SIG_IGN)
-            except Exception:
-                pass
             self._wire_approver()
             self.set_interval(0.1, self._poll)
             await self._apply_chrome(self.theme == "lcars")
@@ -1083,9 +1032,6 @@ if _HAS:
             breakdown. Both tint warn/over."""
             gauge = self.query_one("#gauge", BudgetGauge)
             bar = self.query_one("#budget", BudgetBar)
-            data = dict(data or {})
-            data["tool_call_count"] = self._tool_call_count
-            self._last_request_data = data
             bar.set_request(data)
             gauge.set_request(data)
             try:
@@ -1166,9 +1112,7 @@ if _HAS:
 
         # Event kinds that are system instrumentation, not conversation:
         # they go to the top SystemPanel, never the chat transcript.
-        # context-diff is the exception: it renders as an opencode-style
-        # diff card in the transcript (message-context-diff widget).
-        _SYSTEM_KINDS = {"error", "prune", "budget",
+        _SYSTEM_KINDS = {"error", "prune", "context-diff", "budget",
                          "interrupted", "approval-wait", "approval-result"}
 
         def _poll(self) -> None:
@@ -1194,17 +1138,6 @@ if _HAS:
                 if kind in ("response", "tool", "error"):
                     self._turn_start = None  # request span ends here
                     self._set_status("")
-                if kind == "tool":
-                    self._tool_call_count += 1
-                    # Refresh the footer counter live.
-                    if self._last_request_data is not None:
-                        try:
-                            bar = self.query_one("#budget", BudgetBar)
-                            d = dict(self._last_request_data)
-                            d["tool_call_count"] = self._tool_call_count
-                            bar.set_request(d)
-                        except Exception:
-                            pass
                 shown.append((kind, data, _line))
             chat = [(k, d, l) for k, d, l in shown
                     if k not in self._SYSTEM_KINDS]

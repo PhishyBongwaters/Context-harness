@@ -48,7 +48,7 @@ DEFAULTS = {
     "exec_timeout": 60,  # default exec runtime when the model omits it
     "exec_timeout_max": 300,  # hard ceiling even if the model asks for more
     "auto_continue": False,  # start another turn while a goal is [active]
-    "auto_continue_max_turns": 10,  # auto-turn cap per user message
+    "auto_continue_max_turns": 3,  # auto-turn cap per user message
     "usage_note": True,  # ephemeral per-request usage line (never stored)
     "request_timeout": 120,  # HTTP seconds per model call (raise for huge
     # prompts on slow local servers; prefill of ~100k tokens can take
@@ -57,6 +57,9 @@ DEFAULTS = {
     # 3x request_timeout: prune prompts carry the whole file, so the
     # janitor needs longer than a normal turn on slow servers)
     "prune_target": None,  # deterministic stages aim here (null -> soft)
+    "transcript_bloat_tokens": None,  # bloat-gate threshold (null ->
+    # 30% of window when known, else soft; pin e.g. 40000 for a 135k
+    # window so a prune turn can still load the whole transcript)
     "prune_keep_tools": 5,  # newest tool sections exempt from eviction
     "prune_section_cap": 8000,  # per-section token cap (head+tail kept)
     "providers": {},  # named registry: name -> {kind, base_url, model,
@@ -418,11 +421,12 @@ class Config:
     # Goal-driven auto-continue: start another full turn while any goal
     # is [active] (docs/goal-auto-continue-spec.md). Default off.
     auto_continue: bool = False
-    auto_continue_max_turns: int = 10
+    auto_continue_max_turns: int = 3
     usage_note: bool = True
     request_timeout: int = 120
     prune_request_timeout: int | None = None
     prune_target: int | None = None
+    transcript_bloat_tokens: int | None = None
     prune_keep_tools: int = 5
     prune_section_cap: int = 8000
     # False = naive mode (condition A): no pruning, no dedupe, no archive.
@@ -608,6 +612,9 @@ def load_config(path: str | Path | None = None,
                                else None),
         prune_target=(int(merged["prune_target"])
                       if merged.get("prune_target") else None),
+        transcript_bloat_tokens=(
+            int(merged["transcript_bloat_tokens"])
+            if merged.get("transcript_bloat_tokens") else None),
         prune_keep_tools=int(merged.get("prune_keep_tools", 5)),
         prune_section_cap=int(merged.get("prune_section_cap", 8000)),
         include_file=merged.get("include_file"),

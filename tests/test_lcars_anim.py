@@ -72,12 +72,22 @@ class TestMarquee(unittest.TestCase):
         self.assertEqual(len(ta), len(tb))
 
     def test_marquee_wraps(self):
+        # The old test hardcoded span from a fixed 48-char chrome
+        # width, but header_segments subtracts the BUILD pill (whose
+        # length follows the checkout's commit id) from max_title, so
+        # the span was wrong -- and it passed vacuously whenever the
+        # commit id contained "a", because the first segment containing
+        # "a" was then the BUILD pill, identical at any marquee. Find
+        # the title pill by its mauve background and derive max_title
+        # from the window it actually shows: scrolling by exactly one
+        # full span must wrap back to the same window.
         title = "abcdefghij" * 10
         a = header_segments(title, 80, phase=0, marquee=0)
-        span = len(title) - (80 - 48) + 1
+        ta = [t for t, bg, _ in a if bg == LCARS["mauve"]][0]
+        max_title = len(ta) - 2  # surrounding spaces of the pill
+        span = len(title) - max_title + 1
         b = header_segments(title, 80, phase=0, marquee=span)
-        ta = [t for t, _, _ in a if "a" in t][0]
-        tb = [t for t, _, _ in b if "a" in t][0]
+        tb = [t for t, bg, _ in b if bg == LCARS["mauve"]][0]
         self.assertEqual(ta, tb)
 
     def test_short_title_unaffected(self):

@@ -4,7 +4,7 @@
   architecture: the pointer machine that makes the loop work.
   Update it whenever the memory layout changes. Sources of truth:
     harness/session.py  (SAT_FILES, INDEX_TEMPLATE, HISTORY_TEMPLATE)
-    harness/loop.py     (_close_episode, _backup_context, _trim_handoff_backstop)
+    harness/loop.py     (_close_episode, _backup_context, _render_handoff)
     harness/assembly.py (blank-slate assembly order)
   Rendered at 1040x1320. Dark LCARS-flavored theme to match the TUI.
 -->

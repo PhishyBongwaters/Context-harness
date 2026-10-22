@@ -1,5 +1,5 @@
 """Handoff-per-turn (issue #5): sats/handoff.md lifecycle, validation,
-forced handoff rounds, and assembly priority.
+harness-owned rendering, and assembly priority.
 """
 import tempfile
 import unittest
@@ -7,25 +7,19 @@ from pathlib import Path
 
 from harness.assembly import SAT_ORDER, assemble, load_prompt
 from harness.context import Budget
-from harness.handoff import (HANDOFF_MAX_LINES, HANDOFF_PROMPT_PARAGRAPH,
-                             HANDOFF_SECTIONS, HANDOFF_TEMPLATE,
-                             HandoffLedger, ensure_handoff_file, handoff_size,
-                             is_over_cap, parse_handoff, parse_next_items,
-                             trim_handoff, validate_handoff)
+from harness.handoff import (HANDOFF_MAX_LINES, HANDOFF_SECTIONS,
+                             HANDOFF_TEMPLATE, HandoffLedger,
+                             handoff_size, parse_handoff,
+                             validate_handoff)
 from harness.loop import PRUNE_SYSTEM, Loop, Session
 from harness.providers import MockProvider
+from harness.session import render_handoff
 from harness.tools import classify_source, source_gate
 
 
 def make_session():
     d = tempfile.mkdtemp()
-    s = Session(id="t", dir=Path(d), workdir=d)
-    # Enforcement tests need an active goal; without one the handoff
-    # is skipped (no work to hand off).
-    (Path(d) / "sats").mkdir(parents=True, exist_ok=True)
-    (Path(d) / "sats" / "goals.md").write_text(
-        "- [active] Test goal\n", encoding="utf-8")
-    return s
+    return Session(id="t", dir=Path(d), workdir=d)
 
 
 def handoff_response(sdir, turn_no):
@@ -33,9 +27,10 @@ def handoff_response(sdir, turn_no):
 
     Rewrites just the handoff stamp line (t0000 -> tNNNN); the
     template's four sections stay, which is all the validator needs.
-    turn_no is the 1-based run_turn count. Lets existing multi-turn
-    tests model the new contract: the agent writes its handoff inside
-    the normal turn, so no forced handoff round fires.
+    turn_no is the 1-based run_turn count. Models the model's old
+    habit: an in-turn handoff edit. Under harness ownership the
+    edit is denied and the harness renders instead; tests that use
+    this response assert the denial path.
     """
     return {"content": None, "tool_calls": [
         {"id": f"handoff-t{turn_no:04d}", "name": "edit",
@@ -85,8 +80,11 @@ class TestHandoffFile(unittest.TestCase):
         self.assertEqual(classify_source(s.dir, str(p)), "sat")
         denied = source_gate(s.dir, "write", str(p), s.workdir)
         self.assertIn("DENIED", denied)
-        self.assertIsNone(source_gate(s.dir, "edit", str(p),
-                                      s.workdir))
+        # Harness-exclusive ownership: the model may not edit the
+        # handoff either -- the harness renders it.
+        denied_edit = source_gate(s.dir, "edit", str(p), s.workdir)
+        self.assertIn("DENIED", denied_edit)
+        self.assertIn("harness-owned", denied_edit)
 
 
 class TestValidate(unittest.TestCase):
@@ -141,11 +139,28 @@ class TestValidate(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("cap", reason)
 
-    def test_ensure_recreates_missing_file(self):
+    def test_empty_section_fails(self):
         s = make_session()
-        (s.dir / "sats" / "handoff.md").unlink()
-        ensure_handoff_file(s.dir)
-        self.assertTrue((s.dir / "sats" / "handoff.md").is_file())
+        write_handoff(s.dir, stamp="t0001", sections={"Next": ""})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertFalse(ok)
+        self.assertIn("### Next", reason)
+        self.assertIn("empty", reason)
+
+    def test_next_missing_sats_file_fails(self):
+        s = make_session()
+        write_handoff(s.dir, stamp="t0001",
+                      sections={"Next": "then read sats/nope.md"})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertFalse(ok)
+        self.assertIn("sats/nope.md", reason)
+
+    def test_next_existing_sats_file_passes(self):
+        s = make_session()
+        write_handoff(s.dir, stamp="t0001",
+                      sections={"Next": "then read sats/facts.md"})
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
 
     def test_handoff_size_canary(self):
         s = make_session()
@@ -187,42 +202,33 @@ class TestEnforcement(unittest.TestCase):
                     on_event=lambda k, v: events.append(k))
         return loop, events
 
-    def test_forced_handoff_round_writes_handoff(self):
+    def test_stale_previous_handoff_recovers_without_raising(self):
+        # Issue #13, harness-owned form: a previous turn that died
+        # without a fresh handoff leaves a stale stamp. Turn-start
+        # recovery re-renders it from sats state -- no model rounds,
+        # no provider calls -- and the turn proceeds.
         s = make_session()
-        handoff = str(s.dir / "sats" / "handoff.md")
-        script = [
-            {"content": "done"},
-            {"content": None, "tool_calls": [
-                {"id": "h1", "name": "edit",
-                 "arguments": {
-                     "path": handoff,
-                     "old_text": "## Handoff -- t0000",
-                     "new_text": ("## Handoff -- t0001\n### Now\n"
-                                  "did the thing\n### Next\n"
-                                  "do the next thing\n### Blockers\n"
-                                  "none\n### Pointers\n"
-                                  "sats/current.md")}}]},
-        ]
-        loop, events = self._loop(script)
-        out = loop.run_turn(s, "hi")
-        self.assertEqual(out, "done")
-        self.assertIn("handoff", events)
-        self.assertNotIn("handoff-invalid", events)
-        ok, reason = validate_handoff(s.dir, 1)
+        loop, _ = self._loop([{"content": "done"}])
+        self.assertEqual(loop.run_turn(s, "hi"), "done")
+        self.assertTrue(validate_handoff(s.dir, 1)[0])
+        # Previous turn died without a fresh handoff: stamp is stale.
+        write_handoff(s.dir, stamp="t0099")
+        events = []
+        loop2 = Loop(MockProvider([{"content": "done2"}]),
+                     Budget(hard=100000, soft=80000),
+                     on_event=lambda k, v: events.append((k, v)))
+        self.assertEqual(loop2.run_turn(s, "again"), "done2")
+        ok, reason = validate_handoff(s.dir, 2)
         self.assertTrue(ok, reason)
-        # The forced round is edit-only: no wandering off to do work.
-        self.assertEqual(loop.provider.calls[1]["tools"], ["edit"])
+        # Recovery rendered turn 1, turn end rendered turn 2; the
+        # turn's reply was the only provider call.
+        self.assertEqual(len(loop2.provider.calls), 1)
+        rendered = [v["turn"] for k, v in events
+                    if k == "handoff-rendered"]
+        self.assertIn(1, rendered)
+        self.assertIn(2, rendered)
 
-    def test_handoff_failure_is_loud_not_blocking(self):
-        # Script exhausts on the forced rounds: provider errors are
-        # caught, the turn still closes, and the failure is emitted.
-        loop, events = self._loop([{"content": "done"}])
-        s = make_session()
-        out = loop.run_turn(s, "hi")
-        self.assertEqual(out, "done")
-        self.assertIn("handoff-invalid", events)
-
-    def test_fresh_handoff_needs_no_forced_round(self):
+    def test_fresh_handoff_is_replaced_by_render(self):
         s = make_session()
         write_handoff(s.dir, stamp="t0001",
                       sections={"Now": "working",
@@ -233,8 +239,53 @@ class TestEnforcement(unittest.TestCase):
         out = loop.run_turn(s, "hi")
         self.assertEqual(out, "done")
         self.assertIn("handoff", events)
-        # No second provider call: no forced round was needed.
+        # No second provider call: the render costs no round.
         self.assertEqual(len(loop.provider.calls), 1)
+        body = (s.dir / "sats" / "handoff.md").read_text(
+            encoding="utf-8")
+        self.assertIn("## Handoff -- t0001", body)
+        # The model's prose is gone: the render derives from sats.
+        self.assertNotIn("more work", body)
+        self.assertIn("(no active goals or tasks recorded)", body)
+
+    def test_turn_end_renders_handoff(self):
+        # Harness-owned handoff: a turn that never touches handoff.md
+        # still ends with a fresh, valid render -- no model round.
+        s = make_session()
+        loop, events = self._loop([{"content": "done"}])
+        out = loop.run_turn(s, "hi")
+        self.assertEqual(out, "done")
+        self.assertEqual(len(loop.provider.calls), 1)
+        self.assertIn("handoff-rendered", events)
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
+
+    def test_model_handoff_edit_is_denied_and_render_wins(self):
+        # The model tries its old habit -- editing handoff.md -- gets
+        # DENIED, and the turn still ends with the harness render,
+        # not the model's prose.
+        s = make_session()
+        handoff = str(s.dir / "sats" / "handoff.md")
+        script = [
+            {"content": None, "tool_calls": [
+                {"id": "h1", "name": "edit",
+                 "arguments": {
+                     "path": handoff,
+                     "old_text": "## Handoff -- t0000",
+                     "new_text": ("## Handoff -- t0001\n### Now\n"
+                                  "model prose\n### Next\nmore\n"
+                                  "### Blockers\nnone\n### Pointers\n"
+                                  "sats/current.md")}}]},
+            {"content": "done"},
+        ]
+        loop, events = self._loop(script)
+        out = loop.run_turn(s, "hi")
+        self.assertEqual(out, "done")
+        body = (s.dir / "sats" / "handoff.md").read_text(
+            encoding="utf-8")
+        self.assertNotIn("model prose", body)
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
 
 
 def write_sized_handoff(sdir, stamp, total_lines):
@@ -291,64 +342,6 @@ class TestHandoffLedger(unittest.TestCase):
 
 
 class TestTrimHandoff(unittest.TestCase):
-    def test_under_cap_untouched(self):
-        text = "# Handoff\n\n## Handoff -- t0001\n### Now\nx\n"
-        out, cut = trim_handoff(text)
-        self.assertEqual(out, text)
-        self.assertEqual(cut, 0)
-
-    def test_over_cap_trimmed(self):
-        s = make_session()
-        p = write_sized_handoff(s.dir, "t0001", 60)
-        out, cut = trim_handoff(p.read_text(encoding="utf-8"))
-        self.assertLessEqual(len(out.splitlines()), HANDOFF_MAX_LINES)
-        self.assertGreater(cut, 0)
-        # Shape preserved: stamp + all four section headers.
-        self.assertIn("## Handoff -- t0001", out)
-        for name in HANDOFF_SECTIONS:
-            self.assertIn(f"### {name}", out)
-        # The next turn is told content was clipped.
-        self.assertIn("trimmed by harness", out)
-
-    def test_trim_keeps_front_load(self):
-        s = make_session()
-        p = write_sized_handoff(s.dir, "t0001", 60)
-        out, _ = trim_handoff(p.read_text(encoding="utf-8"))
-        self.assertIn("filler 0", out)      # front kept
-        self.assertNotIn("filler 48", out)  # tail cut
-
-    def test_is_over_cap(self):
-        s = make_session()
-        write_sized_handoff(s.dir, "t0001", 60)
-        self.assertTrue(is_over_cap(s.dir))
-        write_sized_handoff(s.dir, "t0001", 20)
-        self.assertFalse(is_over_cap(s.dir))
-
-
-class TestPhase2Enforcement(unittest.TestCase):
-    def test_backstop_trims_when_model_wont(self):
-        # Over-cap handoff; the model burns both forced rounds without
-        # trimming. The deterministic backstop fires instead of giving
-        # up: handoff-trimmed, backup kept, turn still closes.
-        s = make_session()
-        write_sized_handoff(s.dir, "t0001", 60)
-        events = []
-        loop = Loop(MockProvider([{"content": "done"},
-                                  {"content": "x"},
-                                  {"content": "y"}]),
-                    Budget(hard=100000, soft=80000),
-                    on_event=lambda k, v: events.append(k))
-        out = loop.run_turn(s, "hi")
-        self.assertEqual(out, "done")
-        self.assertIn("handoff-trimmed", events)
-        self.assertIn("handoff", events)
-        self.assertNotIn("handoff-invalid", events)
-        ok, reason = validate_handoff(s.dir, 1)
-        self.assertTrue(ok, reason)
-        backups = list((s.dir / "sats").glob(
-            "handoff.pre-handoff-trim-*.bak"))
-        self.assertEqual(len(backups), 1)
-
     def test_bloat_event_on_climbing_handoff(self):
         s = make_session()
         events = []
@@ -356,11 +349,11 @@ class TestPhase2Enforcement(unittest.TestCase):
                     on_event=lambda k, v: events.append(k))
         for i, n in enumerate([25, 28, 31], start=1):
             write_sized_handoff(s.dir, f"t{i:04d}", n)
-            self.assertTrue(loop._ensure_handoff(s, i, "sys", []))
+            loop._record_handoff_ok(s, i)
         # Three points: insufficient data, no warning yet.
         self.assertNotIn("handoff-bloat", events)
         write_sized_handoff(s.dir, "t0004", 34)
-        self.assertTrue(loop._ensure_handoff(s, 4, "sys", []))
+        loop._record_handoff_ok(s, 4)
         self.assertIn("handoff-bloat", events)
 
     def test_prune_system_preserves_handoff_shape(self):
@@ -368,55 +361,81 @@ class TestPhase2Enforcement(unittest.TestCase):
         self.assertIn("resume plan", PRUNE_SYSTEM)
 
 
-class TestNextBoardCards(unittest.TestCase):
-    def test_template_shows_checkbox(self):
-        self.assertIn("- [ ]", HANDOFF_TEMPLATE)
+class TestRenderHandoff(unittest.TestCase):
+    def _write_sats(self, s, current=None, goals=None, tasks=None):
+        sats = s.dir / "sats"
+        if current is not None:
+            (sats / "current.md").write_text(current, encoding="utf-8")
+        if goals is not None:
+            (sats / "goals.md").write_text(goals, encoding="utf-8")
+        if tasks is not None:
+            (sats / "tasks.md").write_text(tasks, encoding="utf-8")
 
-    def test_prompt_paragraph_teaches_cards(self):
-        self.assertIn("- [ ]", HANDOFF_PROMPT_PARAGRAPH)
-        self.assertIn("- [x]", HANDOFF_PROMPT_PARAGRAPH)
-
-    def test_parse_mixed_cards(self):
-        text = ("## Handoff -- t0007\n### Now\nx\n### Next\n"
-                "- [x] traced syscall entry\n"
-                "- [ ] enumerate sleep points\n"
-                "3. consolidate the list\n"
-                "### Blockers\nnone\n")
-        self.assertEqual(parse_next_items(text),
-                         [(True, "traced syscall entry"),
-                          (False, "enumerate sleep points"),
-                          (False, "3. consolidate the list")])
-
-    def test_parse_case_insensitive_done(self):
-        text = "## Handoff -- t0001\n### Next\n- [X] done thing\n"
-        self.assertEqual(parse_next_items(text), [(True, "done thing")])
-
-    def test_parse_no_next_section(self):
-        self.assertEqual(parse_next_items("## Handoff -- t0001\n### Now\nx\n"),
-                         [])
-        self.assertEqual(parse_next_items(""), [])
-        self.assertEqual(parse_next_items(None), [])
-
-    def test_parse_ignores_other_sections(self):
-        text = ("## Handoff -- t0002\n### Next\n- [ ] real item\n"
-                "### Blockers\n- [x] not a next item\n")
-        self.assertEqual(parse_next_items(text), [(False, "real item")])
-
-    def test_validate_accepts_checkbox_next(self):
+    def test_renders_from_sats_state(self):
         s = make_session()
-        write_handoff(s.dir, "t0001",
-                      {"Next": "- [x] did one\n- [ ] do two"})
-        self.assertTrue(validate_handoff(s.dir, 1)[0])
+        self._write_sats(
+            s,
+            current="# Current task\n\nTracing the write path\n",
+            goals="- [active] Ship it\n- [done] Wrote docs\n",
+            tasks="# Tasks\n\nRefactor loop\nBLOCKED: Waiting on review\n")
+        text = render_handoff(s.dir, 3)
+        self.assertIn("## Handoff -- t0003", text)
+        self.assertIn("Tracing the write path", text)
+        self.assertIn("Ship it", text)
+        self.assertNotIn("Wrote docs", text)  # done goals are not Next
+        self.assertIn("Refactor loop", text)
+        self.assertIn("Waiting on review", text)
+        self.assertNotIn("BLOCKED:", text)  # prefix stripped in Blockers
+        self.assertIn("sats/current.md", text)
+        self.assertNotIn("sats/handoff.md", text)  # no self-pointer
+        (s.dir / "sats" / "handoff.md").write_text(text,
+                                                   encoding="utf-8")
+        ok, reason = validate_handoff(s.dir, 3)
+        self.assertTrue(ok, reason)
 
-    def test_handoff_skipped_when_no_active_goals(self):
-        # No active goals -> the handoff gate is closed. Verify via
-        # active_goals(): empty list means _ensure_handoff is skipped.
-        from harness.session import active_goals
-        d = tempfile.mkdtemp()
-        (Path(d) / "sats").mkdir(parents=True, exist_ok=True)
-        (Path(d) / "sats" / "goals.md").write_text(
-            "- [done] Finished work\n", encoding="utf-8")
-        self.assertEqual(active_goals(Path(d)), [])
+    def test_placeholders_when_empty(self):
+        s = make_session()
+        text = render_handoff(s.dir, 1)
+        self.assertIn("(nothing recorded in sats/current.md)", text)
+        self.assertIn("(no active goals or tasks recorded)", text)
+        self.assertIn("(none recorded in sats/tasks.md)", text)
+        (s.dir / "sats" / "handoff.md").write_text(text,
+                                                   encoding="utf-8")
+        ok, reason = validate_handoff(s.dir, 1)
+        self.assertTrue(ok, reason)
+
+    def test_blocked_prefix_rules(self):
+        s = make_session()
+        self._write_sats(
+            s,
+            tasks="# Tasks\n\nBLOCKED:\nBLOCKED: stuck on auth\n"
+                  "mentions BLOCKED: mid-line\n")
+        text = render_handoff(s.dir, 1)
+        blockers = text.split("### Blockers")[1].split("### Pointers")[0]
+        # Bare BLOCKED: carries no content, so it renders nowhere;
+        # a mid-line mention is not a blocker, it stays a task.
+        self.assertEqual(blockers.strip().splitlines(),
+                         ["- stuck on auth"])
+        self.assertIn("mentions BLOCKED: mid-line", text)
+
+    def test_caps_long_sections(self):
+        s = make_session()
+        self._write_sats(
+            s,
+            current="# Current task\n"
+                    + "".join(f"line {i}\n" for i in range(10)),
+            goals="".join(f"- [active] goal {i}\n" for i in range(5)),
+            tasks="# Tasks\n"
+                  + "".join(f"task {i}\n" for i in range(30)))
+        text = render_handoff(s.dir, 2)
+        self.assertLessEqual(len(text.splitlines()), HANDOFF_MAX_LINES)
+        now = text.split("### Now")[1].split("### Next")[0]
+        self.assertLessEqual(
+            len([ln for ln in now.splitlines() if ln.strip()]), 4)
+        (s.dir / "sats" / "handoff.md").write_text(text,
+                                                   encoding="utf-8")
+        ok, reason = validate_handoff(s.dir, 2)
+        self.assertTrue(ok, reason)
 
 
 if __name__ == "__main__":

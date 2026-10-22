@@ -69,7 +69,9 @@ def _new_session(cfg, workdir: str) -> Session:
     sdir = sessions / sid
     sdir.mkdir(parents=True, exist_ok=True)
     _set_current(sessions, sid)
-    return Session(id=sid, dir=sdir, workdir=workdir)
+    sess = Session(id=sid, dir=sdir, workdir=workdir)
+    _store_session_workdir(sdir, workdir)
+    return sess
 
 
 def _dry_run(cfg, args, sess: Session) -> int:
@@ -105,13 +107,55 @@ def _dry_run(cfg, args, sess: Session) -> int:
     return 0
 
 
-def _open_session(cfg, sid: str | None, workdir: str) -> Session:
+def _store_session_workdir(sdir: Path, workdir: str) -> None:
+    """Persist the session's project workdir in meta.json.
+
+    A resumed session must keep working on its own project, not silently
+    adopt whatever directory the launcher happened to run from. The stored
+    workdir is the default on open; an explicit --workdir overrides it and
+    re-stores. Merges with the provider/model keys the same way
+    _save_session_model does; failures never break session open.
+    """
+    try:
+        meta = Path(sdir) / "meta.json"
+        data = {}
+        if meta.is_file():
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        data["workdir"] = workdir
+        meta.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _stored_session_workdir(sdir: Path) -> str | None:
+    """Return the workdir recorded for a session, or None."""
+    try:
+        meta = Path(sdir) / "meta.json"
+        if meta.is_file():
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            wd = data.get("workdir")
+            if isinstance(wd, str) and wd:
+                return wd
+    except Exception:
+        pass
+    return None
+
+
+def _open_session(cfg, sid: str | None, workdir: str,
+                  workdir_explicit: bool = False) -> Session:
     sessions = _sessions(cfg)
     sid = sid or _current_id(sessions)
     if sid is None:
         return _new_session(cfg, workdir)
+    sdir = sessions / sid
+    if workdir_explicit:
+        resolved = workdir
+    else:
+        resolved = _stored_session_workdir(sdir) or workdir
     _set_current(sessions, sid)
-    return Session(id=sid, dir=sessions / sid, workdir=workdir)
+    sess = Session(id=sid, dir=sdir, workdir=resolved)
+    _store_session_workdir(sdir, resolved)
+    return sess
 
 
 def _save_session_model(session: Session, provider: str, model: str) -> None:
@@ -158,23 +202,14 @@ def _print_event(kind: str, data) -> None:
         rec = data["recovered"]
         sign = "+" if rec >= 0 else ""
         print(f"\n[context diff: {sign}{rec:,} tokens]", flush=True)
-        for sec in (data.get("section_diffs") or []):
-            print(f"  {sec.get('header')}", flush=True)
-            for ln in (sec.get("lines") or []):
-                print(f"  {ln}", flush=True)
-        if not (data.get("section_diffs") or []):
-            for r in data["removed"][:5]:
-                print(f"  - {r['header']} ({r['tokens']:,} tokens)",
-                      flush=True)
-            if len(data["removed"]) > 5:
-                print(f"  - ... +{len(data['removed']) - 5} more",
-                      flush=True)
-            for a in data["added"][:5]:
-                print(f"  + {a['header']} ({a['tokens']:,} tokens)",
-                      flush=True)
-            if len(data["added"]) > 5:
-                print(f"  + ... +{len(data['added']) - 5} more",
-                      flush=True)
+        for r in data["removed"][:5]:
+            print(f"  - {r['header']} ({r['tokens']:,} tokens)", flush=True)
+        if len(data["removed"]) > 5:
+            print(f"  - ... +{len(data['removed']) - 5} more", flush=True)
+        for a in data["added"][:5]:
+            print(f"  + {a['header']} ({a['tokens']:,} tokens)", flush=True)
+        if len(data["added"]) > 5:
+            print(f"  + ... +{len(data['added']) - 5} more", flush=True)
     elif kind == "request" and "tokens_est" in (data or {}):
         toks, hard = data["tokens_est"], data.get("hard") or 0
         pct = 100.0 * toks / hard if hard else 0
@@ -305,14 +340,16 @@ def _workdir(args) -> str:
     return args.workdir or os.getcwd()
 
 
-def _latest_project_session(cfg, name: str, workdir: str):
+def _latest_project_session(cfg, name: str, workdir: str,
+                            workdir_explicit: bool = False):
     from .project import session_project
     sessions = _sessions(cfg)
     hits = [p for p in sessions.iterdir()
             if p.is_dir() and session_project(p) == name]
     if not hits:
         return None
-    return _open_session(cfg, max(p.name for p in hits), workdir)
+    return _open_session(cfg, max(p.name for p in hits), workdir,
+                         workdir_explicit=workdir_explicit)
 
 
 REPL_HELP = ("/new [task]  fresh session (runs task when given)\n"
@@ -343,6 +380,8 @@ def config_lines(cfg) -> list[str]:
         "request_timeout": cfg.request_timeout,
         "usage_note": cfg.usage_note,
         "prune_target": cfg.prune_target,
+        "transcript_bloat_tokens": getattr(
+            cfg, "transcript_bloat_tokens", None),
         "prune_keep_tools": cfg.prune_keep_tools,
         "prune_section_cap": cfg.prune_section_cap,
         "sessions_dir": cfg.sessions_dir,
@@ -588,6 +627,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
     if getattr(args, "budget_soft", None):
         cfg.budget_soft = args.budget_soft
         cfg.budget_soft_auto = False
+    if getattr(args, "transcript_bloat_tokens", None):
+        cfg.transcript_bloat_tokens = args.transcript_bloat_tokens
     if getattr(args, "no_prune", False):
         cfg.prune_enabled = False
     kind = _resolved_kind(cfg)
@@ -648,6 +689,8 @@ def _build_loop(cfg, args, on_event=None, approver=None,
                 and not getattr(args, "no_usage_note", False),
                 project=project,
                 prune_target=cfg.prune_target,
+                transcript_bloat_tokens=getattr(
+                    cfg, "transcript_bloat_tokens", None),
                 prune_keep_tools=cfg.prune_keep_tools,
                 prune_section_cap=cfg.prune_section_cap,
                 prune_enabled=getattr(cfg, "prune_enabled", True),
@@ -754,20 +797,29 @@ def _autosize_budget(cfg, loop, model: str | None,
                 return source
             return None
         elif reset:
-            # Undetectable model on a switch: do NOT clobber the previous
-            # window. A stale-but-detected value beats a silent drop to
-            # the default (which poses 50k as the limit). The user sees
-            # the unchanged budget; explicit pin overrides.
-            # (Pinned budgets were never touched; auto budgets now aren't
-            # either on detection failure.)
-            #
-            # Exception: if hard is pinned, soft must track it (80% of
-            # hard) even when detection fails — otherwise soft goes stale.
-            if not getattr(cfg, "budget_hard_auto", True):
-                if getattr(cfg, "budget_soft_auto", True):
-                    cfg.budget_soft = int(cfg.budget_hard * 0.8)
-                    if hasattr(loop, "budget") and loop.budget:
-                        loop.budget.soft = cfg.budget_soft
+            # Undetectable model on a switch: fall back so the previous
+            # model's window never sticks around enforcing the wrong
+            # limit. Pinned budgets are untouched.
+            if getattr(cfg, "budget_hard_auto", True):
+                cfg.budget_hard, auto_soft = split_budgets(
+                    DEFAULTS["budget_hard"])
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.hard = cfg.budget_hard
+            if getattr(cfg, "budget_soft_auto", True):
+                if getattr(cfg, "budget_hard_auto", True):
+                    new_soft = auto_soft
+                else:
+                    new_soft = int(cfg.budget_hard * 0.8)
+                cfg.budget_soft = new_soft
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.soft = new_soft
+            if getattr(cfg, "budget_hard_auto", True):
+                # Only relabel when hard itself fell back; a pinned
+                # hard keeps its explicit provenance.
+                cfg.budget_source = "default"
+                cfg.context_window = None
+                if hasattr(loop, "budget") and loop.budget:
+                    loop.budget.window = None
     except Exception:
         pass
     return None
@@ -1020,7 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Disable goal-driven auto-continue for this session.")
     ap.add_argument("--auto-continue-max-turns", type=int, default=None,
                     help="Cap on auto-continue turns per user message "
-                         "(default from config, 10).")
+                         "(default from config, 3).")
     ap.add_argument("--request-timeout", type=int, default=None,
                     help="HTTP seconds per model call (default 120; raise "
                          "for huge prompts on slow local servers).")
@@ -1028,6 +1080,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Hard token budget override (default from config).")
     ap.add_argument("--budget-soft", type=int, default=None,
                     help="Soft token budget override (default from config).")
+    ap.add_argument("--transcript-bloat-tokens", type=int, default=None,
+                    help="Transcript-bloat gate threshold in tokens "
+                         "(default from config; unset = 30 percent of "
+                         "the window when known, else soft budget).")
     ap.add_argument("--no-prune", action="store_true",
                     help="Naive mode (condition A): disable all pruning, "
                          "dedupe, and archive. Append-only; truncate oldest "
@@ -1188,9 +1244,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.new or args.session:
         box["session"] = (_new_session(cfg, _workdir(args)) if args.new
                           else _open_session(cfg, args.session,
-                                             _workdir(args)))
+                                             _workdir(args),
+                                             workdir_explicit=(
+                                                 args.workdir is not None)))
     else:
-        box["session"] = _open_session(cfg, None, _workdir(args))
+        box["session"] = _open_session(cfg, None, _workdir(args),
+                                       workdir_explicit=(
+                                           args.workdir is not None))
     stamp(box["session"])
     if getattr(args, "dry_run", False):
         return _dry_run(cfg, args, box["session"])
@@ -1237,7 +1297,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     def switch_session(sid: str) -> None:
-        box["session"] = _open_session(cfg, sid, _workdir(args))
+        box["session"] = _open_session(cfg, sid, _workdir(args),
+                                       workdir_explicit=(
+                                           args.workdir is not None))
         stamp(box["session"])
         attach()
         if _restore_session_model(box, cfg, args):
@@ -1253,7 +1315,9 @@ def main(argv: list[str] | None = None) -> int:
         proj = resolve_project(name)
         box["project"] = proj["name"]
         args.workdir = proj["workdir"]
-        sess = _latest_project_session(cfg, name, _workdir(args))
+        sess = _latest_project_session(cfg, name, _workdir(args),
+                                       workdir_explicit=(
+                                           args.workdir is not None))
         box["session"] = (sess if sess is not None
                           else _new_session(cfg, _workdir(args)))
         stamp(box["session"])

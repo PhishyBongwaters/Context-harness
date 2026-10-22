@@ -46,26 +46,21 @@ it must stay true to the implementation.
 
 **The harness owns:** prompt loading, assembly order, turn/section
 counters (`state.json`), the episode lifecycle, archive pointers,
-source-gate enforcement, pre-edit backups, and verification. Context
-management is deterministic harness behavior, not model judgment.
+source-gate enforcement, pre-edit backups, verification, and the
+turn-end handoff render. Context management is deterministic harness
+behavior, not model judgment.
 
 **The model may edit** (exact `old_text`/`new_text`, must match exactly
 once):
 - `history.md` — the conversation record (`## user t<NNNN>` for user-opened
   turns, `## auto t<NNNN>` for harness-opened auto-continue turns,
   `## episode t<NNNN>`)
-- `sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers);
-  rewrite it at the end of every turn. The harness validates
-  freshness, shape and the 40-line cap at the turn boundary; a stale
-  or missing handoff triggers a forced handoff round, and persistent
-  dumping trips the size canary (`handoff-bloat`) or the deterministic
-  trim backstop
 - `sats/current.md` — the active task (update when it changes)
 - `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
   add one with `/goal "text"` or `--goal "text"`. With `auto_continue`
   enabled (config, or `--auto-continue` for one session), the harness
   opens a new turn itself while any goal is `[active]` — up to
-  `auto_continue_max_turns` (default 10, or `--auto-continue-max-turns N`)
+  `auto_continue_max_turns` (default 3, or `--auto-continue-max-turns N`)
   per user message; each auto-turn is a full turn recorded as
   `## auto t<NNNN>`
 - `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md` — one-line
@@ -76,9 +71,13 @@ once):
 `write` is rejected on all session sources — use `edit`.
 
 **Harness-owned (model read-only):** `prompt.md`, `state.json`,
-`index.md`, `scratch.md`, `archive/`, `context.md`. `state.json`
-can't even be read. Denied calls return a `DENIED` tool result the
-model must respect.
+`index.md`, `scratch.md`, `archive/`, `context.md`, and
+`sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers),
+rendered by the harness from sats state at turn end; the model
+curates `current.md`, `tasks.md` (`BLOCKED:` lines become Blockers),
+and goals instead. Persistent dumping trips the size canary
+(`handoff-bloat`). `state.json` can't even be read. Denied calls
+return a `DENIED` tool result the model must respect.
 
 ## Episodes
 
@@ -179,10 +178,6 @@ python -m harness --tui
 
 Same session, same provider registry, same ledger as the CLI.
 
-The top bar shows a `BUILD <short-hash>` pill (LCARS-styled) identifying
-the running commit — useful for confirming which version is live after
-a pull. It hides on narrow terminals (< 60 columns).
-
 - transcript pane (assistant text, tool calls, budget/prune lines),
   budget bar, status line, input box
 - chat-style message panels: blue for you, dark for assistant, black for
@@ -217,7 +212,7 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
 `prune_section_cap`, `auto_continue` (default `false`: open a new turn
-while a goal is `[active]`), `auto_continue_max_turns` (default `10`). API key comes from the environment (`api_key_env`) —
+while a goal is `[active]`), `auto_continue_max_turns` (default `3`). API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 

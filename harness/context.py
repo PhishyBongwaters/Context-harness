@@ -300,10 +300,6 @@ def diff_transcripts(old: str, new: str) -> dict:
     Compares sections by (header, body); reordered-but-identical sections
     produce no diff. Returns removed/added section headers with token
     counts plus the net token delta (positive recovered = context freed).
-
-    Also returns "section_diffs": removed/added sections paired by
-    header into capped unified diffs, for opencode-style diff cards in
-    the TUI. Pure data; rendering lives in the TUI/CLI.
     """
     from collections import Counter
 
@@ -322,68 +318,7 @@ def diff_transcripts(old: str, new: str) -> dict:
         "tokens_before": tb,
         "tokens_after": ta,
         "recovered": tb - ta,
-        "section_diffs": _section_diffs(removed, added),
     }
-
-
-# Caps for the unified section diffs (diff-card data): bounded so a
-# pathological edit can't blow up the event payload or the TUI.
-_DIFF_SECTIONS_MAX = 8
-_DIFF_LINES_PER_SECTION = 40
-_DIFF_LINES_TOTAL = 160
-_DIFF_BODY_SCAN_LINES = 200
-
-
-def _section_diffs(removed: list[tuple[str, str]],
-                   added: list[tuple[str, str]]) -> list[dict]:
-    """Pair removed/added (header, body) sections into unified diffs.
-
-    Sections sharing a header are diffed against each other; sections
-    present on only one side render as all-minus/all-plus. Returns a
-    capped list of {"header": h, "lines": [...]} with unified-diff
-    lines ('-'/'+'/' '/'@@', no ---/+++ file headers).
-    """
-    import difflib
-    from collections import defaultdict
-
-    rem: dict[str, list[str]] = defaultdict(list)
-    add: dict[str, list[str]] = defaultdict(list)
-    for h, b in removed:
-        rem[h].append(b)
-    for h, b in added:
-        add[h].append(b)
-
-    def _unified(a_body: str, b_body: str) -> list[str]:
-        a = a_body.splitlines()[:_DIFF_BODY_SCAN_LINES]
-        b = b_body.splitlines()[:_DIFF_BODY_SCAN_LINES]
-        out = []
-        for ln in difflib.unified_diff(a, b, lineterm="", n=3):
-            if ln.startswith(("---", "+++")):
-                continue
-            out.append(ln)
-        return out
-
-    seen: list[str] = []
-    for h in list(rem) + list(add):
-        if h not in seen:
-            seen.append(h)
-    out: list[dict] = []
-    total = 0
-    for h in seen:
-        pairs = list(zip(rem.get(h, []), add.get(h, [])))
-        bodies = ([(r, a) for r, a in pairs]
-                  + [(r, "") for r in rem.get(h, [])[len(pairs):]]
-                  + [("", a) for a in add.get(h, [])[len(pairs):]])
-        for r_body, a_body in bodies:
-            if len(out) >= _DIFF_SECTIONS_MAX or total >= _DIFF_LINES_TOTAL:
-                break
-            lines = _unified(r_body, a_body)[:_DIFF_LINES_PER_SECTION]
-            lines = lines[:max(0, _DIFF_LINES_TOTAL - total)]
-            if not lines:
-                continue
-            out.append({"header": h, "lines": lines})
-            total += len(lines)
-    return out
 
 
 class ContextFile:

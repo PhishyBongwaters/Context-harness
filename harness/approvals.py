@@ -125,9 +125,13 @@ class Policy:
         p = Path(os.path.expanduser(path or ""))
         if not p.is_absolute():
             # Session-curated files are referenced as sats/... or history.md
-            # Resolve them relative to session_dir, not workdir
-            rel = str(p)
-            if rel.startswith("sats/") or rel == "sats" or rel == "history.md" or rel.startswith("history.md/"):
+            # Resolve them relative to session_dir, not workdir.
+            # Separator-aware (issue #13): comparing Path.parts, not a
+            # "sats/" string prefix, so this also works on Windows,
+            # where str(Path("sats/x")) is "sats\\x" and the old prefix
+            # check silently never matched.
+            parts = p.parts
+            if parts and (parts[0] == "sats" or parts[0] == "history.md"):
                 p = self.session_dir / p
             else:
                 p = self.workdir / p
@@ -167,11 +171,6 @@ class Policy:
             target = self.resolve(args.get("path") or "")
             key = f"tokens:{target}"
             return ALLOW, "tokens globally allowed", key
-        if name == "search":
-            # Read-only grep: safe like read/list_dir.
-            target = self.resolve(args.get("path") or ".")
-            key = f"search:{target}:{args.get('pattern')}"
-            return ALLOW, "search globally allowed", key
         if name in ("write", "edit"):
             target = self.resolve(args.get("path") or "")
             key = f"{name}:{target}"

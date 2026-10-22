@@ -22,9 +22,7 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
             "description": (
                 "Run a shell command and capture its output. "
                 "Runs with your user privileges in the session working directory. "
-                "Output is truncated to ~30k chars. "
-                "Do not use for reading files, listing directories, or searching "
-                "— use the dedicated read, list_dir, and search tools."
+                "Output is truncated to ~30k chars."
             ),
             "parameters": {
                 "type": "object",
@@ -41,8 +39,7 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
         },
         {
             "name": "read",
-            "description": ("Read a file. Returns line-numbered text, optionally paged. "
-                            "Use this instead of exec/cat for reading files."),
+            "description": "Read a file. Returns line-numbered text, optionally paged.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -141,6 +138,24 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
                 "required": ["pattern"],
             },
         },
+        {
+            "name": "goal_done",
+            "description": (
+                "Mark a goal complete. Call this when the goal is done "
+                "-- the harness flips its checkbox in sats/goals.md "
+                "and the auto-continue chain stops. Pass the goal "
+                "text, or omit it when exactly one goal is active. "
+                "Never edit goals.md by hand instead of calling this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string",
+                             "description": "Text of the goal to complete. "
+                                            "Omit only when one goal is active."},
+                },
+            },
+        },
     ]
     if include_delegation:
         tools.extend(_delegation_definitions())
@@ -157,7 +172,8 @@ def _delegation_definitions() -> list[dict]:
                 "Run a subtask in a background subagent. Returns the "
                 "result file path and the subagent's session_dir "
                 "immediately; read the result after wait_subagent says "
-                "done. Use the result as-is. "
+                "done. If the result looks wrong, read "
+                "<session_dir>/history.md to see what the subagent did. "
                 "One subagent at a time."
             ),
             "parameters": {
@@ -276,6 +292,15 @@ def source_gate(session_dir: str | Path, name: str, path: str,
     except Exception:
         return None
     kind = classify_source(session_dir, target)
+    if kind == "sat" and target.name == "handoff.md" and name == "edit":
+        # Harness-exclusive ownership: the harness renders handoff.md
+        # from sats state at turn end. The model curates the state
+        # it renders from, never the file itself.
+        return ("DENIED: sats/handoff.md is harness-owned -- the harness "
+                "renders it from sats state at turn end. Curate "
+                "sats/current.md (where things stand) and sats/tasks.md "
+                "(open work, BLOCKED: prefix for blockers) instead; "
+                "never edit handoff.md directly.")
     if kind in ("history", "sat"):
         if name == "write":
             return (f"DENIED: {target.name} is edit-only -- use edit with "
@@ -383,12 +408,13 @@ def search_tool(args: dict, workdir: str) -> str:
             rx = re.compile(pattern)
             match = lambda line: rx.search(line) is not None
         else:
-            # Whitespace-insensitive literal search: escape meta chars then allow flexible whitespace
-            escaped = re.escape(pattern)
-            flexible = re.sub(r'\\s+', r'\\s*', escaped)
-            # Remove spaces between escaped tokens for extra tolerance
-            rx = re.compile(flexible)
-            match = lambda line: rx.search(line) is not None
+            # Plain substring search (issue #13). The previous
+            # "whitespace-flexible" attempt was double-escaped dead code
+            # (re.sub(r'\\s+', ...) never substituted anything), so it
+            # changed nothing while pretending to. If flexible-whitespace
+            # matching is wanted, it needs its own implementation and
+            # tests -- not this. The file_pattern path-glob below stays.
+            match = lambda line: pattern in line
     except re.error as e:
         return f"ERROR: bad regex: {e}"
     try:

@@ -190,23 +190,23 @@ class TestAutosizeBudget(unittest.TestCase):
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
                          (135168, int(135168 * 0.8)))
 
-    def test_none_with_reset_keeps_previous(self):
+    def test_none_with_reset_falls_back_to_defaults(self):
         from harness import __main__ as cli
+        from harness.config import split_budgets
         cfg, loop = self._cfg_loop(budget_hard=135168,
                                    budget_soft=int(135168 * 0.8))
         cfg.context_window = 270336
-        loop.budget.window = 270336
+        hard, soft = split_budgets(100_000)
         with patch.object(cli, "detect_context_window",
                           return_value=None):
             cli._autosize_budget(cfg, loop, "cloud-model", reset=True)
-        # Detection failure must NOT clobber a previously detected window.
-        # A stale-but-detected value beats a silent drop to default.
         self.assertEqual((cfg.budget_hard, cfg.budget_soft),
-                         (135168, int(135168 * 0.8)))
+                         (hard, soft))
         self.assertEqual((loop.budget.hard, loop.budget.soft),
-                         (135168, int(135168 * 0.8)))
-        self.assertEqual(cfg.context_window, 270336)
-        self.assertEqual(loop.budget.window, 270336)
+                         (hard, soft))
+        self.assertEqual(cfg.budget_source, "default")
+        self.assertIsNone(cfg.context_window)
+        self.assertIsNone(loop.budget.window)
 
     def test_reset_keeps_pinned_hard_soft_tracks_it(self):
         from harness import __main__ as cli
