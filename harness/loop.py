@@ -44,16 +44,6 @@ MAX_STEPS = 50
 # searches return matches and never trip it. Per-turn streak: it
 # resets at turn start and on any other tool or matching search.
 SEARCH_STALL_THRESHOLD = 3
-# Repeats of the identical SUCCEEDING tool call (same name, same
-# arguments) that end the turn. Failing calls never count -- they
-# are the circuit breaker's job, and a failure resets the streak.
-# The search stall above keeps its own, more specific message for
-# fruitless searches; this one catches every other stuck loop --
-# the same read, edit, or exec issued over and over with success.
-# Per-turn streak: resets at turn start and on any different call
-# or any failure. Denied/gated calls never reach the tail, so they
-# neither count nor reset.
-REPEAT_STALL_THRESHOLD = 3
 # Per-file token bound measured on sats/*.md at turn end (except
 # handoff.md, which has its own validation). Files over it are
 # reported loudly, never truncated here -- curation belongs to the
@@ -243,28 +233,6 @@ class SearchStall(Exception):
         self.patterns = list(patterns)
 
 
-class RepeatStall(Exception):
-    """The same succeeding tool call repeated consecutively,
-    threshold reached.
-
-    Carries the tool name and the repeat count. Caught in
-    _run_turn_once like SearchStall: the turn ends with a loud
-    message and run_turn does not chain. Fires for any tool,
-    including searches that DO match -- a model issuing the same
-    call over and over is stuck whether the call succeeds or not.
-    Failing calls never count: they are the circuit breaker's job
-    (and a failure resets the streak). A no-match search streak
-    still raises SearchStall first, so the fruitless-search
-    message stays specific. Prune turns catch this per attempt
-    instead of letting it escape (see prune_turn).
-    """
-
-    def __init__(self, name: str, count: int):
-        super().__init__("repeat stall")
-        self.name = name
-        self.count = count
-
-
 class TurnInterrupted(Exception):
     """Cooperative turn cancellation via Loop.request_stop().
 
@@ -350,7 +318,6 @@ class Loop:
                  auto_continue: bool = False,
                  auto_continue_max_turns: int = 3,
                  search_stall_threshold: int = SEARCH_STALL_THRESHOLD,
-                 repeat_stall_threshold: int = REPEAT_STALL_THRESHOLD,
                  sats_cap_tokens: int = SATS_CAP_TOKENS):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
@@ -400,10 +367,6 @@ class Loop:
         self._search_stall_threshold = search_stall_threshold
         self._no_match_streak = 0
         self._no_match_patterns: list[str] = []
-        # Repeat stall state (per turn; reset at turn start).
-        self._repeat_stall_threshold = repeat_stall_threshold
-        self._repeat_streak = 0
-        self._last_tool_sig: tuple | None = None
         # Sats budget cap, enforced at turn end.
         self._sats_cap_tokens = sats_cap_tokens
         self.is_subagent = is_subagent
@@ -976,31 +939,6 @@ class Loop:
         else:
             self._no_match_streak = 0
             self._no_match_patterns = []
-        # Repeat stall: the identical SUCCEEDING call, consecutively,
-        # whatever the tool. Failed calls are the circuit breaker's
-        # job, not the stall's: a model retrying a failing call
-        # must hit the breaker (or the prune gate), not a stall
-        # message -- so a failure resets the streak instead of
-        # counting. The failure test mirrors _done's below.
-        # The signature is name + canonical arguments (sorted keys,
-        # so key order never masks a repeat; the call id is
-        # deliberately excluded -- a retried call is still the same
-        # call). Runs after the search block, so a fruitless-search
-        # streak keeps its specific message.
-        if (result.startswith("ERROR") or "DENIED" in result
-                or '"status": "error"' in result):
-            self._repeat_streak = 0
-            self._last_tool_sig = None
-        else:
-            sig = (name, json.dumps(args or {}, sort_keys=True,
-                                    default=str))
-            if sig == self._last_tool_sig:
-                self._repeat_streak += 1
-            else:
-                self._repeat_streak = 1
-                self._last_tool_sig = sig
-            if self._repeat_streak >= self._repeat_stall_threshold:
-                raise RepeatStall(name, self._repeat_streak)
         return _done(result)
 
     def _complete_goal(self, session: Session, args: dict) -> str:
@@ -1387,20 +1325,12 @@ class Loop:
                         f"without editing changes nothing. Use edit "
                         f"on the history/sats files now.")})
                     continue
-                try:
-                    for tc in resp["tool_calls"]:
-                        # No gate bypass: curation turns obey the same source
-                        # gates as normal turns (spec section 7).
-                        result = self._execute_tool(session, tc)
-                        turn.append({"role": "tool", "tool_call_id": tc["id"],
-                                     "content": result})
-                except RepeatStall:
-                    # A stuck janitor fails this attempt fast; the
-                    # next attempt retries, and after
-                    # MAX_PRUNE_ATTEMPTS the caller raises
-                    # BudgetExceeded. The stall must not escape
-                    # prune_turn and preempt that outcome.
-                    break
+                for tc in resp["tool_calls"]:
+                    # No gate bypass: curation turns obey the same source
+                    # gates as normal turns (spec section 7).
+                    result = self._execute_tool(session, tc)
+                    turn.append({"role": "tool", "tool_call_id": tc["id"],
+                                 "content": result})
         raw, messages = self._transcript_messages(session)
         return gate(messages) < self.budget.hard
 
@@ -1496,9 +1426,6 @@ class Loop:
         # previous turn's.
         self._no_match_streak = 0
         self._no_match_patterns = []
-        # Fresh turn, fresh repeat streak: same rule.
-        self._repeat_streak = 0
-        self._last_tool_sig = None
         if self.approver is not None:
             self.approver.new_turn()
         if self.tracker is not None and self.tracker.turns:
@@ -1711,17 +1638,6 @@ class Loop:
                 f"Stopped: {len(stall.patterns)} consecutive searches "
                 f"returned no matches ({patterns}). The search root "
                 f"or pattern is wrong -- fix it or ask the user.")
-            self._emit("assistant", message)
-            self._enforce_sats_budgets(session)
-            return message, True
-        except RepeatStall as stall:
-            # Same treatment: loud, chain-stopping, normal
-            # assistant event. The message names the call so the
-            # next turn can vary it instead of repeating it.
-            message = (
-                f"Stopped: the same {stall.name} call repeated "
-                f"{stall.count} times in a row. Vary the call, "
-                f"read a file directly, or ask the user.")
             self._emit("assistant", message)
             self._enforce_sats_budgets(session)
             return message, True

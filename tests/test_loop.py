@@ -833,23 +833,18 @@ class TestLoop(unittest.TestCase):
         return {"id": cid, "name": "read",
                 "arguments": {"path": path}}
 
-    def test_repeat_tool_stall_stops_chain(self):
-        # The generic stall: 3 identical reads in a row end the
-        # turn with a loud message naming the call, and the chain
-        # does not continue -- even with the goal still [active]
-        # and cap headroom. The call ids differ; the signature is
-        # name + arguments, so a retried call is still the same
-        # call. Separate workdir, as in the search-stall test.
+    def test_repeated_identical_calls_do_not_stop_turn(self):
+        # Regression (2026-10-21): the generic repeat stall killed a
+        # live trace turn on three identical searches, so it was
+        # removed. Identical succeeding calls in a row must no
+        # longer end the turn -- the turn completes normally.
         from test_handoff import write_handoff
         wd = tempfile.mkdtemp()
         s = make_session(workdir=wd)
         (s.dir / "sats").mkdir(parents=True, exist_ok=True)
         write_handoff(s.dir, stamp="t0000")
-        (s.dir / "sats" / "goals.md").write_text(
-            "- [active] trace the thing\n", encoding="utf-8")
         marker = Path(s.workdir) / "marker.txt"
         marker.write_text("some content\n", encoding="utf-8")
-        events = []
         prov = MockProvider([
             {"content": None, "tool_calls": [
                 self._read_call("r1", str(marker))]},
@@ -857,160 +852,12 @@ class TestLoop(unittest.TestCase):
                 self._read_call("r2", str(marker))]},
             {"content": None, "tool_calls": [
                 self._read_call("r3", str(marker))]},
-        ])
-        loop = Loop(prov, Budget(hard=100000, soft=80000),
-                    auto_continue=True, auto_continue_max_turns=20,
-                    on_event=lambda k, v: events.append(k))
-        reply = loop.run_turn(s, "hi")
-        self.assertIn("Stopped: the same read call repeated 3 times",
-                      reply)
-        self.assertEqual(len(prov.calls), 3)
-        self.assertNotIn("auto-continue", events)
-        self.assertIn("- [active] ",
-                      (s.dir / "sats" / "goals.md").read_text(
-                          encoding="utf-8"))
-
-    def test_repeat_streak_resets_on_different_call(self):
-        # A different call resets the streak: read X, read X,
-        # read Y, read X, read X, then a normal reply ends the
-        # turn without stalling. The turn ends with a harness
-        # render, no round.
-        from test_handoff import handoff_response, write_handoff
-        wd = tempfile.mkdtemp()
-        s = make_session(workdir=wd)
-        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
-        write_handoff(s.dir, stamp="t0000")
-        marker = Path(s.workdir) / "marker.txt"
-        marker.write_text("first file\n", encoding="utf-8")
-        other = Path(s.workdir) / "other.txt"
-        other.write_text("second file\n", encoding="utf-8")
-        prov = MockProvider([
-            {"content": None, "tool_calls": [
-                self._read_call("r1", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r2", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r3", str(other))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r4", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r5", str(marker))]},
-            {"content": "done"},
-        ])
-        loop = Loop(prov, Budget(hard=100000, soft=80000),
-                    auto_continue=False)
-        self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 6)
-
-    def test_repeat_stall_threshold_is_a_knob(self):
-        # The repeat threshold is a Loop parameter, not a
-        # hard-coded 3.
-        from test_handoff import write_handoff
-        wd = tempfile.mkdtemp()
-        s = make_session(workdir=wd)
-        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
-        write_handoff(s.dir, stamp="t0000")
-        (s.dir / "sats" / "goals.md").write_text(
-            "- [active] trace the thing\n", encoding="utf-8")
-        marker = Path(s.workdir) / "marker.txt"
-        marker.write_text("some content\n", encoding="utf-8")
-        prov = MockProvider([
-            {"content": None, "tool_calls": [
-                self._read_call("r1", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r2", str(marker))]},
-        ])
-        loop = Loop(prov, Budget(hard=100000, soft=80000),
-                    auto_continue=True, auto_continue_max_turns=20,
-                    repeat_stall_threshold=2)
-        reply = loop.run_turn(s, "hi")
-        self.assertIn("Stopped: the same read call repeated 2 times",
-                      reply)
-        self.assertEqual(len(prov.calls), 2)
-
-    def test_identical_matching_searches_stall_generic(self):
-        # Overlap rule, pinned: a no-match search streak keeps the
-        # specific search-stall message, but identical searches
-        # that DO match are still a stuck loop -- the generic
-        # detector catches them.
-        from test_handoff import write_handoff
-        wd = tempfile.mkdtemp()
-        s = make_session(workdir=wd)
-        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
-        write_handoff(s.dir, stamp="t0000")
-        (s.dir / "sats" / "goals.md").write_text(
-            "- [active] trace the thing\n", encoding="utf-8")
-        (Path(s.workdir) / "marker.txt").write_text(
-            "hello-match-marker\n", encoding="utf-8")
-        prov = MockProvider([
-            {"content": None, "tool_calls": [
-                self._search_call("s1", "hello-match-marker")]},
-            {"content": None, "tool_calls": [
-                self._search_call("s2", "hello-match-marker")]},
-            {"content": None, "tool_calls": [
-                self._search_call("s3", "hello-match-marker")]},
-        ])
-        loop = Loop(prov, Budget(hard=100000, soft=80000),
-                    auto_continue=True, auto_continue_max_turns=20)
-        reply = loop.run_turn(s, "hi")
-        self.assertIn("Stopped: the same search call repeated 3 times",
-                      reply)
-        self.assertNotIn("returned no matches", reply)
-        self.assertEqual(len(prov.calls), 3)
-
-    def test_repeat_failing_calls_do_not_stall(self):
-        # Regression: failing calls are the circuit breaker's job.
-        # Three identical reads of a missing file return ERROR
-        # each time and must NOT stall the turn.
-        from test_handoff import handoff_response, write_handoff
-        wd = tempfile.mkdtemp()
-        s = make_session(workdir=wd)
-        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
-        write_handoff(s.dir, stamp="t0000")
-        missing = str(Path(s.workdir) / "no-such-file.txt")
-        prov = MockProvider([
-            {"content": None, "tool_calls": [
-                self._read_call("r1", missing)]},
-            {"content": None, "tool_calls": [
-                self._read_call("r2", missing)]},
-            {"content": None, "tool_calls": [
-                self._read_call("r3", missing)]},
             {"content": "done"},
         ])
         loop = Loop(prov, Budget(hard=100000, soft=80000),
                     auto_continue=False)
         self.assertEqual(loop.run_turn(s, "hi"), "done")
         self.assertEqual(len(prov.calls), 4)
-
-    def test_repeat_streak_resets_on_failure(self):
-        # A failing call breaks the streak: read X, read X,
-        # read-missing (ERROR), read X, read X, then a normal
-        # reply -- no stall.
-        from test_handoff import handoff_response, write_handoff
-        wd = tempfile.mkdtemp()
-        s = make_session(workdir=wd)
-        (s.dir / "sats").mkdir(parents=True, exist_ok=True)
-        write_handoff(s.dir, stamp="t0000")
-        marker = Path(s.workdir) / "marker.txt"
-        marker.write_text("some content\n", encoding="utf-8")
-        missing = str(Path(s.workdir) / "no-such-file.txt")
-        prov = MockProvider([
-            {"content": None, "tool_calls": [
-                self._read_call("r1", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r2", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r3", missing)]},
-            {"content": None, "tool_calls": [
-                self._read_call("r4", str(marker))]},
-            {"content": None, "tool_calls": [
-                self._read_call("r5", str(marker))]},
-            {"content": "done"},
-        ])
-        loop = Loop(prov, Budget(hard=100000, soft=80000),
-                    auto_continue=False)
-        self.assertEqual(loop.run_turn(s, "hi"), "done")
-        self.assertEqual(len(prov.calls), 6)
 
     def test_run_turn_sats_edit_redirects(self):
         # End to end: a model turn that edits a workdir-anchored sats
