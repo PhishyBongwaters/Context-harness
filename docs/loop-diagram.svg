@@ -53,7 +53,7 @@
 
   <!-- Step loop container -->
   <rect x="60" y="248" width="920" height="1012" rx="18" fill="#0d1219" stroke="#2a3342" stroke-width="1.5"/>
-  <text x="88" y="276" class="pill" fill="#6b7688">STEP LOOP · ≤ 50 STEPS</text>
+  <text x="88" y="276" class="pill" fill="#6b7688">STEP LOOP · UNBOUNDED — PRUNE BOUNDS CONTEXT</text>
 
   <!-- ASSEMBLE -->
   <g>
@@ -125,10 +125,10 @@
     <rect x="250" y="780" width="540" height="148" rx="10" fill="#2a2113" stroke="#d9a53b" stroke-width="1.5"/>
     <text x="270" y="806" class="boxtitle gold">HANDOFF GATE</text>
     <text x="270" y="830" class="body">validate stamp / shape / 40-line cap</text>
-    <text x="270" y="852" class="body">stale? -> forced round · edit-only · ≤ 2</text>
-    <text x="270" y="874" class="body">still over cap? -> deterministic trim</text>
+    <text x="270" y="852" class="body">stale? -> turn-start re-render, no model rounds</text>
+    <text x="270" y="874" class="body">render trims Next, then Pointers to 40 lines</text>
     <text x="270" y="896" class="note">persistent failure -> handoff-invalid (loud; turn still closes)</text>
-    <text x="270" y="914" class="note">sizes -> handoff.json ledger (dumping canary)</text>
+    <text x="270" y="914" class="note">sizes -> handoff.json ledger; climbing -> handoff-bloat</text>
   </g>
   <line x1="520" y1="928" x2="520" y2="952" stroke="#5a6b82" stroke-width="2" marker-end="url(#arrow)"/>
 
