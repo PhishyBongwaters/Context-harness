@@ -378,6 +378,27 @@ def active_goals(sdir: str | Path) -> list[str]:
     return goals
 
 
+def goals_done(sdir: str | Path) -> bool:
+    """True when every goal is done: at least one `- [done] ` line
+    and zero `- [active] ` lines in sats/goals.md.
+
+    Goal-less sessions are False (no done goal to signal completion),
+    so chat sessions without goals keep normal handoff tracking.
+    Template header lines do not count: only lines starting with
+    `- [done] ` / `- [active] ` count, matching active_goals().
+    Never raises: missing/unreadable goals mean not done.
+    """
+    if active_goals(sdir):
+        return False
+    try:
+        body = (Path(sdir) / "sats" / "goals.md").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(line.strip().startswith("- [done] ")
+               for line in body.splitlines())
+
+
 def load_state(sdir: str | Path) -> dict:
     """Read the harness-owned counters. Corrupt/missing -> zeros."""
     try:

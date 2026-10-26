@@ -74,9 +74,14 @@ class TestMarquee(unittest.TestCase):
     def test_marquee_wraps(self):
         title = "abcdefghij" * 10
         a = header_segments(title, 80, phase=0, marquee=0)
-        span = len(title) - (80 - 48) + 1
-        b = header_segments(title, 80, phase=0, marquee=span)
         ta = [t for t, _, _ in a if "a" in t][0]
+        # Window length is the title segment minus its surrounding
+        # spaces. The old hardcoded span (80 - 48) predates the BUILD
+        # pill, which shrinks max_title; compute the wrap period
+        # from the actual window instead.
+        max_title = len(ta) - 2
+        span = len(title) - max_title + 1
+        b = header_segments(title, 80, phase=0, marquee=span)
         tb = [t for t, _, _ in b if "a" in t][0]
         self.assertEqual(ta, tb)
 

@@ -24,7 +24,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import active_goals, next_turn
+from .session import active_goals, goals_done, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -1192,6 +1192,11 @@ class Loop:
         # The harness-owned turn counter increments first: the handoff
         # the model writes this turn must carry this turn's stamp.
         turn_no = next_turn(session.dir)
+        # End-goal mode is decided at turn start: if every goal was
+        # already done when this turn began, handoff tracking stops
+        # for this turn, unless a new goal is activated during it
+        # (checked again at turn end).
+        goals_done_at_start = goals_done(session.dir)
         ctx_path = str(session.dir / "context.md")
         system = load_prompt(session.dir, ctx_path=ctx_path,
                              hard=self.budget.hard, soft=self.budget.soft,
@@ -1307,12 +1312,20 @@ class Loop:
                     # leak into and kill the next turn.
                     self._stop_event.clear()
                     self._auto_dedupe(session)
-                    # Handoff-per-turn (issue #5): the turn may only end
-                    # with a fresh handoff. Stale/missing triggers a
-                    # forced handoff round; persistent failure is loud
-                    # but never blocks the close.
-                    self._ensure_handoff(session, turn_no, system,
-                                         messages)
+                    # End-goal findings-only: skip handoff tracking
+                    # only when every goal was already done at turn
+                    # start and is still done now. A goal completed
+                    # during this turn still gets its final handoff,
+                    # and a new goal activated during this turn
+                    # resumes tracking immediately.
+                    if not (goals_done_at_start
+                            and goals_done(session.dir)):
+                        # Handoff-per-turn (issue #5): the turn may
+                        # only end with a fresh handoff. Stale/missing
+                        # triggers a forced handoff round; persistent
+                        # failure is loud but never blocks the close.
+                        self._ensure_handoff(session, turn_no, system,
+                                             messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
