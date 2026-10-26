@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from .context import count_tokens, stamp
@@ -179,6 +180,47 @@ def migrate_session(sdir: str | Path) -> dict | None:
             "dropped_orphans": dropped_orphans}
 
 
+def harness_build_info() -> dict:
+    """Build identity of the harness checkout running now.
+
+    Best-effort, never raises: returns "unknown" fields when git is
+    unavailable or this is not a git checkout. The full commit is
+    authoritative; short is its first 7 characters. Dirty is True
+    when the working tree has uncommitted changes, False when clean,
+    None when git status could not be run. Each git call is isolated,
+    so a failed status does not discard a good commit.
+    """
+    info: dict = {"commit": "unknown", "short": "unknown",
+                  "branch": "unknown", "dirty": None}
+    try:
+        repo = Path(__file__).resolve().parent.parent
+    except Exception:
+        return info
+
+    def _run(args: list[str]) -> tuple[bool, str]:
+        try:
+            out = subprocess.run(args, cwd=repo, capture_output=True,
+                                 text=True, timeout=5)
+        except Exception:
+            return False, ""
+        if out.returncode != 0:
+            return False, ""
+        return True, (out.stdout or "").strip()
+
+    ok, commit = _run(["git", "rev-parse", "HEAD"])
+    if ok and commit:
+        info["commit"] = commit
+        info["short"] = commit[:7]
+        ok_branch, branch = _run(["git", "rev-parse",
+                                  "--abbrev-ref", "HEAD"])
+        if ok_branch and branch:
+            info["branch"] = branch
+        ok_status, status = _run(["git", "status", "--porcelain"])
+        if ok_status:
+            info["dirty"] = bool(status)
+    return info
+
+
 def init_layout(sdir: str | Path, prompt_text: str) -> dict:
     """Create the blank-slate session layout.
 
@@ -186,10 +228,16 @@ def init_layout(sdir: str | Path, prompt_text: str) -> dict:
     session keeps its history, satellites, and counters.
     Old single-file sessions are migrated first (T10); the report (or
     None) is returned under the "migration" key.
+    Build tracking: a brand-new session (no state.json before this
+    call, after migration) records build.json with the running
+    checkout's commit/branch/dirty state. Re-opened sessions never
+    get a backfilled build.json, so an old session is never falsely
+    attributed to a newer build; missing build.json means pre-tracking.
     Returns the key paths.
     """
     sdir = Path(sdir)
     migration = migrate_session(sdir)
+    state_existed = (sdir / "state.json").exists()
     sats = sdir / "sats"
     archive = sdir / "archive"
     sats.mkdir(parents=True, exist_ok=True)
@@ -213,6 +261,22 @@ def init_layout(sdir: str | Path, prompt_text: str) -> dict:
         p = sats / f"{name}.md"
         _write_if_missing(p, header)
         paths[name] = p
+    if not state_existed:
+        # New session only: record the build that created it.
+        # Best-effort: a failed build write must never break session
+        # creation, so OSError here is swallowed, not propagated.
+        try:
+            import datetime as _dt
+            info = harness_build_info()
+            info["recorded_at"] = _dt.datetime.now(
+                _dt.timezone.utc).isoformat()
+            _write_if_missing(sdir / "build.json",
+                              json.dumps(info, indent=2))
+        except OSError:
+            pass
+    build_path = sdir / "build.json"
+    if build_path.exists():
+        paths["build"] = build_path
     paths["migration"] = migration
     return paths
 
@@ -694,6 +758,15 @@ def export_transcript(sdir: str | Path) -> str:
     try:
         state = load_state(sdir)
         lines.append(f"Turn: {state.get('turn', '?')}")
+    except Exception:
+        pass
+    try:
+        build = json.loads((sdir / "build.json")
+                           .read_text(encoding="utf-8"))
+        lines.append(f"Build: {build.get('short', 'unknown')} "
+                     f"{build.get('commit', 'unknown')} "
+                     f"branch={build.get('branch', 'unknown')} "
+                     f"dirty={build.get('dirty', 'unknown')}")
     except Exception:
         pass
     lines.append("")
