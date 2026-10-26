@@ -344,10 +344,10 @@ task context (e.g., "complete the subtask described in current.md").
 ### 8.1 The handoff gate applies to subagents
 
 Deliberate decision (issue #5): subagents run the same `run_turn`, so
-the harness renders the handoff at subagent turn end with no
-`is_subagent` exemption. A subagent turn cannot end without a valid
-`sats/handoff.md`; a bad render goes loud with `handoff-invalid`
-without blocking the close.
+`_ensure_handoff` fires with no `is_subagent` exemption. A subagent
+turn cannot end without a valid `sats/handoff.md`; stale/missing
+triggers forced rounds billed to the sub-budget, and persistent
+failure goes loud with `handoff-invalid` without blocking the close.
 
 Rationale: one loop, one rule — no special cases. The cost is one
 handoff write plus machine-side validation per delegate call. Today

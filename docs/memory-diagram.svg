@@ -4,7 +4,7 @@
   architecture: the pointer machine that makes the loop work.
   Update it whenever the memory layout changes. Sources of truth:
     harness/session.py  (SAT_FILES, INDEX_TEMPLATE, HISTORY_TEMPLATE)
-    harness/loop.py     (_close_episode, _backup_context, _render_handoff)
+    harness/loop.py     (_close_episode, _backup_context, _trim_handoff_backstop)
     harness/assembly.py (blank-slate assembly order)
   Rendered at 1040x1320. Dark LCARS-flavored theme to match the TUI.
 -->
@@ -56,7 +56,7 @@
 
     <text x="140" y="300" class="body">current.md — the active task</text>
     <text x="140" y="322" class="body">goals · facts · decisions · tasks — durable one-liners</text>
-    <text x="140" y="344" class="body">hypotheses.md — staging, not auto-assembled</text>
+    <text x="140" y="344" class="body">hypotheses.md — half-formed ideas</text>
     <text x="140" y="364" class="note">promote to facts when confirmed, delete when disproven</text>
 
     <line x1="140" y1="382" x2="660" y2="382" stroke="#3a2c1c" stroke-width="1"/>
@@ -74,7 +74,7 @@
     <text x="660" y="520" text-anchor="end" class="note">WARM · curated transcript</text>
     <text x="140" y="548" class="code">## user tNNNN — a user message opens the turn, stamped</text>
     <text x="140" y="570" class="code">## auto tNNNN — the harness opens the turn (auto-continue), stamped</text>
-    <text x="140" y="592" class="code">## episode tNNNN — pointer to archived scratch</text>
+    <text x="140" y="592" class="code">## episode tNNNN — closing reply (H1) + pointer to archived scratch</text>
     <text x="140" y="614" class="body">windowing (H2) — recent episodes in full, older collapse to pointers</text>
     <text x="140" y="636" class="note">episodes are never rewritten, only windowed</text>
   </g>
@@ -88,7 +88,7 @@
     <text x="140" y="702" class="boxtitle" fill="#a99ae0">L3 · ARCHIVE/ — cold storage</text>
     <text x="660" y="702" text-anchor="end" class="note">COLD · deliberate re-read only</text>
     <text x="140" y="730" class="code">context.archive-&lt;ts&gt;.md — pruned-away sections</text>
-    <text x="140" y="752" class="code">handoff.pre-handoff-render-&lt;ts&gt;.bak — kept beside the file</text>
+    <text x="140" y="752" class="code">handoff.pre-handoff-trim-&lt;ts&gt;.bak — kept beside the file</text>
     <text x="140" y="774" class="body">never deleted by the loop</text>
     <text x="140" y="798" class="note">the loop never pulls from here unasked — re-read on purpose</text>
   </g>

@@ -24,13 +24,11 @@ deliberately.
 There is no accumulating transcript. Every turn the harness assembles
 the model's context from sources, in fixed order:
 
-1. **satellites** — `sats/handoff.md` (the shift handoff: rendered
-   by the harness at turn end, assembles first), `sats/current.md`,
-   `sats/goals.md`, `sats/facts.md`, `sats/decisions.md`,
-   `sats/tasks.md` (durable one-liners, sent as `## sat <name>`
-   sections). `sats/hypotheses.md` is staging, not auto-assembled:
-   it is pointed to from the handoff and the index, and enters
-   context when promoted to facts.
+1. **satellites** — `sats/handoff.md` (the shift handoff: rewritten
+   every turn, assembles first), `sats/current.md`, `sats/goals.md`,
+   `sats/facts.md`, `sats/decisions.md`, `sats/tasks.md`,
+   `sats/hypotheses.md`
+   (durable one-liners, sent as `## sat <name>` sections)
 2. **history** — `history.md` (stamped conversation record plus episode
    pointers)
 3. **scratch** — `scratch.md` (the current episode's working notes:
@@ -48,15 +46,20 @@ it must stay true to the implementation.
 
 **The harness owns:** prompt loading, assembly order, turn/section
 counters (`state.json`), the episode lifecycle, archive pointers,
-source-gate enforcement, pre-edit backups, verification, and the
-turn-end handoff render. Context management is deterministic harness
-behavior, not model judgment.
+source-gate enforcement, pre-edit backups, and verification. Context
+management is deterministic harness behavior, not model judgment.
 
 **The model may edit** (exact `old_text`/`new_text`, must match exactly
 once):
 - `history.md` — the conversation record (`## user t<NNNN>` for user-opened
   turns, `## auto t<NNNN>` for harness-opened auto-continue turns,
   `## episode t<NNNN>`)
+- `sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers);
+  rewrite it at the end of every turn. The harness validates
+  freshness, shape and the 40-line cap at the turn boundary; a stale
+  or missing handoff triggers a forced handoff round, and persistent
+  dumping trips the size canary (`handoff-bloat`) or the deterministic
+  trim backstop
 - `sats/current.md` — the active task (update when it changes)
 - `sats/goals.md` — enduring objectives (`- [active]` / `- [done]`);
   add one with `/goal "text"` or `--goal "text"`. With `auto_continue`
@@ -72,14 +75,10 @@ once):
 
 `write` is rejected on all session sources — use `edit`.
 
-**Harness-owned (model may not edit):** `prompt.md`, `state.json`,
-`index.md`, `scratch.md`, `archive/`, `context.md`, and
-`sats/handoff.md` — the shift handoff (Now/Next/Blockers/Pointers),
-rendered by the harness from sats state at turn end; the model
-curates `current.md`, `tasks.md` (`BLOCKED:` lines become Blockers),
-and goals instead. Persistent dumping trips the size canary
-(`handoff-bloat`). `state.json` can't even be read. Denied calls
-return a `DENIED` tool result the model must respect.
+**Harness-owned (model read-only):** `prompt.md`, `state.json`,
+`index.md`, `scratch.md`, `archive/`, `context.md`. `state.json`
+can't even be read. Denied calls return a `DENIED` tool result the
+model must respect.
 
 ## Episodes
 
@@ -127,8 +126,7 @@ implemented from scratch for interactive use.
   index.md         pointer map (harness-owned)
   history.md       stamped conversation record (model-editable)
   sats/            current.md, goals.md, facts.md, decisions.md,
-                   tasks.md, hypotheses.md (model-editable),
-                   handoff.md (harness-owned, rendered at turn end)
+                   tasks.md, hypotheses.md (model-editable)
   scratch.md       current episode working notes (harness-owned)
   archive/         closed episodes, one file per turn (harness-owned)
   context.md       assembled artifact for inspection (rebuilt every turn)
@@ -152,25 +150,22 @@ python -m harness --list          # list sessions
 python -m harness --tui          # terminal UI (needs the optional extra)
 ```
 
-The REPL stays in its session: plain text opens a turn, stamped
-into `history.md` (`## user t<NNNN>`); `context.md` is rebuilt
-every turn, never appended. Slash commands (also in `/help`):
+The REPL stays in its session: plain text appends to the same
+`context.md`. Slash commands (also in `/help`):
 
 - `/list` — show sessions (`*` = current)
 - `/new` — fresh session and switch to it
 - `/new summarize this repo` — fresh session + run that task immediately
 - `/open 20261005-0826` — switch back (full id or unambiguous prefix)
 - `/project [name]` — show/switch project
-- `/goal "text"` — add a goal to sats/goals.md
 - `/usage [N]` — ledger totals + last N calls (default 5)
 - `/config` — show effective config (redacted)
 - `/providers` — list known providers
 - `/models` — list models from current provider (OpenAI-compatible)
-- `/help` — this list
 - `/quit` — leave (empty line also quits)
 
-Flow: `/new` once, then just type. Only `/new` starts a fresh
-session directory; everything else continues the current session.
+Flow: `/new` once, then just type. Only `/new` mints a new
+`sessions/<id>/context.md`; everything else appends to the current one.
 
 ## TUI (optional)
 
@@ -192,7 +187,6 @@ Same session, same provider registry, same ledger as the CLI.
   `d` or `esc` deny, countdown default-deny (same timeout as CLI)
 - `ctrl+s` session picker, `ctrl+o` provider/model picker,
   `ctrl+d` debug-log tail, `ctrl+e` export transcript to a file
-- `ctrl+g` subagent view, `ctrl+u` delegate-model picker
 - `ctrl+c` copies the current selection (never quits — quit is `/quit`
   or `ctrl+q`)
 - slash commands work in the input box exactly like the REPL
@@ -219,7 +213,7 @@ OpenAI-compatible `/v1`, including local servers), `budget_hard` /
 `budget_soft`, `approval_timeout`, `exec_timeout`, `exec_timeout_max`,
 `request_timeout`, `usage_note`, `prune_target`, `prune_keep_tools`,
 `prune_section_cap`, `auto_continue` (default `false`: open a new turn
-while a goal is `[active]`), `auto_continue_max_turns` (default `3`), `delegate_model` (default `None`: subagents inherit the main model). API key comes from the environment (`api_key_env`) —
+while a goal is `[active]`), `auto_continue_max_turns` (default `3`). API key comes from the environment (`api_key_env`) —
 never from the file. `sessions_dir` unset selects the platform default
 (`%LOCALAPPDATA%` on Windows).
 
@@ -305,9 +299,8 @@ model's chat template; results vary.)
 `harness/context.py` — section render/parse, token counting ·
 `harness/session.py` — session layout, counters, migration ·
 `harness/assembly.py` — blank-slate assembly (sats → history → scratch) ·
-`harness/handoff.py` — handoff schema, validation, ledger ·
 `harness/providers.py` — OpenAI, Anthropic, Mock ·
-`harness/tools.py` — exec / read / write / edit / tokens / list_dir / search / delegate ·
+`harness/tools.py` — exec / read / write / edit / tokens ·
 `harness/config.py`, `harness/__main__.py` — config, CLI ·
 `harness/debug.py` — JSONL debug log ·
 `harness/approvals.py` — approval policy (allow/ask/deny) ·
@@ -315,12 +308,10 @@ model's chat template; results vary.)
 `harness/project.py` — project registry + session markers ·
 `harness/spinner.py` — console activity indicator ·
 `harness/deterministic.py` — model-free prune stages ·
-`harness/serve.py` — persistent server for integrations ·
-`harness/user_tools.py` — user-defined script tools ·
 `harness/tui/` — optional Textual interface (`--tui`): app, bridge,
 widgets, commands, modal approvals (needs `requirements-tui.txt`)
 
-`tests/` — 609 unittest tests; the Textual pilots skip cleanly when
+`tests/` — 225 unittest tests; the Textual pilots skip cleanly when
 the extra is missing. `python -m unittest discover -s tests`
 
 ## Deterministic stages
@@ -369,8 +360,8 @@ so the model reasons from live numbers, not stale pasted ones.
 
 ## Approvals
 
-Read, list_dir, search, and tokens run free globally; read-only
-probes (`ls`, `git status`, ...) also run free. Mutating calls ask first:
+Reads inside the project dir and the session dir run free, as do
+read-only probes (`ls`, `git status`, ...). Mutating calls ask first:
 
 ```bash
 python -m harness "task"          # prompts on mutating tools

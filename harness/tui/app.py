@@ -144,13 +144,8 @@ if _HAS:
 
 
     class ApprovalScreen(ModalScreen):
-        """Mutating-tool approval: a=turn, s=session, d=deny.
+        """Mutating-tool approval: a=turn, s=session, d/esc=deny.
 
-        Escape denies AND stops the run: while this modal is open the
-        app-level Escape (interrupt_turn) never fires, so plain deny
-        left a looping run un-stoppable -- every Escape just denied
-        one approval and the model asked again. 'd' stays deny-only
-        for the case where the turn should continue.
         Resolves via the box event the worker's decide() waits on; the
         countdown mirrors approval_timeout and denies on expiry.
         """
@@ -158,7 +153,7 @@ if _HAS:
         BINDINGS = [("a", "approve_turn", "Approve turn"),
                     ("s", "approve_session", "Approve session"),
                     ("d", "deny", "Deny"),
-                    ("escape", "deny_and_stop", "Deny + stop")]
+                    ("escape", "deny", "Deny")]
 
         CSS = ("ApprovalScreen { align: center middle; } "
                "#approval-box { width: 62; height: auto; "
@@ -238,16 +233,6 @@ if _HAS:
 
         def action_deny(self) -> None:
             self._resolve("deny")
-
-        def action_deny_and_stop(self) -> None:
-            self._resolve("deny")
-            # Stop the run, not just this approval: without this the
-            # worker continues the turn and the next gated tool pops
-            # another modal, so Escape can never stop a looping run.
-            try:
-                self.app._agent_loop.request_stop()
-            except Exception:
-                pass
 
 
     PICKER_PROVIDERS = ("openai", "anthropic", "nvidia")
@@ -777,10 +762,8 @@ if _HAS:
                     # only reliably-delivered "modified enter": terminals
                     # swallow ctrl+enter and merge shift+enter into enter.
                     ("ctrl+n", "insert_newline", "New line"),
-                    # Escape interrupts a running turn. Modals keep
-                    # their own escape: the approval modal's escape
-                    # denies AND stops the run (plain deny could never
-                    # stop a looping run); other modals just close.
+                    # Escape interrupts a running turn (modals keep their
+                    # own escape: close/deny wins while one is open).
                     ("escape", "interrupt_turn", "Interrupt"),
                     # Textual binds ctrl+c to a quit nudge and Input
                     # swallows it as copy-my-own-selection; a transcript

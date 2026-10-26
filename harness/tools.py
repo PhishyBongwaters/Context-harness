@@ -138,24 +138,6 @@ def tool_definitions(include_delegation: bool = True) -> list[dict]:
                 "required": ["pattern"],
             },
         },
-        {
-            "name": "goal_done",
-            "description": (
-                "Mark a goal complete. Call this when the goal is done "
-                "-- the harness flips its checkbox in sats/goals.md "
-                "and the auto-continue chain stops. Pass the goal "
-                "text, or omit it when exactly one goal is active. "
-                "Never edit goals.md by hand instead of calling this."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "goal": {"type": "string",
-                             "description": "Text of the goal to complete. "
-                                            "Omit only when one goal is active."},
-                },
-            },
-        },
     ]
     if include_delegation:
         tools.extend(_delegation_definitions())
@@ -292,15 +274,6 @@ def source_gate(session_dir: str | Path, name: str, path: str,
     except Exception:
         return None
     kind = classify_source(session_dir, target)
-    if kind == "sat" and target.name == "handoff.md" and name == "edit":
-        # Harness-exclusive ownership: the harness renders handoff.md
-        # from sats state at turn end. The model curates the state
-        # it renders from, never the file itself.
-        return ("DENIED: sats/handoff.md is harness-owned -- the harness "
-                "renders it from sats state at turn end. Curate "
-                "sats/current.md (where things stand) and sats/tasks.md "
-                "(open work, BLOCKED: prefix for blockers) instead; "
-                "never edit handoff.md directly.")
     if kind in ("history", "sat"):
         if name == "write":
             return (f"DENIED: {target.name} is edit-only -- use edit with "
@@ -408,12 +381,6 @@ def search_tool(args: dict, workdir: str) -> str:
             rx = re.compile(pattern)
             match = lambda line: rx.search(line) is not None
         else:
-            # Plain substring search (issue #13). The previous
-            # "whitespace-flexible" attempt was double-escaped dead code
-            # (re.sub(r'\\s+', ...) never substituted anything), so it
-            # changed nothing while pretending to. If flexible-whitespace
-            # matching is wanted, it needs its own implementation and
-            # tests -- not this. The file_pattern path-glob below stays.
             match = lambda line: pattern in line
     except re.error as e:
         return f"ERROR: bad regex: {e}"
@@ -426,9 +393,7 @@ def search_tool(args: dict, workdir: str) -> str:
     for q in files:
         if not q.is_file():
             continue
-        # Support file_pattern as filename glob or as path glob relative to root
-        rel = q.relative_to(root).as_posix()
-        if not fnmatch.fnmatch(q.name, file_pat) and not fnmatch.fnmatch(rel, file_pat):
+        if not fnmatch.fnmatch(q.name, file_pat):
             continue
         if q.stat().st_size > 1_000_000:  # skip large/binary-ish files
             continue

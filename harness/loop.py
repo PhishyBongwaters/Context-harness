@@ -14,7 +14,6 @@ Budget enforcement:
 """
 from __future__ import annotations
 
-import itertools
 import json
 import threading
 from dataclasses import dataclass, field
@@ -25,9 +24,7 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import (GOALS_MAX_ATTEMPTS, GOALS_NUDGE, active_goals,
-                      complete_goal, enforce_sats_budgets, goals_done,
-                      next_turn, render_handoff, validate_goals)
+from .session import active_goals, next_turn
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -35,17 +32,12 @@ from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
 from .providers import Provider, ProviderError
 from .usage import UsageTracker
 from .tools import _resolve, run_tool, tool_definitions
-from .handoff import (HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
-                      handoff_size, validate_handoff)
+from .handoff import (HANDOFF_MAX_ATTEMPTS, HANDOFF_NUDGE,
+                      HANDOFF_PROMPT_PARAGRAPH, HandoffLedger,
+                      ensure_handoff_file, handoff_size, is_over_cap,
+                      trim_handoff, validate_handoff)
 
-# Per-file token bound measured on sats/*.md at turn end (except
-# handoff.md, which has its own validation). Files over it are
-# reported loudly, never truncated here -- curation belongs to the
-# prune turn. Default matches prune_section_cap (8000) so the
-# reporting bound equals what prune assembly keeps per section --
-# but it is an independent knob: changing the prune cap does not
-# move this one.
-SATS_CAP_TOKENS = 8000
+MAX_STEPS = 50
 MAX_PRUNE_ATTEMPTS = 5
 MAX_PRUNE_STEPS = 12
 
@@ -162,15 +154,14 @@ PRUNE_SYSTEM = """You are over your context budget. This is a curation-only turn
 You may ONLY use the edit tool, and ONLY on these files:
   {history_path} -- the conversation record
   {sats_dir}/current.md, {sats_dir}/goals.md, {sats_dir}/facts.md,
-  {sats_dir}/decisions.md, {sats_dir}/tasks.md,
+  {sats_dir}/decisions.md, {sats_dir}/tasks.md, {sats_dir}/handoff.md,
   {sats_dir}/hypotheses.md -- durable one-liners
 
 History size is harness-managed (old turns archive automatically);
 do not summarize it. If the sats have grown unbounded, trim them to
 one-liners and drop what no longer serves the task. {sats_dir}/handoff.md
-is the resume plan, rendered by the harness from these files at turn
-end; do not edit it -- keep current.md and tasks.md tight instead,
-they are what the handoff renders from. Each edit needs
+is the resume plan: keep its Now/Next/Blockers/Pointers sections and its
+`## Handoff -- tNNNN` stamp -- trim the bodies, never the shape. Each edit needs
 old_text matching exactly once -- include enough surrounding context.
 Keep the `## ` section format parseable.
 Do not attempt the user's task now -- just curate.
@@ -233,45 +224,6 @@ def _parse_delegate_model(spec: str,
     return default_provider, spec
 
 
-def _redirect_sats_path(args: dict, session_dir) -> dict:
-    """Mechanical sats redirect, ported from the Oct 16-17 main-line
-    fix that never reached the session branch (it lived only in that
-    build line and was lost in branch shuffling).
-
-    The model anchors "sats/..." at its workdir, so a write/edit to a
-    workdir sats/*.md path would otherwise go to approval (a workdir
-    write), time out to deny, and loop -- the day-1 symptom, seen
-    live again 2026-10-21 on session 20261021-080207. Rewrite any
-    write/edit whose path has a `sats` directory segment and a `.md`
-    filename to <session_dir>/sats/<filename> before any gate or
-    approval runs: no prompt, no DENIED for the redirect itself. A
-    path already inside the session sats dir maps to itself.
-    Separator-aware (Windows backslashes included); a bare `sats.md`
-    filename (no directory segment) is not rewritten.
-
-    This only changes WHERE a sats write lands, never whether it is
-    allowed: the redirected call still passes through source_gate
-    (write to a session source stays edit-only, with guidance) and
-    approval policy afterwards. Reads are deliberately untouched:
-    reading a workdir sats file is repo analysis, not state curation.
-    """
-    path = (args or {}).get("path") or ""
-    if not path:
-        return args
-    parts = [p for p in path.replace("\\", "/").split("/")
-             if p not in ("", ".")]
-    if len(parts) < 2:
-        return args
-    if not any(p.lower() == "sats" for p in parts[:-1]):
-        return args
-    filename = parts[-1]
-    if not filename.lower().endswith(".md"):
-        return args
-    new_args = dict(args)
-    new_args["path"] = str(Path(session_dir) / "sats" / filename)
-    return new_args
-
-
 class Loop:
     def __init__(self, provider: Provider, budget: Budget,
                  on_event=None, prune_provider: Provider | None = None,
@@ -285,7 +237,6 @@ class Loop:
                  prune_keep_tools: int = DEFAULT_KEEP_RECENT_TOOLS,
                  prune_section_cap: int = DEFAULT_SECTION_CAP,
                  prune_enabled: bool = True,
-                 transcript_bloat_tokens: int | None = None,
                  history_cap: int | None = None,
                  is_subagent: bool = False,
                  subagent_id: str | None = None,
@@ -297,8 +248,7 @@ class Loop:
                  include_subagents: bool = False,
                  user_tool_paths: list | None = None,
                  auto_continue: bool = False,
-                 auto_continue_max_turns: int = 3,
-                 sats_cap_tokens: int = SATS_CAP_TOKENS):
+                 auto_continue_max_turns: int = 3):
         self.provider = provider
         # Janitor model for prune-only turns; defaults to the main provider.
         self.prune_provider = prune_provider or provider
@@ -314,15 +264,6 @@ class Loop:
         self.prune_keep_tools = prune_keep_tools
         self.prune_section_cap = prune_section_cap
         self.prune_enabled = prune_enabled
-        # Transcript-bloat gate threshold: explicit value only. The
-        # effective threshold is the transcript_bloat_tokens property
-        # below -- never silently the soft budget. (The first version
-        # of this redesign defaulted to soft; that assumed the budget
-        # system already encodes when a handoff/prune must happen. It
-        # doesn't: the gate exists precisely to force handoff+prune
-        # early, because a model one-shots and bloats past the point
-        # where a prune turn can still load the whole transcript.)
-        self._bloat_explicit = transcript_bloat_tokens
         # User include text: appended to system prompt under "# User includes".
         self.include_text = include_text
         self.include_subagents = include_subagents
@@ -343,8 +284,6 @@ class Loop:
                             else budget.soft // 2)
         self._turn_seq = 0
         self._stop_event = threading.Event()
-        # Sats budget cap, enforced at turn end.
-        self._sats_cap_tokens = sats_cap_tokens
         self.is_subagent = is_subagent
         self.subagent_id = subagent_id
         self._subagent_budget_fraction = subagent_budget_fraction
@@ -392,13 +331,8 @@ class Loop:
         Cooperative: a turn blocked inside a model call or tool
         execution finishes that call first (bounded by the request /
         exec timeouts), then aborts before storing or acting on the
-        result. A stop is a run-level signal, not a turn-level one:
-        if the turn already completed by the time the flag is seen,
-        run_turn honors it before chaining, so a stop can never be
-        silently eaten by a completing turn and leave the chain
-        running. The flag is cleared whenever it is honored (step
-        boundary, turn start, or between turns), so it never leaks
-        into a later user turn.
+        result. A completed turn always consumes the flag, so a stop
+        can never leak into and kill the next turn.
         """
         self._stop_event.set()
 
@@ -408,24 +342,6 @@ class Loop:
 
     def _emit(self, kind: str, data):
         self.on_event(kind, data)
-
-    @property
-    def transcript_bloat_tokens(self) -> int:
-        """Effective bloat-gate threshold, in transcript tokens.
-
-        Resolution order: explicit config/CLI value wins; else 30% of
-        the known context window (for a 135,168-token window that is
-        40,550 -- the "prune at 40k so a prune turn can still load all
-        of it" rule, with headroom for system, tools, and the prune
-        turn's own output); else the soft budget when the window is
-        unknown. Live property, not a stored value, so a model switch
-        that re-detects the window moves the threshold with it.
-        """
-        if self._bloat_explicit is not None:
-            return self._bloat_explicit
-        if self.budget.window:
-            return int(self.budget.window * 0.3)
-        return self.budget.soft
 
     def _measure(self, provider: Provider, system: str,
                    messages: list[dict], tools: list[dict]) -> dict:
@@ -486,12 +402,6 @@ class Loop:
         history/sat sources get pre-edit snapshots and mechanical
         diffs.
         """
-        if name == "goal_done":
-            # The goal file is a sat: its flip gets the same pre-edit
-            # snapshot and mechanical diff as a model edit. Missing
-            # file means no backup (complete_goal reports no_active).
-            p = Path(session.dir) / "sats" / "goals.md"
-            return p if p.exists() else None
         if name not in ("write", "edit"):
             return None
         try:
@@ -548,101 +458,46 @@ class Loop:
         except Exception:
             pass
 
-    def _enforce_sats_budgets(self, session: Session) -> None:
-        """Turn-end sats hygiene + cap reporting (best effort, never
-        fatal).
+    def _ensure_handoff(self, session: Session, turn_no: int,
+                          system: str, messages: list[dict]) -> bool:
+        """Validate sats/handoff.md at the turn boundary (issue #5).
 
-        Dedupe and checkbox repair run in code (see
-        session.enforce_sats_budgets); over-cap files are reported
-        loudly, never truncated here -- curation belongs to the
-        prune turn. Every changed file gets its pre-enforcement
-        content snapshotted first, so a rewrite is reversible like
-        any other sats edit, and a "sats-cap" event names what
-        changed or breached. Applies in naive mode too: hygiene and
-        a loud cap signal are safety bounds, not curation judgment.
-        Deliberately NOT run on user-interrupted turns: a stop
-        freezes state.
+        Freshness, shape and size are machine-checked. A stale, missing
+        or malformed handoff triggers forced handoff rounds: the model
+        gets the assembled context plus a nudge and edit-only tools,
+        and must rewrite the handoff before the turn may end.
+
+        Returns True when the handoff is valid. After
+        HANDOFF_MAX_ATTEMPTS failed rounds it emits "handoff-invalid"
+        and returns False -- the turn still closes. Loud, never
+        blocking: a broken handoff must not wedge the session.
+
+        Phase 2: when the only remaining failure is the size cap, the
+        deterministic trim backstop fires instead of giving up; every
+        valid handoff is recorded in the size ledger (the canary).
         """
-        try:
-            report = enforce_sats_budgets(session.dir,
-                                          self._sats_cap_tokens)
-        except Exception as e:  # never let enforcement break a turn
-            self._emit("sats-cap-error", {"error": str(e)})
-            return
-        sats = Path(session.dir) / "sats"
-        for name, info in report.items():
-            if info["changed"]:
-                self._backup_context(session, sats / name,
-                                     info["before"], "sats-cap")
-            self._emit("sats-cap", {
-                "file": name,
-                "tokens_before": info["tokens_before"],
-                "tokens_after": info["tokens_after"],
-                "dropped_lines": info["dropped_lines"],
-                "repaired": info["repaired"],
-                "over_cap": info["over_cap"],
-                "changed": info["changed"],
-            })
-
-    def _render_handoff(self, session: Session, turn_no: int) -> None:
-        """Render sats/handoff.md from sats state at turn end.
-
-        Harness-exclusive ownership: the harness writes this file
-        deterministically (see session.render_handoff); the model
-        never edits it (source_gate denies the edit). The previous
-        handoff is backed up first, like any other sats edit. The
-        render is validated as a self-check: a bad render emits
-        "handoff-invalid" (loud) but never blocks the close, and a
-        good render is recorded in the size ledger (the canary).
-        """
-        path = session.dir / "sats" / "handoff.md"
-        try:
-            previous = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            previous = ""
-        if previous:
-            self._backup_context(session, path, previous,
-                                 "handoff-render")
-        text = render_handoff(session.dir, turn_no)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        except OSError as e:
-            self._emit("handoff-invalid",
-                       {"turn": turn_no, "reason": f"render failed: {e}"})
-            return
         ok, reason = validate_handoff(session.dir, turn_no)
         if ok:
             self._record_handoff_ok(session, turn_no)
-        else:
-            self._emit("handoff-invalid",
-                       {"turn": turn_no, "reason": reason})
-        self._emit("handoff-rendered",
-                   {"turn": turn_no, "lines": len(text.splitlines())})
-
-    def _ensure_goals(self, session: Session, turn_no: int,
-                      system: str, messages: list[dict]) -> bool:
-        """Validate sats/goals.md at the turn boundary, with forced
-        fix rounds (edit-only tools) and a loud "goals-invalid"
-        event on persistent failure -- never blocking. A missing or
-        goal-less file is valid, so goal-less sessions never enter
-        rounds.
-        """
-        ok, reason = validate_goals(session.dir)
-        if ok:
             return True
-        goals_path = str(session.dir / "sats" / "goals.md")
-        for attempt in range(GOALS_MAX_ATTEMPTS):
+        turn_stamp = f"t{turn_no:04d}"
+        handoff_path = str(session.dir / "sats" / "handoff.md")
+        for attempt in range(HANDOFF_MAX_ATTEMPTS):
             self._check_stop()
-            nudge = GOALS_NUDGE.format(goals_path=goals_path,
-                                       reason=reason)
-            goals_messages = (messages
-                              + [{"role": "user", "content": nudge}])
+            # Defensive: the model has exec, so the file can vanish
+            # between validation and the forced round. Restore the
+            # shape; the model still has to fill it.
+            ensure_handoff_file(session.dir)
+            nudge = HANDOFF_NUDGE.format(handoff_path=handoff_path,
+                                         turn_stamp=turn_stamp,
+                                         reason=reason)
+            handoff_messages = (messages
+                                + [{"role": "user", "content": nudge}])
             try:
                 bd = self._measure(self.provider, system,
-                                   goals_messages, self._prune_tools)
+                                   handoff_messages, self._prune_tools)
                 self._emit("request",
-                           {"phase": "goals",
+                           {"phase": "handoff",
                             "attempt": attempt + 1,
                             "tokens_est": bd["total"],
                             "breakdown": bd,
@@ -652,20 +507,28 @@ class Loop:
                             "status": self.budget.status(bd["total"])})
                 resp = self.provider.chat(
                     system=system,
-                    messages=goals_messages + self._note(bd),
+                    messages=handoff_messages + self._note(bd),
                     tools=self._prune_tools)
             except Exception as e:  # provider blew up: count the
                 # attempt, keep the turn closable.
-                reason = (f"goals round {attempt + 1} failed: "
+                reason = (f"handoff round {attempt + 1} failed: "
                           f"{type(e).__name__}")
                 continue
             self._check_stop()
             for tc in resp.get("tool_calls") or []:
                 self._execute_tool(session, tc)
-            ok, reason = validate_goals(session.dir)
+            ok, reason = validate_handoff(session.dir, turn_no)
             if ok:
+                self._record_handoff_ok(session, turn_no)
                 return True
-        self._emit("goals-invalid", {"turn": turn_no, "reason": reason})
+        if is_over_cap(session.dir):
+            # The model wouldn't trim: deterministic backstop.
+            if self._trim_handoff_backstop(session, turn_no):
+                ok, reason = validate_handoff(session.dir, turn_no)
+                if ok:
+                    self._record_handoff_ok(session, turn_no)
+                    return True
+        self._emit("handoff-invalid", {"turn": turn_no, "reason": reason})
         return False
 
     def _record_handoff_ok(self, session: Session,
@@ -687,6 +550,34 @@ class Loop:
                         "tokens": tokens,
                         "note": ("handoff size is climbing -- the agent "
                                  "is dumping instead of curating")})
+
+    def _trim_handoff_backstop(self, session: Session,
+                               turn_no: int) -> bool:
+        """Deterministic trim when the model won't get under the cap.
+
+        The model had its forced rounds; the harness now trims
+        mechanically (headers kept, bodies cut from the end, marker
+        appended). The pre-trim content is backed up, and the trim is
+        announced -- the harness never silently rewrites model-curated
+        state.
+        """
+        target = session.dir / "sats" / "handoff.md"
+        try:
+            before = target.read_text(encoding="utf-8",
+                                      errors="replace")
+        except OSError:
+            return False
+        trimmed, cut = trim_handoff(before)
+        if cut <= 0:
+            return False
+        self._backup_context(session, target, before, "handoff-trim")
+        try:
+            target.write_text(trimmed, encoding="utf-8")
+        except OSError:
+            return False
+        self._emit("handoff-trimmed", {"turn": turn_no,
+                                       "lines_cut": cut})
+        return True
 
     @staticmethod
     def _append_source(session: Session, name: str, text: str) -> None:
@@ -807,11 +698,6 @@ class Loop:
         """
         from .tools import source_gate
         name, args = tc["name"], tc.get("arguments") or {}
-        # Mechanical sats redirect (see _redirect_sats_path): must run
-        # before source_gate and approval, or a workdir-anchored sats
-        # write asks, times out, denies, and loops.
-        if name in ("write", "edit"):
-            args = _redirect_sats_path(args, session.dir)
 
         def _failed(result: str) -> str:
             self._denial_counts[name] = self._denial_counts.get(name, 0) + 1
@@ -853,14 +739,8 @@ class Loop:
         # Delegation tools are harness orchestration, not mutations:
         # spawning/waiting/killing a subagent never needs approval.
         # (Mutations inside the subagent still go through its approver.)
-        # goal_done is the same kind of exemption: it only flips a
-        # checkbox in sats/goals.md, and write/edit to sats are already
-        # allowed as the model's own memory curation. Exempting it
-        # changes nothing about who can complete a goal -- it only
-        # makes the transition code-owned instead of markdown-edited.
         if (self.approver is not None and name not in
-                ("delegate", "wait_subagent", "cancel_subagent",
-                 "goal_done")):
+                ("delegate", "wait_subagent", "cancel_subagent")):
             ok, denial = self.approver.resolve(
                 self._policy(session), name, args,
                 subagent_id=(self.subagent_id
@@ -887,8 +767,6 @@ class Loop:
                                                    session.workdir)
             except Exception as e:  # never let a user tool crash the loop
                 result = f"ERROR executing user tool {name}: {e}"
-        elif name == "goal_done":
-            result = self._complete_goal(session, args)
         else:
             result = run_tool(name, args, session.workdir)
         if target is not None and before is not None:
@@ -900,39 +778,6 @@ class Loop:
                 self._emit("context-diff", diff_transcripts(before, after))
         self._emit("tool", {"name": name, "args": args, "result": result})
         return _done(result)
-
-    def _complete_goal(self, session: Session, args: dict) -> str:
-        """Run the goal_done tool: flip the checkbox in code.
-
-        The result tells the model exactly what happened, including
-        what to do when the call cannot complete (name one goal, or
-        use an exact text). When no active goals remain, the chain
-        already stops after this turn and the turn-end handoff is
-        skipped -- both read goals.md state, so no extra flag here.
-        A failure never crashes the loop: it returns as an ERROR
-        result, like every other tool failure.
-        """
-        try:
-            status, matched, remaining = complete_goal(
-                session.dir, (args or {}).get("goal"))
-        except Exception as e:  # never let a tool crash the loop
-            return f"ERROR: goal_done failed: {e}"
-        if status == "done":
-            if remaining:
-                return (f"Goal marked done: {matched}. "
-                        f"Active goals remaining: "
-                        f"{'; '.join(remaining)}.")
-            return (f"Goal marked done: {matched}. "
-                    f"No active goals remain -- the chain stops "
-                    f"after this turn.")
-        if status == "no_active":
-            return "No active goals to complete."
-        if status == "ambiguous":
-            return ("Several goals are active; call goal_done again "
-                    f"naming one: {'; '.join(remaining)}.")
-        return (f"No active goal matches "
-                f"'{(args or {}).get('goal')}'. Active goals: "
-                f"{'; '.join(remaining)}.")
 
     # --- subagent delegation (one at a time) ---
 
@@ -1038,9 +883,6 @@ class Loop:
             usage_note=False,
             project=self.project,
             is_subagent=True,
-            # An explicit bloat-gate pin is inherited; otherwise the
-            # subagent derives from the same window as the parent.
-            transcript_bloat_tokens=self._bloat_explicit,
             subagent_id=sid,
             tools_allowlist=allowlist,
             include_text=(self.include_text if self.include_subagents
@@ -1212,7 +1054,7 @@ class Loop:
         # Gate on the EXACT next request: main system + full tools. Any
         # cheaper ruler (prune system, prune tools) reads under while the
         # main check stays over: prune declares victory without touching
-        # the file and the loop burns steps on identical OVER lines.
+        # the file and the loop burns all MAX_STEPS on identical OVER lines.
         main_system = load_prompt(session.dir, ctx_path=ctx_path,
                                   hard=self.budget.hard,
                                   soft=self.budget.soft,
@@ -1356,26 +1198,6 @@ class Loop:
                              workdir=session.workdir,
                              include_text=self.include_text,
                              turn_no=turn_no)
-        # Enforce handoff continuity: previous turn must have left a fresh
-        # handoff. Recovery re-renders it from sats state (no model
-        # rounds, no system prompt needed). A broken handoff must not
-        # wedge the session: the render is deterministic, and the
-        # turn still proceeds.
-        # NOTE: scratch.md is deliberately NOT wiped here. It is the
-        # episode's working trace and is only cleared by _close_episode,
-        # which archives it first. Wiping it at turn start destroyed the
-        # only copy of an interrupted turn's work (issue #13).
-        from .handoff import validate_handoff
-        if turn_no > 1 and not goals_done(session.dir):
-            # The previous turn's handoff is harness-owned: if it is
-            # missing or stale (crash, or a bloat-gate close that
-            # never rendered), re-render it from sats state. No
-            # model rounds -- the harness fixes its own file.
-            # Goals-done sessions skip rendering by design, so a
-            # missing handoff there is not a defect.
-            ok, reason = validate_handoff(session.dir, turn_no - 1)
-            if not ok:
-                self._render_handoff(session, turn_no - 1)
         if self._stop_event.is_set():
             # Stop requested before the turn started: honor it.
             self._stop_event.clear()
@@ -1398,15 +1220,9 @@ class Loop:
         self._append_source(session, "history.md",
                             render_opening(user_text, turn_no))
         warned = False
-        # Initialised before the step loop: the transcript-bloat branch
-        # below returns `content` on the very first step, before any
-        # provider reply exists. Uninitialised, that was UnboundLocalError
-        # for any session whose assembled transcript was already >= 35k
-        # tokens at turn start (issue #13).
-        content = ""
 
         try:
-            for step in itertools.count():
+            for step in range(MAX_STEPS):
                 self._check_stop()
                 raw, messages = self._transcript_messages(session)
                 if not messages:
@@ -1417,57 +1233,6 @@ class Loop:
                 bd = self._measure(self.provider, system, messages, self._tools)
                 est = bd["total"]
                 status = self.budget.status(est)
-                # Transcript-bloat gate (redesigned; the old hard-coded
-                # 35k threshold fired below the soft budget, pre-empting
-                # warn/prune, and returned "" even when closing could
-                # not shrink the transcript -- a session whose
-                # sats+history alone exceeded 35k force-closed every
-                # turn and never progressed). New contract:
-                #  * threshold is configurable (transcript_bloat_tokens
-                #    property): explicit value, else 30% of the known
-                #    window, else soft budget when unknown -- never
-                #    just assumed from the budget system;
-                #  * the gate fires ONLY when closing the episode can
-                #    actually get under it, i.e. scratch alone covers
-                #    the overage (closing archives scratch and clears
-                #    it; sats are untouched by a close, history only
-                #    windowed, so sats/history-only bloat must NOT
-                #    fire the gate -- it falls through to warn/prune,
-                #    which curates or fails loudly via BudgetExceeded);
-                #  * the turn CONTINUES after the close instead of
-                #    returning "" -- the user's message gets answered.
-                # Self-disarming: after a close scratch is empty, so
-                # the condition cannot refire on the same content.
-                transcript_tokens = bd.get("transcript", 0)
-                scratch_tokens = 0
-                try:
-                    scratch_p = session.dir / "scratch.md"
-                    if scratch_p.exists():
-                        scratch_tokens = count_tokens(
-                            scratch_p.read_text(encoding="utf-8",
-                                                errors="replace"))
-                except OSError:
-                    scratch_tokens = 0
-                if (transcript_tokens >= self.transcript_bloat_tokens
-                        and scratch_tokens >= transcript_tokens
-                        - self.transcript_bloat_tokens):
-                    self._emit("budget", {"status": "transcript_bloat",
-                                          "tokens": est,
-                                          "breakdown": bd,
-                                          "threshold":
-                                              self.transcript_bloat_tokens,
-                                          "scratch_tokens": scratch_tokens})
-                    # Render a handoff now (harness-owned, no model
-                    # calls while over budget), then continue the
-                    # turn with the shrunken transcript.
-                    # No clear() here: a stop requested before this
-                    # close must survive to the next step boundary
-                    # (_check_stop at the loop top), where it ends
-                    # the turn, instead of being eaten by the close.
-                    self._auto_dedupe(session)
-                    self._render_handoff(session, turn_no)
-                    self._close_episode(session, turn_no, content or "")
-                    continue
                 if status == "over":
                     self._emit("budget", {"status": "over", "tokens": est,
                                           "breakdown": bd})
@@ -1537,39 +1302,17 @@ class Loop:
                 if content:
                     self._emit("assistant", content)
                 if not tool_calls:
-                    # No clear() here, deliberately: a stop requested
-                    # during this turn (e.g. after the last step
-                    # check, while the closing handoff/close runs)
-                    # must survive to run_turn's between-turns check,
-                    # which honors it and stops the chain. Clearing
-                    # here ate exactly that stop and left an
-                    # auto-continue chain un-stoppable mid-run: the
-                    # turn completed, the flag vanished, and the next
-                    # auto-turn started. run_turn clears the flag
-                    # when it honors it, so nothing leaks into a
-                    # later user turn.
+                    # Normal completion consumes any pending stop (e.g. one
+                    # that arrived after the last check): it must never
+                    # leak into and kill the next turn.
+                    self._stop_event.clear()
                     self._auto_dedupe(session)
-                    # Turn-end sats budgets run BEFORE the handoff
-                    # check: a repaired `- [ ]` -> `- [active]` line
-                    # is a live goal, and the chain decision below
-                    # must see it.
-                    self._enforce_sats_budgets(session)
-                    # Goals structure is machine-checked too: a
-                    # malformed goals file triggers fix rounds, and
-                    # persistent failure is loud but never blocks
-                    # the close.
-                    self._ensure_goals(session, turn_no, system,
-                                       messages)
-                    # Once every goal is [done], no more handoffs:
-                    # the turn that finishes the goal renders nothing,
-                    # and the chain already stops after it (no active
-                    # goals). A goal-less session (no [done] line at
-                    # all) keeps the normal per-turn render.
-                    if not goals_done(session.dir):
-                        # Handoff-per-turn (issue #5), harness-owned:
-                        # the harness renders the handoff from sats
-                        # state. No model rewrite, no forced rounds.
-                        self._render_handoff(session, turn_no)
+                    # Handoff-per-turn (issue #5): the turn may only end
+                    # with a fresh handoff. Stale/missing triggers a
+                    # forced handoff round; persistent failure is loud
+                    # but never blocks the close.
+                    self._ensure_handoff(session, turn_no, system,
+                                         messages)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
@@ -1586,6 +1329,5 @@ class Loop:
             self._stop_event.clear()
             self._emit("interrupted", {})
             return "", True
-        # The step loop is unbounded by design: prune and the context
-        # budget bound the turn, not a step count. It exits only via
-        # return/raise in the body above.
+        raise ProviderError(f"Turn exceeded {MAX_STEPS} steps without "
+                            f"finishing.")

@@ -75,26 +75,6 @@ class TestSearch(unittest.TestCase):
                            "file_pattern": "*.txt"}, str(td))
         self.assertNotIn("a.py", out)
 
-    def test_file_pattern_matches_relative_path(self):
-        # The path-glob half of the search change is kept: a pattern
-        # like "sub/*.py" matches by relative path, not just filename.
-        td = _tree()
-        out = search_tool({"path": str(td), "pattern": "hello",
-                           "file_pattern": "sub/*.py"}, str(td))
-        self.assertIn("c.py", out)
-        self.assertNotIn("a.py", out)
-
-    def test_literal_search_is_plain_substring(self):
-        # Issue #13: literal search is a plain substring again, not a
-        # (broken) flexible-whitespace regex. "a b" does not match
-        # text with two spaces between a and b.
-        td = Path(tempfile.mkdtemp())
-        (td / "x.txt").write_text("a  b   c spaced\n", encoding="utf-8")
-        out = search_tool({"path": str(td), "pattern": "a b"}, str(td))
-        self.assertIn("no matches", out.lower())
-        out2 = search_tool({"path": str(td), "pattern": "a  b"}, str(td))
-        self.assertIn("x.txt", out2)
-
     def test_no_match(self):
         td = _tree()
         out = search_tool({"path": str(td), "pattern": "zzz_nope"}, str(td))

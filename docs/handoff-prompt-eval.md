@@ -87,20 +87,16 @@ PASS with noted residual.
 
 ## 4. Lazy-model stress
 
-Under harness-owned rendering (the model never writes handoff.md),
-the lazy-model strategies below mostly collapse: the render, not the
-model, guarantees the shape.
-
 | Strategy | Mechanism response |
 |---|---|
-| Stamp-touch only ("Unchanged" forever) | Moot -- the model never writes the stamp; the render stamps it |
-| Empty sections (headings, no content) | Impossible -- the render fills every section (placeholders name what's missing) |
-| Wrong file (handoff in scratch.md) | Irrelevant -- the render reads sats state, not any model-written handoff |
-| Deletes handoff.md via exec | Turn-end render rewrites it; a stale/missing handoff at next turn start is re-rendered |
-| 200-line dump (into current.md/tasks.md) | Render caps apply (Now 4, Next 20, Blockers 10, total 40); the dump never reaches the handoff |
-| Ignores the nudge / does other work | No nudge exists anymore; sats curation is still the model's job, but the handoff never depends on it |
-| Future stamp (t0043 during t0042) | Impossible -- the render stamps the current turn |
-| Double header / junk after valid block | Impossible in the handoff (render output); junk in sats files is capped by the render |
+| Stamp-touch only ("Unchanged" forever) | Legal; self-limiting (hurts own next turn) |
+| Empty sections (headings, no content) | Passes today — documented residual; content quality is the model's job |
+| Wrong file (handoff in scratch.md) | Validator reads sats/handoff.md specifically; nudge names the path |
+| Deletes handoff.md via exec | `ensure_handoff_file` restores the template before the forced round |
+| 200-line dump | 40-line cap → forced round: "trim it to a shift board" |
+| Ignores the nudge / does other work | Forced round is edit-only; 2 failed attempts → `handoff-invalid` event, turn still closes (loud, never blocking) |
+| Future stamp (t0043 during t0042) | Exact-match validation rejects it; can't bank a stamp |
+| Double header / junk after valid block | Passes shape check — residual; bounded by the cap and next-turn readability |
 
 ## 5. Verdict
 

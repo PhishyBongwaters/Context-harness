@@ -27,31 +27,14 @@ class TestPolicy(unittest.TestCase):
         self.assertEqual(d, "allow")
 
     def test_read_outside_roots_allowed(self):
-        # Standing policy (2026-10-10): reads are safe and globally
-        # allowed; only destructive tools get gated. The old test
-        # expected an outside-roots read to ask, contradicting the
-        # policy the code implements -- the test was stale, not the
-        # policy. If outside-roots reads should ask, that is a policy
-        # change, not a test fix.
+        # Rob's standing rule 2026-10-10 (d71649a): reads are globally
+        # allowed, even outside roots; only destructive tools are
+        # gated. This test was stale since d71649a, still expecting
+        # the pre-Oct-10 outside-roots ask.
         s = make_session()
-        d, reason, _ = policy_for(s).check(
+        d, _, _ = policy_for(s).check(
             "read", {"path": str(Path(tempfile.mkdtemp()) / "x")})
         self.assertEqual(d, "allow")
-        self.assertEqual(reason, "read globally allowed")
-
-    def test_resolve_sats_and_history_go_to_session_dir(self):
-        # Issue #13: the old "sats/" string-prefix check never matched
-        # on Windows (str(Path) uses backslashes). Comparing
-        # Path.parts works under both separators.
-        workdir = tempfile.mkdtemp()
-        s = make_session(workdir=workdir)
-        pol = policy_for(s)
-        self.assertEqual(pol.resolve("sats/handoff.md"),
-                         (s.dir / "sats/handoff.md").resolve())
-        self.assertEqual(pol.resolve("history.md"),
-                         (s.dir / "history.md").resolve())
-        self.assertEqual(pol.resolve("notes.txt"),
-                         (Path(workdir) / "notes.txt").resolve())
 
     def test_tokens_literal_allowed(self):
         s = make_session()

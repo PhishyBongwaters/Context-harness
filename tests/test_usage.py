@@ -92,14 +92,9 @@ class TestTracker(unittest.TestCase):
             Loop(MockProvider([{"content": "a"}]), Budget(100000, 80000),
                  usage_tracker=tracker).run_turn(s, "hi")
             # fresh Loop, same tracker file: turn must advance, not reset
-            # Turn 1 ended with a harness render, so turn 2 starts
-            # with a fresh t0001 handoff already in place -- no
-            # recovery round. The reply is the only tracked call.
             tracker2 = UsageTracker(d)
-            Loop(MockProvider([
-                {"content": "b"},
-            ]), Budget(100000, 80000),
-                usage_tracker=tracker2).run_turn(s, "hi again")
+            Loop(MockProvider([{"content": "b"}]), Budget(100000, 80000),
+                 usage_tracker=tracker2).run_turn(s, "hi again")
             self.assertEqual([t["turn"] for t in tracker2.turns], [1, 2])
 
 

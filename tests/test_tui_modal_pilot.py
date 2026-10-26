@@ -19,10 +19,6 @@ class FakeLoop:
     def __init__(self, approver):
         self.approver = approver
         self.results: list = []
-        self.stop_requested = False
-
-    def request_stop(self):
-        self.stop_requested = True
 
     def run_turn(self, session, text):
         from harness.approvals import Policy
@@ -90,38 +86,6 @@ class TestModalPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(loop.results, "turn never finished")
                 self.assertFalse(loop.results[0][0])
                 self.assertEqual(len(approver.session_keys), 0)
-                self.assertFalse(loop.stop_requested,
-                                 "'d' must stay deny-only")
-
-    async def test_escape_denies_and_stops_run(self):
-        # While an approval modal is open the app-level Escape never
-        # fires, so modal Escape must itself stop the run: before
-        # this fix it only denied, and a looping run could never be
-        # stopped with Escape (each denial just led to the next ask).
-        # 'd' stays deny-only (see test_deny_via_modal, which asserts
-        # no stop there via the unchanged FakeLoop default).
-        from harness.tui.app import HarnessApp
-        with tempfile.TemporaryDirectory() as d:
-            sdir = Path(d) / "sess"
-            sdir.mkdir()
-            sess = Session(id="t", dir=sdir, workdir=d)
-            approver = TUIApprover(sdir, approval_timeout=30)
-            loop = FakeLoop(approver)
-            bridge = TuiBridge()
-            app = HarnessApp(loop, sess, bridge)
-            async with app.run_test() as pilot:
-                app._submit("do it")
-                await self._modal_screen(app, pilot)
-                await pilot.press("escape")
-                for _ in range(200):
-                    if loop.results:
-                        break
-                    await pilot.pause()
-                self.assertTrue(loop.results, "turn never finished")
-                self.assertFalse(loop.results[0][0])
-                self.assertTrue(loop.stop_requested,
-                                "modal Escape denied but never "
-                                "requested a stop")
 
 
 if __name__ == "__main__":
