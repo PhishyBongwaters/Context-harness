@@ -417,6 +417,22 @@ GOALS_NUDGE = (
     "goals fix now -- no other work this round."
 )
 
+SATS_MAX_ATTEMPTS = 2
+
+# Forced-round nudge for sats curation. .format() fields only --
+# no other braces in this string.
+SATS_NUDGE = (
+    "SATS UNCURATED before this turn can end: the sats in {sats_dir} "
+    "still carry only their template text, so the handoff that renders "
+    "from them would be placeholders and the next turn would remember "
+    "nothing. Curate them now with the edit tool, using an exact "
+    "old_text match against each file's current content: sats/current.md "
+    "gets one line for where things stand, sats/facts.md gets the key "
+    "facts found this turn, sats/decisions.md gets the choices made and "
+    "why, sats/tasks.md gets open work items one line each. Do the "
+    "curation now -- no other work this round."
+)
+
 _GOAL_LINE_RE = re.compile(r"^-\s*\[(active|done)\]\s+(.+)$")
 
 
@@ -570,6 +586,25 @@ def _sats_lines(path: Path, template: str) -> list[str]:
             continue
         out.append(line)
     return out
+
+
+def sats_curated(sdir: str | Path) -> bool:
+    """True when any curation sat carries non-template content.
+
+    Template-only sats render as placeholders, so a session whose
+    current/facts/decisions/tasks files are all still template text
+    has nothing durable for the next turn to remember. goals.md is
+    excluded: goal-less sessions are legal and goals have their own
+    enforcement. Missing/unreadable files read as empty.
+    """
+    sats = Path(sdir) / "sats"
+    for name in ("current", "facts", "decisions", "tasks"):
+        template = SAT_FILES.get(name)
+        if template is None:
+            continue
+        if _sats_lines(sats / f"{name}.md", template):
+            return True
+    return False
 
 
 def render_handoff(sdir: str | Path, turn_no: int) -> str:

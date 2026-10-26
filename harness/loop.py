@@ -25,9 +25,10 @@ from .context import (Budget, ContextFile, _split_atem_xml, count_tokens,
                       diff_transcripts, parse_transcript, render_assistant,
                       render_history_auto, render_history_user, render_tool,
                       sanitize_assistant_content)
-from .session import (GOALS_MAX_ATTEMPTS, GOALS_NUDGE, active_goals,
-                      complete_goal, enforce_sats_budgets, goals_done,
-                      next_turn, render_handoff, validate_goals)
+from .session import (GOALS_MAX_ATTEMPTS, GOALS_NUDGE, SATS_MAX_ATTEMPTS,
+                      SATS_NUDGE, active_goals, complete_goal,
+                      enforce_sats_budgets, goals_done, next_turn,
+                      render_handoff, sats_curated, validate_goals)
 from .approvals import (EXEC_TIMEOUT_DEFAULT, EXEC_TIMEOUT_MAX, Approver,
                        Policy, clamp_exec_timeout)
 from .deterministic import (DEFAULT_KEEP_RECENT_TOOLS, DEFAULT_SECTION_CAP,
@@ -666,6 +667,69 @@ class Loop:
             if ok:
                 return True
         self._emit("goals-invalid", {"turn": turn_no, "reason": reason})
+        return False
+
+    def _ensure_sats(self, session: Session, turn_no: int,
+                     system: str, messages: list[dict],
+                     allow_model_calls: bool = True) -> bool:
+        """Curate the sats at the turn boundary, with forced rounds.
+
+        The handoff renders from sats state, so uncurated sats render
+        a placeholder handoff and the next turn remembers nothing.
+        When any curation sat already carries non-template content
+        this returns immediately with zero model calls, which is what
+        keeps the bloat-gate path call-free. Otherwise, with
+        allow_model_calls, the model gets edit-only rounds (mirroring
+        _ensure_goals) to curate current/facts/decisions/tasks.
+        Persistent failure emits "sats-invalid" (loud) but never
+        blocks the close: the caller still renders and closes.
+        """
+        if sats_curated(session.dir):
+            return True
+        if not allow_model_calls:
+            self._emit("sats-invalid",
+                       {"turn": turn_no,
+                        "reason": ("sats uncurated and no model rounds "
+                                   "while over budget")})
+            return False
+        reason = "sats still carry only template text"
+        sats_dir = str(session.dir / "sats")
+        for attempt in range(SATS_MAX_ATTEMPTS):
+            self._check_stop()
+            nudge = SATS_NUDGE.format(sats_dir=sats_dir)
+            sats_messages = (messages
+                             + [{"role": "user", "content": nudge}])
+            try:
+                bd = self._measure(self.provider, system,
+                                   sats_messages, self._prune_tools)
+                self._emit("request",
+                           {"phase": "sats",
+                            "attempt": attempt + 1,
+                            "tokens_est": bd["total"],
+                            "breakdown": bd,
+                            "hard": self.budget.hard,
+                            "soft": self.budget.soft,
+                            "window": self.budget.window,
+                            "status": self.budget.status(bd["total"])})
+                resp = self.provider.chat(
+                    system=system,
+                    messages=sats_messages + self._note(bd),
+                    tools=self._prune_tools)
+                for tc in (resp or {}).get("tool_calls") or []:
+                    self._execute_tool(session, tc)
+            except TurnInterrupted:
+                raise
+            except Exception as e:  # provider/tool blew up: count the
+                # attempt, keep the turn closable. TurnInterrupted is
+                # raised by _check_stop outside this try, so a stop
+                # still propagates instead of being swallowed.
+                reason = (f"sats round {attempt + 1} failed: "
+                          f"{type(e).__name__}")
+                continue
+            self._check_stop()
+            if sats_curated(session.dir):
+                return True
+        self._emit("sats-invalid", {"turn": turn_no, "reason": reason})
         return False
 
     def _record_handoff_ok(self, session: Session,
@@ -1404,6 +1468,7 @@ class Loop:
         # for any session whose assembled transcript was already >= 35k
         # tokens at turn start (issue #13).
         content = ""
+        turn_tool_calls = 0
 
         try:
             for step in itertools.count():
@@ -1465,6 +1530,11 @@ class Loop:
                     # (_check_stop at the loop top), where it ends
                     # the turn, instead of being eaten by the close.
                     self._auto_dedupe(session)
+                    # Check-only sats pass: returns immediately when
+                    # curated, and makes no model calls while over
+                    # budget when uncurated (loud, never blocking).
+                    self._ensure_sats(session, turn_no, system,
+                                      messages, allow_model_calls=False)
                     self._render_handoff(session, turn_no)
                     self._close_episode(session, turn_no, content or "")
                     continue
@@ -1554,6 +1624,15 @@ class Loop:
                     # is a live goal, and the chain decision below
                     # must see it.
                     self._enforce_sats_budgets(session)
+                    # Sats curation is machine-checked too: a long
+                    # turn (6+ tool calls) that left the sats at
+                    # template text triggers forced edit-only rounds,
+                    # so the handoff below renders real state instead
+                    # of placeholders. Persistent failure is loud
+                    # but never blocks the close.
+                    if turn_tool_calls >= 6:
+                        self._ensure_sats(session, turn_no, system,
+                                          messages)
                     # Goals structure is machine-checked too: a
                     # malformed goals file triggers fix rounds, and
                     # persistent failure is loud but never blocks
@@ -1568,13 +1647,15 @@ class Loop:
                     if not goals_done(session.dir):
                         # Handoff-per-turn (issue #5), harness-owned:
                         # the harness renders the handoff from sats
-                        # state. No model rewrite, no forced rounds.
+                        # state. No model rewrite of handoff.md itself;
+                        # sats curation above is forced when needed.
                         self._render_handoff(session, turn_no)
                     # T7: the episode closes -- archive the trace, clear
                     # scratch, record the pointer. H1: the closing reply
                     # is recorded to history by the harness.
                     self._close_episode(session, turn_no, content or "")
                     return content or "", False
+                turn_tool_calls += len(tool_calls)
                 for tc in tool_calls:
                     self._check_stop()
                     result = self._execute_tool(session, tc)
